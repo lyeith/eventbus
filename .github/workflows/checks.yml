@@ -1,0 +1,61 @@
+name: Checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Unit tests
+        shell: bash
+        run: set -o pipefail; go test ./... 2>&1 | tee go-unit.log
+      - name: Race tests
+        shell: bash
+        run: set -o pipefail; go test -race ./... 2>&1 | tee go-race.log
+      - name: Vet
+        shell: bash
+        run: set -o pipefail; go vet ./... 2>&1 | tee go-vet.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: go-check-logs
+          path: go-*.log
+          retention-days: 7
+
+  sdk-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.17'
+          enable-cache: true
+          python-version: '3.12'
+      - run: uv sync --frozen
+      - name: Smoke fixture contracts
+        shell: bash
+        run: set -o pipefail; uv run --frozen python -m unittest discover -s tests -p 'test_*.py' 2>&1 | tee sdk-contracts.log
+      - name: Real SDK smoke
+        shell: bash
+        run: set -o pipefail; go test -race -count=1 -tags sdksmoke ./... 2>&1 | tee sdk-smoke.log
+        env:
+          EVENTBUS_SMOKE_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: sdk-smoke-logs
+          path: sdk-*.log
+          retention-days: 7

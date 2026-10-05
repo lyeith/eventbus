@@ -1,0 +1,33 @@
+# Application-owned Cognito seed example. Pass with --cognito-pools <path>.
+# Reapplying preserves existing user IDs and updates mutable fields. Passwords
+# are bcrypt-hashed before storage; signing keys persist in the SQLite database.
+pools:
+  - id: local-pool-1
+    region: us-east-1
+    # Optional policy. Omit to accept any non-empty password in the dev service.
+    password_policy:
+      min_length: 8
+      require_uppercase: true
+      require_lowercase: true
+      require_digits: true
+      require_symbols: false
+    clients:
+      - id: local-client-1
+        # Empty means no SECRET_HASH requirement; set a value to test it.
+        secret: ""
+    users:
+      - email: user@example.local
+        password: Dev1!Pass
+        mfa_enabled: false
+        attributes:
+          custom:role: developer
+      # Enabled MFA requires a SOFTWARE_TOKEN_MFA challenge for password login.
+      - email: mfa-user@example.local
+        password: Dev1!Pass
+        mfa_enabled: true
+      # Supplying a base32 secret enables real TOTP validation (±1 step skew).
+      # Without a secret the development fallback accepts any six-digit code.
+      - email: totp-user@example.local
+        password: Dev1!Pass
+        mfa_enabled: true
+        totp_secret: JBSWY3DPEHPK3PXP

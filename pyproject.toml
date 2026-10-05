@@ -1,0 +1,11 @@
+[project]
+name = "eventbus-sdk-smoke"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3==1.40.61",
+    "PyJWT[crypto]==2.10.1",
+]
+
+[tool.uv]
+package = false
