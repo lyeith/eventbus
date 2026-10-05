@@ -1,8 +1,8 @@
 # Handoff
 
-SES sending is committed as 6602261 in the standalone emulator. MIT licensing
-and public repository visibility are authorized and being finalized. No new
-binary release is being published; v0.1.0 binaries predate SES.
+SES sending is committed as 6602261 in the standalone emulator. The repository
+is public at https://github.com/lyeith/eventbus with the MIT license (2a1fb18),
+recognized by GitHub. No new binary release; v0.1.0 binaries predate SES.
 
 - V1: SendEmail, SendRawEmail, SendTemplatedEmail, SendBulkTemplatedEmail,
   SendCustomVerificationEmail and SendBounce.
@@ -29,7 +29,8 @@ Verified on SSD, 2026-10-06:
 Test logs are /tmp/eventbus-ses-*-20261006.log under existing 24-hour retention.
 SDK models are pinned, reduced official botocore fixtures with license/notice.
 Local SDK tests select SigV4 so EndpointId probes need no AWS CRT dependency.
-No dependencies or lockfiles changed.
+No dependencies or lockfiles changed. Publication review found no secrets,
+private runtime data or live app configuration; AWS fixture notices are retained.
 
 Documentation has a short README, a dedicated agent workflow and an SES
 record reference. A fresh-agent static review checked SDK/auth setup, consumers,

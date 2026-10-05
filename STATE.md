@@ -1,9 +1,9 @@
 # EventBus state
 
-- Repository: https://github.com/lyeith/eventbus.
+- Public repository: https://github.com/lyeith/eventbus.
 - Branch: main; SES implementation committed as 6602261.
-- MIT licensing and public visibility are authorized; publication is finalizing.
-- Standalone agent documentation and licensing are being committed.
+- License: MIT, copyright 2026 David Wong; GitHub recognizes the license.
+- SES, standalone agent documentation and MIT licensing are committed/pushed.
 - No new binary release. v0.1.0 binaries predate SES; consumer pins are unchanged.
 - No task-owned emulator or test process remains running.
 
@@ -25,5 +25,5 @@ README and AGENTS make the verification/evaluation purpose explicit.
 docs/AGENT-HARNESS.md gives the app workflow; docs/SES.md owns capture details.
 Documentation links and consumer/auth instructions were checked against source.
 
-Next: finish MIT/public publication, then continue the low-priority SES backlog
-when requested. LocalStack coexistence is documented but not integration-tested.
+Next: publish an SES-capable binary release when requested, or continue the
+low-priority SES backlog. LocalStack coexistence is not integration-tested.
