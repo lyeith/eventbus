@@ -1,76 +1,61 @@
 # EventBus
 
-EventBus is a small Go development harness for the supported AWS Cognito, SNS,
-SQS, Firehose, SSM Parameter Store and Secrets Manager APIs. It runs one local
-HTTP endpoint; applications use their normal AWS SDKs with endpoint overrides.
-It was extracted from Plans commit `c4bf5de1a257022b8b985d91f93b1c68d5786220`.
+EventBus is a standalone AWS API emulation and agent development harness.
+It supplements local development stacks, including LocalStack, with repeatable
+authentication fixtures, event consumers and structured email capture to shorten
+the agent verification and evaluation loop.
 
-## Run
+Run it independently or alongside LocalStack. Apps use normal AWS SDK clients
+with selected service endpoints routed to EventBus; other services stay on
+LocalStack or native backends. Apps own their scenarios and assertions.
 
-With Go 1.25 or newer:
+## Start
+
+Build with Go 1.25 or newer. Run in the foreground on an unused port:
 
 ```sh
 go build -o eventbus .
 mkdir -p .local
-./eventbus --cognito-db "$PWD/.local/cognito.db"
+./eventbus --port 14100 --issuer-base http://localhost:14100 \
+  --cognito-db "$PWD/.local/cognito.db" --ses-log "$PWD/.local/ses.jsonl"
 ```
 
-The default HTTP port is `4100`; `GET /health` reports status and Cognito base
-URLs. `./eventbus --help` lists all flags. Configure consuming applications' SDK
-endpoints to `http://localhost:4100` with development credentials and region
-`us-east-1`. S3 and DynamoDB are separate services; EventBus does not emulate them.
+From another terminal, check `curl -fsS http://localhost:14100/health`.
+Point the selected app SDK clients at that endpoint, using local credentials and region
+`us-east-1`. Stop with Ctrl-C or SIGTERM. The default port is `4100`;
+`./eventbus --help` lists all flags.
 
-Optional application-owned configuration:
+- [Agent workflow](docs/AGENT-HARNESS.md): configure the app, seed resources,
+  run consumers, inspect results and manage state.
+- [SES capture](docs/SES.md): sending operations, fixtures and JSONL contract.
+- [SDK verification](tests/README.md): isolated compatibility tests.
+- [Backlog](docs/BACKLOG.md): deferred SES operations.
 
-```sh
-./eventbus \
-  --cognito-db /path/to/project/.local/cognito.db \
-  --cognito-pools /path/to/project/cognito_pools.yaml \
-  --consumers /path/to/project/consumers.yaml \
-  --work-dir /path/to/project \
-  --s3-endpoint http://localhost:9000
-```
+## Supported behavior
 
-Keep seeds, topic/queue names, resource provisioning and consumer binaries in
-the consuming application. `cognito_pools.example.yaml` shows the seed format.
-Seed writes retain existing user IDs and update mutable fields; signing keys
-persist in the same SQLite database. Preserve the database, issuer, pool and
-client IDs when switching an application to a standalone binary. Use separate
-state paths for independent projects; the historical default is
-`/tmp/cognito-dev.db`.
+| Area | Local behavior |
+| --- | --- |
+| Cognito | Pools, clients and users; password/admin/refresh auth, MFA challenges, TOTP, JWT/JWKS, password changes and sign-out/revocation. Supported subset; `AdminGetUser` is unsupported. |
+| SNS | Topics, SQS subscriptions, attribute filters, publish and listing. |
+| SQS | Queues, URL/attributes, receive, visibility, long polling, deletion and purge. Messages arrive through SNS; direct `SendMessage` is unsupported. |
+| Consumers | Go binaries or Python handlers receive Lambda-style SQS events, with timeouts, partial batch retry and dead-letter queues. |
+| SES | All six v1 and three v2 sending operations, captured as JSONL without delivery. Management APIs are backlogged. |
+| Firehose | Streams and buffered record/batch delivery to a separately configured S3-compatible endpoint. |
+| SSM | Put/get, lookup by path and delete. |
+| Secrets Manager | Create/get, put versions, update and delete. |
 
-`--issuer-base` defaults to `http://localhost:4100`; `--jwks-base` defaults to the
-issuer base. JWKS is served at `/<pool-id>/.well-known/jwks.json`. Access tokens
-default to one hour, refresh tokens to 24 hours. If changing the HTTP port,
-configure issuer/JWKS bases explicitly as needed.
+The application owns SDK configuration, seeds, resource names, provisioning and
+consumer handlers. S3 and DynamoDB run separately. EventBus implements a local
+AWS subset; IAM enforcement, SMTP and full production AWS semantics are outside
+its current scope.
 
-## Supported subset
+Cognito identities and signing keys persist in SQLite. SES files append across
+restarts; templates and other prerequisites load from YAML. Topics, queues,
+messages, Firehose buffers, SSM and secrets are in memory and need reprovisioning
+after restart. Shutdown drains HTTP, joins workers, flushes Firehose and closes
+SQLite and the capture file.
 
-- SNS: topic creation/list/deletion, SQS subscriptions, attribute filter policies,
-  publish and subscription listing.
-- SQS: queue creation/list/deletion, URL/attributes, receive with visibility and
-  long polling, deletion and purge. SNS fanout supplies messages; direct SQS
-  `SendMessage` is unsupported.
-- Consumers: application Go binaries or Python module handlers run as subprocesses
-  with SQS records on stdin/handler input, bounded execution, partial batch retry
-  and dead-letter queues. Python handlers require `uv` in the application's
-  environment. Consumer configuration supplies handler environment variables.
-- Firehose: stream creation/description/deletion and buffered record/batch
-  delivery to a separately configured S3-compatible endpoint.
-- SSM: put/get, lookup by path and delete.
-- Secrets Manager: create, get, put a version, update and delete.
-- Cognito: user/pool/client management needed by the tests; password, refresh and
-  admin auth; new-password and software-token challenges; TOTP enrollment and
-  preferences; password change; sign-out and token revocation; RSA JWT/JWKS.
-
-Cognito uses SQLite; the other stores and message buffers are in memory. Graceful
-shutdown drains HTTP, joins workers, flushes Firehose and closes SQLite. Restarting
-clears in-memory resources; applications should reprovision them. This remains
-a local development harness: it does not implement IAM enforcement or full AWS
-semantics. SQS queue URLs use localhost and Firehose uses fixed development S3
-credentials (`test` / `testtest123`).
-
-## Verify and release
+## Verify and build releases
 
 ```sh
 go test ./...
@@ -81,27 +66,23 @@ uv run --frozen python -m unittest discover -s tests -p 'test_*.py'
 EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -tags sdksmoke ./...
 ```
 
-The SDK suite owns temporary listeners and identity stores. The optional native
-Firehose test requires an explicitly owned loopback RustFS endpoint:
+Tests own their listeners and stores. Application acceptance tests belong in
+the consuming application. The optional Firehose integration suite needs an
+explicitly owned loopback RustFS endpoint:
 
 ```sh
 S3_ENDPOINT_URL=http://localhost:9000 go test -race -tags integration ./...
 ```
 
-It creates and deletes its own uniquely named bucket. Do not point it at an
-unrelated object store. Application-specific acceptance tests belong to the
-consuming application.
+It creates and deletes a uniquely named bucket. Do not use an unrelated store.
 
-```sh
-scripts/build-release.sh
-```
+`scripts/build-release.sh` produces CGO-free Linux/macOS binaries for
+amd64/arm64 and `SHA256SUMS` in `dist/`; an optional argument selects another
+output directory. Building does not publish. GitHub checks run manually through
+`workflow_dispatch`; run local checks before a release.
 
-This builds CGO-free Linux/macOS binaries for amd64/arm64 in `dist/`, with
-`SHA256SUMS`. Releases publish those five files. A custom output directory can
-be passed as the first argument.
+On SSD, wrap builds with `ssd-dev run --purpose build -- <command>` and tests
+with `ssd-dev operation --purpose test -- <command>`. Save full test output
+before filtering it. Commit, push and publish only when authorized.
 
-GitHub checks are invoked manually with `workflow_dispatch`; automatic hosted
-runs are disabled. Run the commands above before releasing. On SSD, wrap builds
-with `ssd-dev run --purpose build -- <command>` and tests with
-`ssd-dev run --purpose test -- <command>` so the development owner controls their
-processes and temporary state.
+Historical source: extracted from Plans commit `c4bf5de1a257022b8b985d91f93b1c68d5786220`.
