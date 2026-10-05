@@ -41,6 +41,8 @@ func run() (resultErr error) {
 	// tokens are NOT rotated on REFRESH_TOKEN_AUTH per §3f.
 	accessTokenTTL := flag.Duration("access-token-ttl", time.Hour, "TTL for issued access tokens (e.g. 1h, 30m)")
 	refreshTokenTTL := flag.Duration("refresh-token-ttl", 24*time.Hour, "TTL for issued refresh tokens (e.g. 24h, 7d)")
+	sesLog := flag.String("ses-log", "-", "SES JSON Lines capture path ('-' for stdout; no email delivery)")
+	sesConfig := flag.String("ses-config", "", "Optional SES sending fixtures (templates, identities, configuration sets, received messages)")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
 
@@ -77,6 +79,19 @@ func run() (resultErr error) {
 			resultErr = errors.Join(resultErr, owned.Close(ctx))
 		}
 	}()
+	var sesFixtures SESFixtures
+	if *sesConfig != "" {
+		sesFixtures, err = LoadSESFixtures(*sesConfig)
+		if err != nil {
+			return fmt.Errorf("failed to load SES fixtures: %w", err)
+		}
+	}
+	capture, err := OpenSESCapture(*sesLog)
+	if err != nil {
+		return fmt.Errorf("failed to open SES capture: %w", err)
+	}
+	owned.ses = NewSESManager(sesFixtures, capture)
+	server.SetSES(owned.ses)
 	server.SetCognito(cognitoStore, *issuerBase, *jwksBase, *accessTokenTTL, *refreshTokenTTL)
 	if *cognitoPools != "" {
 		seed, err := LoadCognitoSeed(*cognitoPools)

@@ -17,6 +17,7 @@ import (
 type eventBusLifecycle struct {
 	store        *CognitoStore
 	firehose     *FirehoseManager
+	ses          *SESManager
 	consumers    *ConsumerManager
 	cancel       context.CancelFunc
 	requeueDone  <-chan struct{}
@@ -60,7 +61,7 @@ func (owned *eventBusLifecycle) close(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("resource cleanup not started: %w", err)
 	}
-	var flushErr, storeErr error
+	var flushErr, storeErr, captureErr error
 	if owned.firehose != nil {
 		flushErr = owned.firehose.ShutdownContext(ctx)
 	}
@@ -69,7 +70,12 @@ func (owned *eventBusLifecycle) close(ctx context.Context) error {
 	if owned.store != nil {
 		storeErr = owned.store.Close()
 	}
-	return errors.Join(flushErr, storeErr)
+	// SES captures have no delivery workers and no dependency on Firehose or
+	// Cognito. After admission is drained, close even if another finalizer failed.
+	if owned.ses != nil {
+		captureErr = owned.ses.Close()
+	}
+	return errors.Join(flushErr, storeErr, captureErr)
 }
 
 func startChallengeCleanup(ctx context.Context, store *CognitoStore, interval time.Duration) <-chan struct{} {

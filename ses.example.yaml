@@ -1,0 +1,23 @@
+# Sending prerequisites; management APIs are tracked separately in docs/BACKLOG.md.
+require_verified_identities: true
+verified_identities: [example.test]
+configuration_sets: [development]
+sending_enabled: true
+templates:
+  welcome:
+    SubjectPart: 'Hello {{name}}'
+    TextPart: 'Welcome, {{name}}.'
+    HtmlPart: '<p>Welcome, {{name}}.</p>'
+custom_verification_templates:
+  verify:
+    FromEmailAddress: sender@example.test
+    TemplateSubject: 'Verify your test address'
+    TemplateContent: '<p>This verification email is captured locally.</p>'
+    SuccessRedirectionURL: https://example.test/success
+    FailureRedirectionURL: https://example.test/failure
+# SendBounce needs an original received-message fixture less than 24 hours old:
+# received_messages:
+#   original-message-id:
+#     from: origin@example.test
+#     recipients: [sender@example.test]
+#     received_at: <current RFC3339 timestamp>

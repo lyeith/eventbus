@@ -23,6 +23,7 @@ type Server struct {
 	firehose        *FirehoseManager
 	ssm             *SSMStore
 	secrets         *SecretsStore
+	ses             *SESManager
 	cognito         *CognitoStore // optional; nil disables the JWKS route + Cognito dispatch
 	issuerBase      string        // e.g. "http://localhost:4100" — published in /health
 	jwksBase        string        // defaults to issuerBase
@@ -68,6 +69,20 @@ func (s *Server) SetCognito(store *CognitoStore, issuerBase, jwksBase string, ac
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.ses != nil && strings.HasPrefix(r.URL.Path, "/v2/email/") {
+		action, matched := sesV2Action(r)
+		limit := sesWireLimit
+		if action == "SendBulkEmail" {
+			limit = sesBulkWireLimit
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+		var apiErr *sesAPIError
+		if !matched {
+			apiErr = &sesAPIError{Code: "NotFoundException", Message: "SES operation is not implemented", Status: http.StatusNotFound}
+		}
+		s.handleSES(w, r, "v2", action, apiErr)
+		return
+	}
 	// Per-pool JWKS route lives outside the AWS-action dispatcher.
 	// Match on path suffix so any /<pool>/.well-known/jwks.json shape works
 	// regardless of how the operator nests the issuer base. We do NOT force
@@ -157,7 +172,24 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	action := extractAction(r)
+	// An explicit wire limit replaces ParseForm's 10 MB default. SES raw
+	// payloads grow under transport base64/form encoding; message quotas are
+	// enforced separately by SES against the decoded MIME content.
+	r.Body = http.MaxBytesReader(w, r.Body, sesWireLimit)
+	parseErr := r.ParseForm()
+	action := r.FormValue("Action")
+	if s.ses != nil && sesQueryRequest(r, action) {
+		var apiErr *sesAPIError
+		if parseErr != nil {
+			apiErr = sesInvalid("v1", "Malformed Query request: "+parseErr.Error())
+		}
+		s.handleSES(w, r, "v1", action, apiErr)
+		return
+	}
+	if parseErr != nil {
+		xmlError(w, http.StatusBadRequest, "InvalidParameter", "Malformed Query request")
+		return
+	}
 
 	log.Debug().Str("action", action).Str("path", r.URL.Path).Msg("AWS API request")
 

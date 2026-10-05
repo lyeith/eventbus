@@ -17,6 +17,11 @@ authentication with real PyJWT/JWKS verification, and secret-hash plus pool/clie
 management through boto3. After pool deletion, the check requires the exact
 missing-pool error from a supported command. `AdminGetUser` is unsupported.
 
+SES smoke covers all nine v1/v2 sending operations, current optional fields,
+exact binary capture, error envelopes and ordered partial bulk results. It uses
+[the pinned official sending models](aws_models/README.md) with explicit SigV4
+for its local endpoint; it requires no AWS CRT dependency or model/SDK upgrade.
+
 The runner requires a successful child exit and exactly one PASS marker. Missing
 dependencies, empty success, false/conflicting markers, assertion failures and
 timeouts fail the lane. Network calls have deadlines; inherited AWS profiles,

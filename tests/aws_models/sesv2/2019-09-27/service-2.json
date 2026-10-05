@@ -1,0 +1,792 @@
+{
+  "version": "2.0",
+  "metadata": {
+    "apiVersion": "2019-09-27",
+    "endpointPrefix": "email",
+    "jsonVersion": "1.1",
+    "protocol": "rest-json",
+    "protocols": [
+      "rest-json"
+    ],
+    "serviceAbbreviation": "Amazon SES V2",
+    "serviceFullName": "Amazon Simple Email Service",
+    "serviceId": "SESv2",
+    "signatureVersion": "v4",
+    "signingName": "ses",
+    "uid": "sesv2-2019-09-27",
+    "auth": [
+      "aws.auth#sigv4"
+    ]
+  },
+  "operations": {
+    "SendBulkEmail": {
+      "name": "SendBulkEmail",
+      "http": {
+        "method": "POST",
+        "requestUri": "/v2/email/outbound-bulk-emails"
+      },
+      "input": {
+        "shape": "SendBulkEmailRequest"
+      },
+      "output": {
+        "shape": "SendBulkEmailResponse"
+      },
+      "errors": [
+        {
+          "shape": "TooManyRequestsException"
+        },
+        {
+          "shape": "LimitExceededException"
+        },
+        {
+          "shape": "AccountSuspendedException"
+        },
+        {
+          "shape": "SendingPausedException"
+        },
+        {
+          "shape": "MessageRejected"
+        },
+        {
+          "shape": "MailFromDomainNotVerifiedException"
+        },
+        {
+          "shape": "NotFoundException"
+        },
+        {
+          "shape": "BadRequestException"
+        }
+      ]
+    },
+    "SendCustomVerificationEmail": {
+      "name": "SendCustomVerificationEmail",
+      "http": {
+        "method": "POST",
+        "requestUri": "/v2/email/outbound-custom-verification-emails"
+      },
+      "input": {
+        "shape": "SendCustomVerificationEmailRequest"
+      },
+      "output": {
+        "shape": "SendCustomVerificationEmailResponse"
+      },
+      "errors": [
+        {
+          "shape": "TooManyRequestsException"
+        },
+        {
+          "shape": "LimitExceededException"
+        },
+        {
+          "shape": "MessageRejected"
+        },
+        {
+          "shape": "SendingPausedException"
+        },
+        {
+          "shape": "MailFromDomainNotVerifiedException"
+        },
+        {
+          "shape": "NotFoundException"
+        },
+        {
+          "shape": "BadRequestException"
+        }
+      ]
+    },
+    "SendEmail": {
+      "name": "SendEmail",
+      "http": {
+        "method": "POST",
+        "requestUri": "/v2/email/outbound-emails"
+      },
+      "input": {
+        "shape": "SendEmailRequest"
+      },
+      "output": {
+        "shape": "SendEmailResponse"
+      },
+      "errors": [
+        {
+          "shape": "TooManyRequestsException"
+        },
+        {
+          "shape": "LimitExceededException"
+        },
+        {
+          "shape": "AccountSuspendedException"
+        },
+        {
+          "shape": "SendingPausedException"
+        },
+        {
+          "shape": "MessageRejected"
+        },
+        {
+          "shape": "MailFromDomainNotVerifiedException"
+        },
+        {
+          "shape": "NotFoundException"
+        },
+        {
+          "shape": "BadRequestException"
+        }
+      ]
+    }
+  },
+  "shapes": {
+    "AccountSuspendedException": {
+      "type": "structure",
+      "members": {},
+      "error": {
+        "httpStatusCode": 400
+      },
+      "exception": true
+    },
+    "AmazonResourceName": {
+      "type": "string",
+      "min": 1
+    },
+    "Attachment": {
+      "type": "structure",
+      "required": [
+        "RawContent",
+        "FileName"
+      ],
+      "members": {
+        "RawContent": {
+          "shape": "RawAttachmentData"
+        },
+        "ContentDisposition": {
+          "shape": "AttachmentContentDisposition"
+        },
+        "FileName": {
+          "shape": "AttachmentFileName"
+        },
+        "ContentDescription": {
+          "shape": "AttachmentContentDescription"
+        },
+        "ContentId": {
+          "shape": "AttachmentContentId"
+        },
+        "ContentTransferEncoding": {
+          "shape": "AttachmentContentTransferEncoding"
+        },
+        "ContentType": {
+          "shape": "AttachmentContentType"
+        }
+      }
+    },
+    "AttachmentContentDescription": {
+      "type": "string",
+      "max": 1000
+    },
+    "AttachmentContentDisposition": {
+      "type": "string",
+      "enum": [
+        "ATTACHMENT",
+        "INLINE"
+      ]
+    },
+    "AttachmentContentId": {
+      "type": "string",
+      "max": 78,
+      "min": 1
+    },
+    "AttachmentContentTransferEncoding": {
+      "type": "string",
+      "enum": [
+        "BASE64",
+        "QUOTED_PRINTABLE",
+        "SEVEN_BIT"
+      ]
+    },
+    "AttachmentContentType": {
+      "type": "string",
+      "max": 78,
+      "min": 1
+    },
+    "AttachmentFileName": {
+      "type": "string",
+      "max": 255
+    },
+    "AttachmentList": {
+      "type": "list",
+      "member": {
+        "shape": "Attachment"
+      }
+    },
+    "BadRequestException": {
+      "type": "structure",
+      "members": {},
+      "error": {
+        "httpStatusCode": 400
+      },
+      "exception": true
+    },
+    "Body": {
+      "type": "structure",
+      "members": {
+        "Text": {
+          "shape": "Content"
+        },
+        "Html": {
+          "shape": "Content"
+        }
+      }
+    },
+    "BulkEmailContent": {
+      "type": "structure",
+      "members": {
+        "Template": {
+          "shape": "Template"
+        }
+      }
+    },
+    "BulkEmailEntry": {
+      "type": "structure",
+      "required": [
+        "Destination"
+      ],
+      "members": {
+        "Destination": {
+          "shape": "Destination"
+        },
+        "ReplacementTags": {
+          "shape": "MessageTagList"
+        },
+        "ReplacementEmailContent": {
+          "shape": "ReplacementEmailContent"
+        },
+        "ReplacementHeaders": {
+          "shape": "MessageHeaderList"
+        }
+      }
+    },
+    "BulkEmailEntryList": {
+      "type": "list",
+      "member": {
+        "shape": "BulkEmailEntry"
+      }
+    },
+    "BulkEmailEntryResult": {
+      "type": "structure",
+      "members": {
+        "Status": {
+          "shape": "BulkEmailStatus"
+        },
+        "Error": {
+          "shape": "ErrorMessage"
+        },
+        "MessageId": {
+          "shape": "OutboundMessageId"
+        }
+      }
+    },
+    "BulkEmailEntryResultList": {
+      "type": "list",
+      "member": {
+        "shape": "BulkEmailEntryResult"
+      }
+    },
+    "BulkEmailStatus": {
+      "type": "string",
+      "enum": [
+        "SUCCESS",
+        "MESSAGE_REJECTED",
+        "MAIL_FROM_DOMAIN_NOT_VERIFIED",
+        "CONFIGURATION_SET_NOT_FOUND",
+        "TEMPLATE_NOT_FOUND",
+        "ACCOUNT_SUSPENDED",
+        "ACCOUNT_THROTTLED",
+        "ACCOUNT_DAILY_QUOTA_EXCEEDED",
+        "INVALID_SENDING_POOL_NAME",
+        "ACCOUNT_SENDING_PAUSED",
+        "CONFIGURATION_SET_SENDING_PAUSED",
+        "INVALID_PARAMETER",
+        "TRANSIENT_FAILURE",
+        "FAILED"
+      ]
+    },
+    "Charset": {
+      "type": "string"
+    },
+    "ConfigurationOverrides": {
+      "type": "structure",
+      "members": {
+        "Tracking": {
+          "shape": "TrackingConfigurationOverrides"
+        }
+      }
+    },
+    "ConfigurationSetName": {
+      "type": "string"
+    },
+    "ContactListName": {
+      "type": "string"
+    },
+    "Content": {
+      "type": "structure",
+      "required": [
+        "Data"
+      ],
+      "members": {
+        "Data": {
+          "shape": "MessageData"
+        },
+        "Charset": {
+          "shape": "Charset"
+        }
+      }
+    },
+    "Destination": {
+      "type": "structure",
+      "members": {
+        "ToAddresses": {
+          "shape": "EmailAddressList"
+        },
+        "CcAddresses": {
+          "shape": "EmailAddressList"
+        },
+        "BccAddresses": {
+          "shape": "EmailAddressList"
+        }
+      }
+    },
+    "EmailAddress": {
+      "type": "string"
+    },
+    "EmailAddressList": {
+      "type": "list",
+      "member": {
+        "shape": "EmailAddress"
+      }
+    },
+    "EmailContent": {
+      "type": "structure",
+      "members": {
+        "Simple": {
+          "shape": "Message"
+        },
+        "Raw": {
+          "shape": "RawMessage"
+        },
+        "Template": {
+          "shape": "Template"
+        }
+      }
+    },
+    "EmailTemplateContent": {
+      "type": "structure",
+      "members": {
+        "Subject": {
+          "shape": "EmailTemplateSubject"
+        },
+        "Text": {
+          "shape": "EmailTemplateText"
+        },
+        "Html": {
+          "shape": "EmailTemplateHtml"
+        }
+      }
+    },
+    "EmailTemplateData": {
+      "type": "string",
+      "max": 262144
+    },
+    "EmailTemplateHtml": {
+      "type": "string"
+    },
+    "EmailTemplateName": {
+      "type": "string",
+      "min": 1
+    },
+    "EmailTemplateSubject": {
+      "type": "string"
+    },
+    "EmailTemplateText": {
+      "type": "string"
+    },
+    "EndpointId": {
+      "type": "string"
+    },
+    "ErrorMessage": {
+      "type": "string"
+    },
+    "FeatureStatus": {
+      "type": "string",
+      "enum": [
+        "ENABLED",
+        "DISABLED"
+      ]
+    },
+    "LimitExceededException": {
+      "type": "structure",
+      "members": {},
+      "error": {
+        "httpStatusCode": 400
+      },
+      "exception": true
+    },
+    "ListManagementOptions": {
+      "type": "structure",
+      "required": [
+        "ContactListName"
+      ],
+      "members": {
+        "ContactListName": {
+          "shape": "ContactListName"
+        },
+        "TopicName": {
+          "shape": "TopicName"
+        }
+      }
+    },
+    "MailFromDomainNotVerifiedException": {
+      "type": "structure",
+      "members": {},
+      "error": {
+        "httpStatusCode": 400
+      },
+      "exception": true
+    },
+    "Message": {
+      "type": "structure",
+      "required": [
+        "Subject",
+        "Body"
+      ],
+      "members": {
+        "Subject": {
+          "shape": "Content"
+        },
+        "Body": {
+          "shape": "Body"
+        },
+        "Headers": {
+          "shape": "MessageHeaderList"
+        },
+        "Attachments": {
+          "shape": "AttachmentList"
+        }
+      }
+    },
+    "MessageData": {
+      "type": "string"
+    },
+    "MessageHeader": {
+      "type": "structure",
+      "required": [
+        "Name",
+        "Value"
+      ],
+      "members": {
+        "Name": {
+          "shape": "MessageHeaderName"
+        },
+        "Value": {
+          "shape": "MessageHeaderValue"
+        }
+      }
+    },
+    "MessageHeaderList": {
+      "type": "list",
+      "member": {
+        "shape": "MessageHeader"
+      },
+      "max": 15,
+      "min": 0
+    },
+    "MessageHeaderName": {
+      "type": "string",
+      "max": 126,
+      "min": 1,
+      "pattern": "^[!-9;-@A-~]+$"
+    },
+    "MessageHeaderValue": {
+      "type": "string",
+      "max": 995,
+      "min": 1,
+      "pattern": "[ -~]*"
+    },
+    "MessageRejected": {
+      "type": "structure",
+      "members": {},
+      "error": {
+        "httpStatusCode": 400
+      },
+      "exception": true
+    },
+    "MessageTag": {
+      "type": "structure",
+      "required": [
+        "Name",
+        "Value"
+      ],
+      "members": {
+        "Name": {
+          "shape": "MessageTagName"
+        },
+        "Value": {
+          "shape": "MessageTagValue"
+        }
+      }
+    },
+    "MessageTagList": {
+      "type": "list",
+      "member": {
+        "shape": "MessageTag"
+      }
+    },
+    "MessageTagName": {
+      "type": "string"
+    },
+    "MessageTagValue": {
+      "type": "string"
+    },
+    "NotFoundException": {
+      "type": "structure",
+      "members": {},
+      "error": {
+        "httpStatusCode": 404
+      },
+      "exception": true
+    },
+    "OutboundMessageId": {
+      "type": "string"
+    },
+    "RawAttachmentData": {
+      "type": "blob"
+    },
+    "RawMessage": {
+      "type": "structure",
+      "required": [
+        "Data"
+      ],
+      "members": {
+        "Data": {
+          "shape": "RawMessageData"
+        }
+      }
+    },
+    "RawMessageData": {
+      "type": "blob"
+    },
+    "ReplacementEmailContent": {
+      "type": "structure",
+      "members": {
+        "ReplacementTemplate": {
+          "shape": "ReplacementTemplate"
+        }
+      }
+    },
+    "ReplacementTemplate": {
+      "type": "structure",
+      "members": {
+        "ReplacementTemplateData": {
+          "shape": "EmailTemplateData"
+        }
+      }
+    },
+    "SendBulkEmailRequest": {
+      "type": "structure",
+      "required": [
+        "DefaultContent",
+        "BulkEmailEntries"
+      ],
+      "members": {
+        "FromEmailAddress": {
+          "shape": "EmailAddress"
+        },
+        "FromEmailAddressIdentityArn": {
+          "shape": "AmazonResourceName"
+        },
+        "ReplyToAddresses": {
+          "shape": "EmailAddressList"
+        },
+        "FeedbackForwardingEmailAddress": {
+          "shape": "EmailAddress"
+        },
+        "FeedbackForwardingEmailAddressIdentityArn": {
+          "shape": "AmazonResourceName"
+        },
+        "DefaultEmailTags": {
+          "shape": "MessageTagList"
+        },
+        "DefaultContent": {
+          "shape": "BulkEmailContent"
+        },
+        "BulkEmailEntries": {
+          "shape": "BulkEmailEntryList"
+        },
+        "ConfigurationSetName": {
+          "shape": "ConfigurationSetName"
+        },
+        "EndpointId": {
+          "shape": "EndpointId",
+          "contextParam": {
+            "name": "EndpointId"
+          }
+        },
+        "TenantName": {
+          "shape": "TenantName"
+        },
+        "ConfigurationOverrides": {
+          "shape": "ConfigurationOverrides"
+        }
+      }
+    },
+    "SendBulkEmailResponse": {
+      "type": "structure",
+      "required": [
+        "BulkEmailEntryResults"
+      ],
+      "members": {
+        "BulkEmailEntryResults": {
+          "shape": "BulkEmailEntryResultList"
+        }
+      }
+    },
+    "SendCustomVerificationEmailRequest": {
+      "type": "structure",
+      "required": [
+        "EmailAddress",
+        "TemplateName"
+      ],
+      "members": {
+        "EmailAddress": {
+          "shape": "EmailAddress"
+        },
+        "TemplateName": {
+          "shape": "EmailTemplateName"
+        },
+        "ConfigurationSetName": {
+          "shape": "ConfigurationSetName"
+        }
+      }
+    },
+    "SendCustomVerificationEmailResponse": {
+      "type": "structure",
+      "members": {
+        "MessageId": {
+          "shape": "OutboundMessageId"
+        }
+      }
+    },
+    "SendEmailRequest": {
+      "type": "structure",
+      "required": [
+        "Content"
+      ],
+      "members": {
+        "FromEmailAddress": {
+          "shape": "EmailAddress"
+        },
+        "FromEmailAddressIdentityArn": {
+          "shape": "AmazonResourceName"
+        },
+        "Destination": {
+          "shape": "Destination"
+        },
+        "ReplyToAddresses": {
+          "shape": "EmailAddressList"
+        },
+        "FeedbackForwardingEmailAddress": {
+          "shape": "EmailAddress"
+        },
+        "FeedbackForwardingEmailAddressIdentityArn": {
+          "shape": "AmazonResourceName"
+        },
+        "Content": {
+          "shape": "EmailContent"
+        },
+        "EmailTags": {
+          "shape": "MessageTagList"
+        },
+        "ConfigurationSetName": {
+          "shape": "ConfigurationSetName"
+        },
+        "EndpointId": {
+          "shape": "EndpointId",
+          "contextParam": {
+            "name": "EndpointId"
+          }
+        },
+        "TenantName": {
+          "shape": "TenantName"
+        },
+        "ListManagementOptions": {
+          "shape": "ListManagementOptions"
+        },
+        "ConfigurationOverrides": {
+          "shape": "ConfigurationOverrides"
+        }
+      }
+    },
+    "SendEmailResponse": {
+      "type": "structure",
+      "members": {
+        "MessageId": {
+          "shape": "OutboundMessageId"
+        }
+      }
+    },
+    "SendingPausedException": {
+      "type": "structure",
+      "members": {},
+      "error": {
+        "httpStatusCode": 400
+      },
+      "exception": true
+    },
+    "Template": {
+      "type": "structure",
+      "members": {
+        "TemplateName": {
+          "shape": "EmailTemplateName"
+        },
+        "TemplateArn": {
+          "shape": "AmazonResourceName"
+        },
+        "TemplateContent": {
+          "shape": "EmailTemplateContent"
+        },
+        "TemplateData": {
+          "shape": "EmailTemplateData"
+        },
+        "Headers": {
+          "shape": "MessageHeaderList"
+        },
+        "Attachments": {
+          "shape": "AttachmentList"
+        }
+      }
+    },
+    "TenantName": {
+      "type": "string",
+      "min": 1
+    },
+    "TooManyRequestsException": {
+      "type": "structure",
+      "members": {},
+      "error": {
+        "httpStatusCode": 429
+      },
+      "exception": true
+    },
+    "TopicName": {
+      "type": "string"
+    },
+    "TrackingConfigurationOverrides": {
+      "type": "structure",
+      "members": {
+        "OpenTrackingEnabled": {
+          "shape": "FeatureStatus"
+        },
+        "ClickTrackingEnabled": {
+          "shape": "FeatureStatus"
+        }
+      }
+    }
+  }
+}
