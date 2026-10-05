@@ -86,3 +86,9 @@ with `ssd-dev operation --purpose test -- <command>`. Save full test output
 before filtering it. Commit, push and publish only when authorized.
 
 Historical source: extracted from Plans commit `c4bf5de1a257022b8b985d91f93b1c68d5786220`.
+
+## License
+
+[MIT](LICENSE), copyright 2026 David Wong. Third-party dependencies retain their
+own licenses. The reduced AWS model fixtures retain their Apache-2.0 license,
+notices and [attribution](tests/aws_models/README.md).
