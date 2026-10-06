@@ -24,9 +24,12 @@ Verification on SSD:
 - Oversized result blocking, child-output inheritance and endpoint mapping
   regressions found during review are corrected and covered.
 
-Before publishing v0.3.0: actual Plans aws-lambda-go binary + frozen Python SDK
-proof, clean four-platform EventBus/gateway builds, SHA256SUMS and Plans pin.
+Published v0.3.0 from clean c379a24: four-platform EventBus/gateway builds,
+SHA256SUMS and matching GitHub digests. Plans pins both executables.
+Actual Plans aws-lambda-go binary + frozen boto3 SDK proof passed: real Cognito
+JWT, real Trust fail-closed read, Go/Python/Node Invoke, Tail, DryRun and
+gateway allow/401/403/private mapping/credential stripping.
 No dependencies added; API management, async and warm runtimes are separate scope.
 No developer identities or application state reset; tests own their fixtures.
-Native proof binary is temporarily retained for acceptance; /tmp receipts expire
+Task binaries/fixtures/probe copies are removed; /tmp receipts expire
 under the existing 24-hour policy. Final useful implementation is canonical SSD.

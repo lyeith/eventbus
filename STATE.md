@@ -21,7 +21,9 @@ Verified: affected gateway/lambda/app/server race tests; final Lambda fixes and
 contract races; scoped vet. Tests execute real Go/custom, Python and Node.
 Plans' separate authorizer passed native gateway HTTP proof with shipped routes,
 real JWT verification, private v1/v2 bindings and credential/privacy boundaries.
-Native aws-lambda-go SDK proof and clean release builds are next before v0.3.0.
+Actual Plans aws-lambda-go binary and boto3 Invoke/gateway proof passed for all
+three languages. Clean four-platform builds came from c379a24; v0.3.0 is public.
+All eight executable hashes and SHA256SUMS match GitHub asset digests.
 
 Existing Cognito lifecycle/SRP/custom Node triggers and SES sending capture remain
 supported. SQLite preserves identities/signing keys; do not reset developer data.
@@ -31,4 +33,4 @@ Docs: GATEWAY.md, LAMBDA.md, ARCHITECTURE.md and AGENT-HARNESS.md.
 API Gateway management APIs and Lambda async/warm runtime behavior are outside
 this requested scope. Direct SQS sending and SES management remain follow-ups.
 Temporary fixture children/stores are test-owned and removed. Test receipts use
-existing /tmp 24-hour retention; native proof binary is held until final acceptance.
+existing /tmp 24-hour retention; task probe binaries/fixtures are removed after acceptance.
