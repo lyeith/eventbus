@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -142,8 +143,9 @@ func TestSQSGetQueueAttributesQueryProtocolCountsMessages(t *testing.T) {
 	broker.enqueueMessage(broker.GetQueue("depth-xml-queue"), `{"n":1}`)
 
 	resp, err := http.PostForm(ts.URL, url.Values{
-		"Action":   {"GetQueueAttributes"},
-		"QueueUrl": {*created.QueueUrl},
+		"Action":          {"GetQueueAttributes"},
+		"AttributeName.1": {"All"},
+		"QueueUrl":        {*created.QueueUrl},
 	})
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -153,8 +155,21 @@ func TestSQSGetQueueAttributesQueryProtocolCountsMessages(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, resp.Header.Get("Content-Type"), "text/xml")
 	assert.Contains(t, string(body), "<GetQueueAttributesResponse")
-	assert.Contains(t, string(body), "<Name>ApproximateNumberOfMessages</Name>\n      <Value>1</Value>")
-	assert.Contains(t, string(body), "<Name>ApproximateNumberOfMessagesNotVisible</Name>\n      <Value>0</Value>")
+	var decoded struct {
+		Result struct {
+			Attributes []struct {
+				Name  string `xml:"Name"`
+				Value string `xml:"Value"`
+			} `xml:"Attribute"`
+		} `xml:"GetQueueAttributesResult"`
+	}
+	require.NoError(t, xml.Unmarshal(body, &decoded))
+	counts := map[string]string{}
+	for _, attribute := range decoded.Result.Attributes {
+		counts[attribute.Name] = attribute.Value
+	}
+	assert.Equal(t, "1", counts["ApproximateNumberOfMessages"])
+	assert.Equal(t, "0", counts["ApproximateNumberOfMessagesNotVisible"])
 }
 
 func TestSQSGetQueueUrl(t *testing.T) {

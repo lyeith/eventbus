@@ -20,6 +20,7 @@ type config struct {
 	cognitoDB       string
 	accessTokenTTL  time.Duration
 	refreshTokenTTL time.Duration
+	snsLog          string
 	sesLog          string
 	sesConfig       string
 	debug           bool
@@ -48,6 +49,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	// preserves the original refresh token.
 	accessTokenTTL := flags.Duration("access-token-ttl", time.Hour, "TTL for issued access tokens (e.g. 1h, 30m)")
 	refreshTokenTTL := flags.Duration("refresh-token-ttl", 24*time.Hour, "TTL for issued refresh tokens (e.g. 24h, 7d)")
+	snsLog := flags.String("sns-log", "-", "SNS JSON Lines capture path (external deliveries stay local)")
 	sesLog := flags.String("ses-log", "-", "SES JSON Lines capture path ('-' for stdout; no email delivery)")
 	sesConfig := flags.String("ses-config", "", "Optional SES sending fixtures (templates, identities, configuration sets, received messages)")
 	debug := flags.Bool("debug", false, "Enable debug logging")
@@ -70,6 +72,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		cognitoDB:       *cognitoDB,
 		accessTokenTTL:  *accessTokenTTL,
 		refreshTokenTTL: *refreshTokenTTL,
+		snsLog:          *snsLog,
 		sesLog:          *sesLog,
 		sesConfig:       *sesConfig,
 		debug:           *debug,

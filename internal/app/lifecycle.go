@@ -24,6 +24,7 @@ type eventBusLifecycle struct {
 	store        *cognito.CognitoStore
 	firehose     *firehose.FirehoseManager
 	ses          io.Closer
+	sns          io.Closer
 	triggers     contextCloser
 	functions    contextCloser
 	consumers    *consumer.ConsumerManager
@@ -82,7 +83,7 @@ func (owned *eventBusLifecycle) close(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("resource cleanup not started after trigger join: %w", err)
 	}
-	var flushErr, storeErr, captureErr error
+	var flushErr, storeErr, captureErr, snsCaptureErr error
 	if owned.firehose != nil {
 		flushErr = owned.firehose.ShutdownContext(ctx)
 	}
@@ -96,5 +97,8 @@ func (owned *eventBusLifecycle) close(ctx context.Context) error {
 	if owned.ses != nil {
 		captureErr = owned.ses.Close()
 	}
-	return errors.Join(flushErr, storeErr, captureErr)
+	if owned.sns != nil {
+		snsCaptureErr = owned.sns.Close()
+	}
+	return errors.Join(flushErr, storeErr, captureErr, snsCaptureErr)
 }

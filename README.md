@@ -2,7 +2,7 @@
 
 EventBus is a standalone AWS API emulation and agent development harness.
 It supplements local development stacks, including LocalStack, with repeatable
-authentication fixtures, event consumers and structured email capture to shorten
+authentication fixtures, event consumers and structured email and notification capture to shorten
 the agent verification and evaluation loop.
 
 Run it independently or alongside LocalStack. Apps use normal AWS SDK clients
@@ -11,14 +11,15 @@ LocalStack or native backends. Apps own their scenarios and assertions.
 
 ## Start
 
-Download a checksummed binary from [v0.3.0](https://github.com/lyeith/eventbus/releases/tag/v0.3.0),
+Download a checksummed binary from [v0.4.0](https://github.com/lyeith/eventbus/releases/tag/v0.4.0),
 or build with Go 1.25 or newer. Run in the foreground on an unused port:
 
 ```sh
 go build -o eventbus .
 mkdir -p .local
 ./eventbus --port 14100 --issuer-base http://localhost:14100 \
-  --cognito-db "$PWD/.local/cognito.db" --ses-log "$PWD/.local/ses.jsonl"
+  --cognito-db "$PWD/.local/cognito.db" --ses-log "$PWD/.local/ses.jsonl" \
+  --sns-log "$PWD/.local/sns.jsonl"
 ```
 
 From another terminal, check `curl -fsS http://localhost:14100/health`.
@@ -31,6 +32,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Cognito contracts](docs/COGNITO.md): lifecycle, SRP, custom triggers and persistence.
 - [API gateway](docs/GATEWAY.md): REQUEST authorizers, HTTP proxy routing and mappings.
 - [Lambda execution](docs/LAMBDA.md): application-owned Go, Python and Node handlers.
+- [Messaging](docs/MESSAGING.md): all SQS/SNS operations, queue behavior and notification capture.
 - [SES capture](docs/SES.md): sending operations, fixtures and JSONL contract.
 - [Architecture](docs/ARCHITECTURE.md): package ownership, seams and test placement.
 - [Verification](tests/README.md): unit, SDK and native S3 test lanes.
@@ -41,8 +43,8 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 | Area | Local behavior |
 | --- | --- |
 | Cognito | Pools, clients and user lifecycle; password/admin/refresh/SRP auth, application-owned Node custom challenges, TOTP, signed JWT/JWKS and revocation. [Operation coverage](docs/COGNITO.md). |
-| SNS | Topics, SQS subscriptions, attribute filters, publish and listing. |
-| SQS | Queues, URL/attributes, receive, visibility, long polling, deletion and purge. Messages arrive through SNS; direct `SendMessage` is unsupported. |
+| SNS | All 42 operations: topics/subscriptions, filters, batch/FIFO publishing, SMS and mobile push. SQS delivery is local; external delivery is captured. [Contracts](docs/MESSAGING.md). |
+| SQS | All 23 operations, including direct/batch sending, attributes/checksums, visibility, FIFO, policies/tags and DLQ redrive. [Contracts](docs/MESSAGING.md). |
 | API gateway | Separate `eventbus-gateway` executable; REST REQUEST authorizers, IAM responses and HTTP proxy integrations. [Contracts](docs/GATEWAY.md). |
 | Lambda | Synchronous Invoke for application-owned Go/custom runtimes, Python, Node and command handlers. [Execution](docs/LAMBDA.md). |
 | Consumers | Go binaries or Python handlers receive Lambda-style SQS events, with timeouts, partial batch retry and dead-letter queues. |
@@ -56,11 +58,11 @@ consumer handlers. S3 and DynamoDB run separately. EventBus implements a local
 AWS subset; IAM enforcement, SMTP and full production AWS semantics are outside
 its current scope.
 
-Cognito identities and signing keys persist in SQLite. SES files append across
+Cognito identities and signing keys persist in SQLite. SES and SNS JSONL files append across
 restarts; templates and other prerequisites load from YAML. Topics, queues,
 messages, Firehose buffers, SSM and secrets are in memory and need reprovisioning
 after restart. Shutdown drains HTTP, joins workers, flushes Firehose and closes
-SQLite and the capture file.
+SQLite and both capture files.
 
 ## Verify and build releases
 

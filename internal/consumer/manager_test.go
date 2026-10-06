@@ -82,13 +82,14 @@ func TestSettleBatchDeletesSuccessRetriesFailureThenDeadLetters(t *testing.T) {
 		MaxReceiveCount: 2,
 	}
 
-	retryStarted := time.Now()
+	snapshotVisibility := firstBatch[1].VisibleAt
 	manager.settleBatch(zerolog.Nop(), entry, source, firstBatch, failed, false)
 	waiting, inFlight := broker.QueueDepth(source)
 	assert.Zero(t, waiting)
 	assert.Equal(t, 1, inFlight)
 	retryMessage := firstBatch[1]
-	assert.WithinDuration(t, retryStarted.Add(baseRetryVisibility), retryMessage.VisibleAt, time.Second)
+	assert.Equal(t, snapshotVisibility, retryMessage.VisibleAt, "settlement must not mutate a received snapshot")
+	assert.Empty(t, broker.ReceiveMessages(source, 1, 0), "failed record must remain invisible until retry")
 	require.True(t, broker.ExtendMessageVisibility(source, retryMessage.ReceiptHandle, -time.Second))
 	waiting, inFlight = broker.QueueDepth(dlq)
 	assert.Zero(t, waiting)
@@ -145,4 +146,37 @@ func TestConsumerPollLoopStops(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("pollLoop did not stop within timeout")
 	}
+}
+
+func TestBuildLambdaEventPreservesDirectSendMetadata(t *testing.T) {
+	broker := messaging.NewBroker("eu-west-1", "123456789012", 0)
+	queue := broker.CreateQueue("events", 0, 0)
+	_, err := broker.SendQueueMessage(queue, messaging.QueueMessageInput{
+		Body: "hello", SenderID: "caller", MessageGroupID: "fair-group",
+		Attributes: map[string]messaging.MessageAttribute{
+			"name":    {DataType: "String", StringValue: "alice"},
+			"payload": {DataType: "Binary", BinaryValue: []byte{0, 1, 255}},
+		},
+		SystemAttributes: map[string]messaging.MessageAttribute{"AWSTraceHeader": {DataType: "String", StringValue: "Root=1-12345678-123456789012345678901234"}},
+	})
+	require.NoError(t, err)
+	messages := broker.ReceiveMessages(queue, 1, 0)
+	require.Len(t, messages, 1)
+	event := buildLambdaEvent(messages, queue)
+	record := event["Records"].([]map[string]interface{})[0]
+	assert.Equal(t, "aws:sqs", record["eventSource"])
+	assert.Equal(t, queue.ARN, record["eventSourceARN"])
+	assert.Equal(t, "eu-west-1", record["awsRegion"])
+	assert.Equal(t, "5d41402abc4b2a76b9719d911017c592", record["md5OfBody"])
+	attributes := record["attributes"].(map[string]string)
+	assert.Equal(t, "1", attributes["ApproximateReceiveCount"])
+	assert.Equal(t, "caller", attributes["SenderId"])
+	assert.Equal(t, "fair-group", attributes["MessageGroupId"])
+	assert.Equal(t, "Root=1-12345678-123456789012345678901234", attributes["AWSTraceHeader"])
+	assert.NotEmpty(t, attributes["SentTimestamp"])
+	assert.NotEmpty(t, attributes["ApproximateFirstReceiveTimestamp"])
+	custom := record["messageAttributes"].(map[string]interface{})
+	assert.Equal(t, "AAH/", custom["payload"].(map[string]interface{})["binaryValue"])
+	assert.Equal(t, "alice", custom["name"].(map[string]interface{})["stringValue"])
+	assert.Equal(t, []string{}, custom["name"].(map[string]interface{})["stringListValues"])
 }

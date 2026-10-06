@@ -118,9 +118,11 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 			handler = s.services.Secrets
 		case strings.HasPrefix(target, "AWSCognitoIdentityProviderService."):
 			handler = s.services.Cognito
-		default:
-			// Preserve the AWS JSON dispatcher’s existing SQS fallback.
+		case strings.HasPrefix(target, "AmazonSQS."):
 			handler = s.services.Messaging
+		default:
+			awsprotocol.JSONError(w, http.StatusBadRequest, "UnknownOperationException", "Unknown AWS service target")
+			return
 		}
 		if handler == nil {
 			awsprotocol.JSONError(w, http.StatusServiceUnavailable, "ServiceUnavailable", "Service not configured")

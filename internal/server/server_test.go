@@ -65,7 +65,7 @@ func TestRoutesToServiceOwnedProtocols(t *testing.T) {
 		{"SNS query", "POST", "/", "", "Action=CreateTopic&Name=route-topic", "TopicArn", 200},
 		{"SQS JSON", "POST", "/", "AmazonSQS.CreateQueue", `{"QueueName":"route-queue"}`, "QueueUrl", 200},
 		{"SQS queue path", "POST", "/queue/route-queue", "", "Action=GetQueueUrl&QueueName=route-queue", "GetQueueUrlResponse", 200},
-		{"unknown target falls back to SQS", "POST", "/", "OtherService.ListQueues", `{}`, "QueueUrls", 200},
+		{"unknown target cannot invoke SQS", "POST", "/", "OtherService.ListQueues", `{}`, "UnknownOperationException", 400},
 		{"Firehose JSON", "POST", "/", "Firehose_20150804.DescribeDeliveryStream", `{"DeliveryStreamName":"missing"}`, "ResourceNotFoundException", 400},
 		{"SSM JSON", "POST", "/", "AmazonSSM.PutParameter", `{"Name":"/route","Value":"ok"}`, "Version", 200},
 		{"Secrets JSON", "POST", "/", "secretsmanager.CreateSecret", `{"Name":"route-secret","SecretString":"ok"}`, "arn:aws:secretsmanager:us-east-1:000000000000", 200},

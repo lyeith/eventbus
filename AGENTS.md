@@ -4,7 +4,7 @@ EventBus is a standalone AWS emulator and agent development harness that
 supplements LocalStack workflows. Its purpose is a shorter verification/eval
 loop: run application scenarios, inspect evidence, assert outcomes and iterate.
 Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
-[SES capture](docs/SES.md).
+[SES capture](docs/SES.md) and [Messaging](docs/MESSAGING.md).
 [STATE.md](STATE.md) and [HANDOFF.md](HANDOFF.md) record current work, not API contracts.
 
 ## Ownership and contracts
@@ -16,8 +16,10 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
 - [Architecture](docs/ARCHITECTURE.md) maps package ownership and test placement.
   `internal/app` constructs and closes resources; `internal/server` only routes
   through consumer-owned interfaces. Service packages own stores and operations.
-- `internal/messaging` owns shared SNS/SQS state; `internal/consumer` owns process
-  execution and settlement through its QueueBroker port. Keep queue state private.
+- `internal/messaging` owns the shared registry and separate SQS/SNS engines;
+  adapters use typed operations, SNS fanout uses SendQueueMessage and external
+  delivery uses versioned JSONL capture. Keep registry/entity locks independent.
+- `internal/consumer` owns process execution and settlement through its QueueBroker port. Keep queue state private.
 - `internal/cognito` owns lifecycle, SRP and persisted challenge decisions; its
   TriggerInvoker port receives an application-owned runner from `internal/app`.
 - `internal/cognitotrigger` owns Node execution, deadlines and child cleanup;

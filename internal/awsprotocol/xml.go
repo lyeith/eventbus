@@ -22,6 +22,11 @@ func RequestID() string {
 }
 
 func XMLError(w http.ResponseWriter, statusCode int, code, message string) {
+	requestID := w.Header().Get("X-Amzn-RequestId")
+	if requestID == "" {
+		requestID = RequestID()
+		w.Header().Set("X-Amzn-RequestId", requestID)
+	}
 	body := fmt.Sprintf(`
 <ErrorResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/">
   <Error>
@@ -30,7 +35,7 @@ func XMLError(w http.ResponseWriter, statusCode int, code, message string) {
     <Message>%s</Message>
   </Error>
   <RequestId>%s</RequestId>
-</ErrorResponse>`, XMLEscape(code), XMLEscape(message), RequestID())
+</ErrorResponse>`, XMLEscape(code), XMLEscape(message), requestID)
 	XMLResponse(w, statusCode, body)
 }
 

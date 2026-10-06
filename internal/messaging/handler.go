@@ -2,9 +2,9 @@ package messaging
 
 import (
 	"fmt"
-	"net/http"
-
 	"github.com/lyeith/eventbus/internal/awsprotocol"
+	"net/http"
+	"strings"
 )
 
 // Handler adapts the shared messaging broker to the SNS and SQS AWS protocols.
@@ -19,36 +19,19 @@ func NewHandler(broker *Broker) *Handler {
 
 // ServeQuery serves SNS and legacy SQS operations from parsed Query parameters.
 func (s *Handler) ServeQuery(w http.ResponseWriter, r *http.Request, action string) {
-	switch action {
-	case "CreateTopic":
-		s.handleCreateTopic(w, r)
-	case "Subscribe":
-		s.handleSubscribe(w, r)
-	case "Publish":
-		s.handlePublish(w, r)
-	case "ListTopics":
-		s.handleListTopics(w, r)
-	case "ListSubscriptionsByTopic":
-		s.handleListSubscriptionsByTopic(w, r)
-	case "DeleteTopic":
-		s.handleDeleteTopic(w, r)
-	case "CreateQueue":
-		s.handleCreateQueue(w, r)
-	case "GetQueueAttributes":
-		s.handleGetQueueAttributes(w, r)
-	case "GetQueueUrl":
-		s.handleGetQueueUrl(w, r)
-	case "ReceiveMessage":
-		s.handleReceiveMessage(w, r)
-	case "DeleteMessage":
-		s.handleDeleteMessage(w, r)
-	case "PurgeQueue":
-		s.handlePurgeQueue(w, r)
-	case "DeleteQueue":
-		s.handleDeleteQueue(w, r)
-	case "ListQueues":
-		s.handleListQueues(w, r)
-	default:
+	version := r.FormValue("Version")
+	sqs := version == "2012-11-05" || strings.HasPrefix(r.URL.Path, "/queue/") || r.FormValue("QueueUrl") != ""
+	if version == "" && !sqs {
+		switch action {
+		case "CancelMessageMoveTask", "ChangeMessageVisibility", "ChangeMessageVisibilityBatch", "CreateQueue", "DeleteMessage", "DeleteMessageBatch", "DeleteQueue", "GetQueueAttributes", "GetQueueUrl", "ListDeadLetterSourceQueues", "ListMessageMoveTasks", "ListQueues", "ListQueueTags", "PurgeQueue", "ReceiveMessage", "SendMessage", "SendMessageBatch", "SetQueueAttributes", "StartMessageMoveTask", "TagQueue", "UntagQueue":
+			sqs = true
+		}
+	}
+	if version != "2010-03-31" && sqs {
+		s.serveSQSQuery(w, r, action)
+		return
+	}
+	if !s.serveSNSQuery(w, r, action) {
 		awsprotocol.XMLError(w, http.StatusBadRequest, "InvalidAction", fmt.Sprintf("Unknown action: %s", action))
 	}
 }

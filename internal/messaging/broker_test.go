@@ -135,7 +135,9 @@ func TestSubscribeToNonexistentTopic(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, sub)
-	assert.Contains(t, err.Error(), "topic not found")
+	var failure *snsError
+	require.ErrorAs(t, err, &failure)
+	assert.Equal(t, "NotFound", failure.Code)
 }
 
 func TestCreateQueue(t *testing.T) {
@@ -224,7 +226,9 @@ func TestPublishNonexistentTopic(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Empty(t, msgID)
-	assert.Contains(t, err.Error(), "topic not found")
+	var failure *snsError
+	require.ErrorAs(t, err, &failure)
+	assert.Equal(t, "NotFound", failure.Code)
 }
 
 func TestEnqueueSignalsCond(t *testing.T) {

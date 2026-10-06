@@ -19,7 +19,7 @@ Select endpoints per service using the application's normal SDK configuration:
 | S3, DynamoDB and other services kept in LocalStack | LocalStack's configured endpoint |
 | Services supplied by native local backends | That backend's configured endpoint |
 
-EventBus consumers poll EventBus queues: provision their SNS-to-SQS pipeline
+EventBus consumers poll EventBus queues: provision their queues and any SNS-to-SQS pipeline
 entirely there. Each system owns its resources and state; unsupported EventBus
 operations return errors rather than forwarding to LocalStack.
 See [AWS endpoint configuration](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html)
@@ -68,10 +68,11 @@ consumers:
 ```
 
 Create the source queue, its DLQ (default `<queue>-dlq`) and SNS subscription
-through the SDK. Without a provisioned DLQ, failures keep retrying. Publish
-through SNS; direct SQS `SendMessage` is unsupported. The event has `Records`
-with `messageId`, `receiptHandle` and `body`; parse the SNS JSON in `body` to
-read its `Message`. Go handlers read this event from stdin. Python handlers use
+through the SDK. Without a provisioned DLQ, failures keep retrying. Send
+directly with SQS `SendMessage`/`SendMessageBatch`, or publish through SNS.
+`Records` preserve custom/system attributes, checksums, queue ARN and region.
+Direct sends and raw SNS subscriptions put the application message in `body`;
+otherwise parse the SNS JSON envelope to read its `Message`. Go handlers read this event from stdin. Python handlers use
 `type: python` and a dotted `package.module.function`; `uv` runs them in
 `--work-dir`. Consumers inherit only a small environment allowlist: supply
 SDK endpoints, credentials and app configuration through `env`, even if those
@@ -91,7 +92,11 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   diagnostics and batch settlement. Consumer stdout is the JSON result.
 - Read SES JSONL from the selected `--ses-log` file. Use `request` and
   `outcome` for assertions; [SES capture](SES.md) explains bulk failures and
-  derived email views. Only SES requests have this structured capture stream.
+  derived email views.
+- Read SNS JSONL from `--sns-log`; [Messaging](MESSAGING.md) documents the versioned
+  schema, subscription tokens, sandbox OTPs and external delivery intents.
+  Assert the message ID and per-delivery status; capture proves local intent,
+  not delivery to a real recipient.
 - Stop the owned process with Ctrl-C or SIGTERM. Shutdown drains admitted HTTP
   requests and joins consumers before releasing stores.
 

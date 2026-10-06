@@ -2,7 +2,11 @@ package consumer
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/base64"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -98,7 +102,7 @@ func (cm *ConsumerManager) pollLoop(ctx context.Context, entry ConsumerEntry) {
 			cm.broker.ExtendMessageVisibility(queue, msg.ReceiptHandle, visibility)
 		}
 
-		event := buildLambdaEvent(messages)
+		event := buildLambdaEvent(messages, queue)
 		result, err := cm.invokeHandlerResult(ctx, entry, event)
 
 		if err != nil {
@@ -197,18 +201,52 @@ func retryVisibility(receiveCount int) time.Duration {
 	return delay
 }
 
-// buildLambdaEvent creates an SQS Lambda event from messages.
-// Format: {"Records": [{"messageId": "...", "body": "...SNS envelope...", "receiptHandle": "..."}]}
-func buildLambdaEvent(messages []*messaging.Message) map[string]interface{} {
+// buildLambdaEvent preserves the SQS record contract for local Lambda handlers.
+func buildLambdaEvent(messages []*messaging.Message, queues ...*messaging.Queue) map[string]interface{} {
+	var arn, region string
+	if len(queues) > 0 && queues[0] != nil {
+		arn = queues[0].ARN
+		if parts := strings.Split(arn, ":"); len(parts) > 3 {
+			region = parts[3]
+		}
+	}
 	records := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
+		attributes := map[string]string{
+			"ApproximateReceiveCount": strconv.Itoa(msg.ReceiveCount),
+			"SenderId":                msg.SenderID,
+			"SentTimestamp":           strconv.FormatInt(msg.SentTimestamp.UnixMilli(), 10),
+		}
+		if !msg.FirstReceivedAt.IsZero() {
+			attributes["ApproximateFirstReceiveTimestamp"] = strconv.FormatInt(msg.FirstReceivedAt.UnixMilli(), 10)
+		}
+		for name, value := range map[string]string{
+			"MessageGroupId": msg.GroupID, "MessageDeduplicationId": msg.DeduplicationID,
+			"SequenceNumber": msg.SequenceNumber, "DeadLetterQueueSourceArn": msg.OriginalSourceARN,
+		} {
+			if value != "" {
+				attributes[name] = value
+			}
+		}
+		for name, value := range msg.SystemAttributes {
+			attributes[name] = value.StringValue
+		}
+		messageAttributes := make(map[string]interface{}, len(msg.Attributes))
+		for name, value := range msg.Attributes {
+			attribute := map[string]interface{}{"dataType": value.DataType, "stringListValues": []string{}, "binaryListValues": []string{}}
+			if strings.HasPrefix(value.DataType, "Binary") {
+				attribute["binaryValue"] = base64.StdEncoding.EncodeToString(value.BinaryValue)
+			} else {
+				attribute["stringValue"] = value.StringValue
+			}
+			messageAttributes[name] = attribute
+		}
 		records = append(records, map[string]interface{}{
-			"messageId":     msg.ID,
-			"receiptHandle": msg.ReceiptHandle,
-			"body":          msg.Body,
+			"messageId": msg.ID, "receiptHandle": msg.ReceiptHandle, "body": msg.Body,
+			"attributes": attributes, "messageAttributes": messageAttributes,
+			"md5OfBody":   fmt.Sprintf("%x", md5.Sum([]byte(msg.Body))),
+			"eventSource": "aws:sqs", "eventSourceARN": arn, "awsRegion": region,
 		})
 	}
-	return map[string]interface{}{
-		"Records": records,
-	}
+	return map[string]interface{}{"Records": records}
 }

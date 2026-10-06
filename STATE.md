@@ -2,35 +2,29 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD; branch main.
 Public repository: https://github.com/lyeith/eventbus; MIT, David Wong, 2026.
-Current work: extract the generic API gateway and support multi-language authorizers.
+Published release: v0.3.0; v0.4.0 messaging artifacts/publication are next.
 
-The AWS service CLI now accepts --lambda-functions and --work-dir. Registered
-Go/custom runtime binaries use Lambda Runtime API; Python and Node use standard
-handler events/context. Invoke supports RequestResponse and DryRun, raw JSON,
-function errors and bounded Tail logs. Environment is explicitly declared.
-Each invocation is cold; process groups stop/join on completion, timeout or close.
+Current work: complete all 23 SQS and 42 SNS operations for the local harness.
+SNS includes SMS/mobile APIs, with capture rather than external provider delivery.
+Implementation is complete. Full Go race suite, final affected race tests,
+frozen Python messaging/SES SDK checks, Python tooling tests and vet pass.
+No dependencies added. The shared application stack has not been reset/restarted.
 
-cmd/gateway builds eventbus-gateway, independently of the AWS listener.
-It implements REST REQUEST-authorizer events, Lambda Invoke HTTP, strict IAM
-Allow/Deny evaluation, TTL/identity caching, HTTP proxy mappings and configurable
-header removal. It owns neither application policy nor an identity datastore.
-Applications own route definitions, authorizers and private integration context.
-Frontend static/Vite proxy, streaming and upgrade closure remain supported.
+Messaging ownership: shared broker registry, separate sqs_* and sns_* engines.
+SQS JSON and Query share typed operations; SNS fanout uses SendQueueMessage.
+SNS capture uses --sns-log and schema eventbus.sns.capture.v1; initial writes
+precede acceptance. Queue/custom/system metadata propagates to consumer events.
+FIFO replay uses an in-memory bounded archive; production IAM/KMS/cloud metrics
+and real provider delivery remain outside the harness.
 
-Verified: affected gateway/lambda/app/server race tests; final Lambda fixes and
-contract races; scoped vet. Tests execute real Go/custom, Python and Node.
-Plans' separate authorizer passed native gateway HTTP proof with shipped routes,
-real JWT verification, private v1/v2 bindings and credential/privacy boundaries.
-Actual Plans aws-lambda-go binary and boto3 Invoke/gateway proof passed for all
-three languages. Clean four-platform builds came from c379a24; v0.3.0 is public.
-All eight executable hashes and SHA256SUMS match GitHub asset digests.
+Gateway/Lambda work is already pushed and published. eventbus-gateway is separate
+from the AWS listener and imports no consuming application policy/store.
+Go/custom Runtime API, Python and Node authorizers use AWS Lambda Invoke.
+Plans pins both v0.3.0 executables; native real-JWT/private-route proof passed.
 
-Existing Cognito lifecycle/SRP/custom Node triggers and SES sending capture remain
-supported. SQLite preserves identities/signing keys; do not reset developer data.
-No application stack has been reset or restarted in these tests.
-
-Docs: GATEWAY.md, LAMBDA.md, ARCHITECTURE.md and AGENT-HARNESS.md.
-API Gateway management APIs and Lambda async/warm runtime behavior are outside
-this requested scope. Direct SQS sending and SES management remain follow-ups.
-Temporary fixture children/stores are test-owned and removed. Test receipts use
-existing /tmp 24-hour retention; task probe binaries/fixtures are removed after acceptance.
+Cognito lifecycle/SRP/custom Node triggers and SES sending capture remain supported.
+SQLite preserves identities/signing keys; do not reset developer data.
+All messaging/resource state is in memory and reprovisioned after restart.
+Docs: MESSAGING.md, GATEWAY.md, LAMBDA.md, ARCHITECTURE.md, AGENT-HARNESS.md.
+API Gateway management, Lambda async/warm behavior and SES management are separate.
+Test fixtures own listeners/stores; test receipts use existing /tmp 24-hour TTL.

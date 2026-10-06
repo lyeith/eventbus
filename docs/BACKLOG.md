@@ -19,10 +19,11 @@ current HTTP sending scope.
 
 ## Messaging follow-up
 
-Direct SQS SendMessage is separate from the Cognito work in
-[issue #1](https://github.com/lyeith/eventbus/issues/1). Add it for a concrete
-consumer with real SDK receive/delete/visibility/retry/DLQ checks; batch/FIFO and
-Node queue consumers need their own demonstrated requirements.
+All SQS/SNS operations are implemented for the local harness; see
+[Messaging](MESSAGING.md) for supported state and external capture boundaries.
+Production IAM enforcement, KMS encryption, CloudWatch metrics, provider delivery
+and delivery retry infrastructure are outside this scope. Node queue consumers
+are a separate feature from the existing Go/Python consumer runner.
 
 ## Separate gateway and Lambda work
 

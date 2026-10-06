@@ -182,3 +182,14 @@ func TestFailedTriggerJoinRetainsStoresAndCapture(t *testing.T) {
 	require.False(t, captureClosed)
 	require.ErrorIs(t, owned.Close(t.Context()), context.DeadlineExceeded, "failed lifetime join must remain terminal")
 }
+
+func TestSNSCaptureClosesWhenSESCloseFails(t *testing.T) {
+	expected := errors.New("SES final append failed")
+	snsClosed := false
+	owned := &eventBusLifecycle{
+		ses: closeFunc(func() error { return expected }),
+		sns: closeFunc(func() error { snsClosed = true; return nil }),
+	}
+	require.ErrorIs(t, owned.Close(context.Background()), expected)
+	require.True(t, snsClosed)
+}

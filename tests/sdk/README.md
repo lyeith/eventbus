@@ -15,7 +15,7 @@ and SESv2 SDK v3 version `3.1146.0`, including the transitive npm lockfile.
 the lane finds `node` on PATH. CI uses Node 22.
 
 The Go fixtures run the complete HTTP dispatcher on owned loopback listeners,
-SQLite databases and SES capture files. They do not use a running application
+SQLite databases and SES/SNS capture files. They do not use a running application
 stack or reset developer state.
 
 JavaScript runs two isolated lifecycle scenarios: usernames distinct from email,
@@ -31,6 +31,10 @@ JSONL evidence. Typed SDK errors must reject wrong proofs/answers, forged,
 replayed, cross-user, expired and disabled sessions, plus trigger failures.
 Closing and reopening the same listener address, store, capture and runner must
 preserve identity, refresh and a pending custom challenge.
+
+Python messaging covers direct SQS sending, binary attributes/checksums, typed
+errors, SNS raw fanout and locally captured mobile-push intents. Ordinary Go SDK
+contract tests additionally cover all SQS/SNS operation families and dispatch.
 
 Python covers boto3 admin operations, password/refresh with PyJWT/JWKS, client
 secrets and pool/client management. SES covers all nine v1/v2 sending operations,

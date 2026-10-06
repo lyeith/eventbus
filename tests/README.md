@@ -13,7 +13,7 @@ go vet ./...
 ```
 
 [SDK verification](sdk/README.md) adds lifecycle, SRP/custom authentication,
-Node trigger execution, SES capture and restart evidence. It requires Node >=20
+Node trigger execution, SES/SNS capture, direct SQS sending and restart evidence. It requires Node >=20
 and frozen SDK dependencies, with no running application stack.
 
 Firehose's optional native S3 suite requires an explicitly owned loopback RustFS

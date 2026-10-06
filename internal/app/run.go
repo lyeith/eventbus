@@ -63,6 +63,12 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 			resultErr = errors.Join(resultErr, owned.Close(ctx))
 		}
 	}()
+	snsCapture, err := messaging.OpenSNSCapture(cfg.snsLog)
+	if err != nil {
+		return fmt.Errorf("failed to open SNS capture: %w", err)
+	}
+	owned.sns = snsCapture
+	broker.SetSNSCapture(snsCapture)
 	var sesFixtures ses.SESFixtures
 	if cfg.sesConfig != "" {
 		sesFixtures, err = ses.LoadSESFixtures(cfg.sesConfig)

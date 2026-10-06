@@ -14,7 +14,7 @@ internal/
   lambda/                App-owned multi-language execution, Invoke/Runtime API and child lifetime
   cognito/               SQLite identities, lifecycle, SRP/auth, JWT/JWKS and seeds
   cognitotrigger/        Application-owned Node trigger execution and child lifetime
-  messaging/             One SNS/SQS broker, filtering and HTTP adapters
+  messaging/             Shared registry; separate queue and topic engines/adapters
   consumer/              Harness configuration, polling, settlement and processes
   ses/                   Fixtures, sending, MIME, capture and v1/v2 adapters
   firehose/              Stream state, buffered S3 delivery and HTTP adapter
@@ -32,7 +32,11 @@ examples/                Application-owned fixture format examples
   delegates operations; it imports no service package and accesses no store.
 - Each service owns its state and operation adapter. Services do not import
   `app`, `server`, `consumer` or another service.
-- SNS and SQS share `messaging`: publication, subscriptions and queue settlement
+- SNS and SQS share the `messaging` registry but own separate state engines.
+  `sqs_*` owns queues, typed operations and both JSON/Query adapters; `sns_*` owns
+  topics, subscriptions, SMS/mobile state and Query adapters. SNS delivers to SQS
+  through `SendQueueMessage`; durable capture belongs to `capture.go`.
+  Publication, subscriptions and queue settlement
   need the same broker. Queue collections remain private to that owner.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message
   types. It owns subprocess policy, batch responses, retries and dead letters.

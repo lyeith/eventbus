@@ -1,35 +1,45 @@
 # Handoff
 
-Generic API gateway and multi-language Lambda authorizer execution are implemented.
-EventBus owns the reusable gateway and execution; Plans retains Trust, authorizer
-policy, private backend paths, route configuration and OpenAPI/AppGraph ownership.
+All 23 SQS and 42 SNS actions are implemented for the local emulator/harness.
+SQS JSON and Query share a typed engine; SNS topic/subscription, SMS and mobile
+state have separate owners. SNS fanout uses direct SQS sending, not duplicate
+queue mutation. No dependencies were added.
 
-cmd/gateway is a separate executable. Its boundary is AWS REST REQUEST events,
-IAM policy responses and synchronous Lambda Invoke. Unsupported policy semantics
-fail closed; authorizer context is an opaque scalar mapping, never client output.
-Authorizer TTL defaults to AWS 300 seconds; Plans explicitly sets zero.
+SQS adds direct/batch send, String/Number/Binary attributes and AWS MD5s,
+visibility batches, renewed receipts, cancellation-aware long polling, FIFO
+ordering/dedup/receive attempts, retroactive FIFO delay, tags/policies, DLQ
+source listing and real rate-controlled/cancellable message-move tasks.
 
-internal/lambda supports provided Go/custom Runtime API, Python sync handlers,
-Node ESM/CJS async/callback handlers and JSON command adapters. Outputs/logs are
-separate and bounded. Declared environment avoids inheriting host credentials;
-process groups and runtime listeners close/join on success, timeout or shutdown.
-app injects the optional service into the dispatcher and closes after HTTP drain.
+SNS adds topic/subscription attributes, confirmation/unsubscribe tokens,
+advanced attribute/body filters, raw/protocol delivery, batch/FIFO publishing,
+permissions/tags/data policies, all SMS/mobile operations and bounded FIFO
+archive/replay. DLQ policies validate account/region/FIFO identity atomically.
+SMS sandbox OTPs and subscription tokens are available as local capture evidence.
+
+--sns-log emits append-only eventbus.sns.capture.v1 JSONL. Initial capture
+precedes acceptance/commit/fanout; write failures are terminal. Later outcome
+capture failures preserve accepted publication success and report to stderr.
+Shutdown joins workers/drains HTTP before independently closing SNS/SES capture.
+Consumer records now preserve AWS SQS metadata, attributes and binary values.
 
 Verification on SSD:
-- Affected gateway/lambda/app/server race aggregate passed.
-- Final Lambda races and partial-ARN/Runtime API contract tests passed.
-- Scoped gateway/Lambda/app/server/CLI/example vet passed.
-- Plans' tagged authorizer races/vet passed, including actual gateway binary,
-  shipped-route fixture, real JWT validation and 15 auth/binding/privacy cases.
-- Oversized result blocking, child-output inheritance and endpoint mapping
-  regressions found during review are corrected and covered.
+- Full go test -race ./... passed, including Cognito/SES/gateway/Lambda.
+- Final scoped messaging/server races passed after contract and XML fixes.
+- Consumer/app races passed; independent capture closure is covered.
+- Real Go AWS SDKs cover all operation families through service/dispatcher tests.
+- Frozen Python messaging and all SES sending SDK checks passed; runner controls
+  passed. Python tooling's five tests and go vet ./... passed.
+- AWS's documented SQS MD5 example independently verifies checksums.
+- Tests own listeners/state; no live AWS comparison or provider delivery is claimed.
 
-Published v0.3.0 from clean c379a24: four-platform EventBus/gateway builds,
-SHA256SUMS and matching GitHub digests. Plans pins both executables.
-Actual Plans aws-lambda-go binary + frozen boto3 SDK proof passed: real Cognito
-JWT, real Trust fail-closed read, Go/Python/Node Invoke, Tail, DryRun and
-gateway allow/401/403/private mapping/credential stripping.
-No dependencies added; API management, async and warm runtimes are separate scope.
-No developer identities or application state reset; tests own their fixtures.
-Task binaries/fixtures/probe copies are removed; /tmp receipts expire
-under the existing 24-hour policy. Final useful implementation is canonical SSD.
+MESSAGING.md lists all operations, JSONL parsing, archive limits and exclusions.
+IAM/SigV4 enforcement, actual KMS, cloud feedback/inspection and provider retries
+are outside the harness. SNS envelopes are unsigned. Archives are in-memory,
+synchronous snapshots capped at 64 MiB serialized requests plus metadata/topic.
+
+Gateway/Lambda v0.3.0 is already public and adopted by Plans. Generic gateway
+knows no Trust policy/store; Go/Python/Node use synchronous Lambda Invoke.
+Messaging release v0.4.0 clean builds, native CLI proof and publication are next.
+No developer application stack has been restarted or its state reset.
+Temporary staging/model copies are removed; native probe script is task-owned
+and will be removed after acceptance. /tmp test receipts use existing 24-hour TTL.
