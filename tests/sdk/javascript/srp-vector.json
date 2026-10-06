@@ -1,0 +1,17 @@
+{
+  "poolID": "us-east-1_ExamplePool",
+  "username": "canonical-user-42",
+  "password": "TestPassword!42",
+  "timestamp": "Tue Oct 6 10:20:30 UTC 2026",
+  "a": "123456789abcdef123456789abcdef123456789abcdef",
+  "bEntropy": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+  "salt": "808182838485868788898a8b8c8d8e8f",
+  "secretBlock": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "modulusBits": 3072,
+  "k": "538282c4354742d7cbbde2359fcf67f9f5b3a6b08791e5011b43b8a5b66d9ee6",
+  "AHash": "d4206c4e86e6e471e57a5a6e45a9429ba7321842a3af5c2326e8c2dd956b3211",
+  "verifierHash": "9c9227c68e301fcd154637da7f140fbbbe2544b0e0c9f2bd4c348dd0b3d2cdb3",
+  "BHash": "107bd6d76abfa4441195c2755bbcd21be6cc4cb6a1b0ba97c91da26a8094b3e9",
+  "key": "6fc2ae9dc9e67599702398b330838bf2",
+  "signature": "0BQz1o8DIhnnWOjTlnWpNlwD/hPvOQmUW2et+lAF86E="
+}

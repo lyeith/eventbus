@@ -120,6 +120,16 @@ func TestAuthTime_LegacyRefreshTokenUsesItsIssueTime(t *testing.T) {
 
 	claims := refreshWith(t, ts.URL, clientID, legacy)
 	assert.Equal(t, issuedAt.Unix(), claimUnix(t, claims, "auth_time"))
+	assert.Equal(t, int64(0), claimUnix(t, claims, authVersionClaim))
+	// A legacy absent version represents the original account version. An
+	// administrative reset invalidates it without relying on second resolution.
+	require.NoError(t, store.SetUserPassword(t.Context(), sub, "Changed2!Pass", "CONFIRMED"))
+	status, body := postCognito(t, ts.URL, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "REFRESH_TOKEN_AUTH", "ClientId": clientID,
+		"AuthParameters": map[string]string{"REFRESH_TOKEN": legacy},
+	})
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "NotAuthorizedException", body["__type"])
 }
 
 // A challenge completion is an authentication: it starts a new age.

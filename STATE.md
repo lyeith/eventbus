@@ -1,37 +1,39 @@
 # EventBus state
 
 - Public repository: https://github.com/lyeith/eventbus; MIT, David Wong, 2026.
-- Canonical source: /home/spite/Projects/eventbus on SSD, branch main.
-- Organization complete on main; Git records its revision and publication.
-- No new binary release; v0.1.0 binaries predate SES.
-- No task-owned runtime, test process, virtualenv or CLI artifact remains.
+- Canonical source: /home/spite/Projects/eventbus on SSD.
+- Branch: feat/cognito-integration-workflows; issue #1 implemented and verified.
+- Latest published binary: v0.1.0; v0.2.0 candidate verified, publication pending.
+- No developer stack or database was reset.
 
-EventBus is a standalone AWS emulator and agent development harness, supplementing
-LocalStack and other local AWS stacks. Applications own scenarios and assertions.
+EventBus is a standalone AWS emulator and agent development harness that
+supplements LocalStack. Applications own scenarios, assertions and handlers.
 
-The former root package is separated by ownership:
-- internal/app: configuration, construction, listener and resource lifetime.
-- internal/server: protocol selection, health and consumer-owned HTTP ports.
-- internal/awsprotocol: shared JSON/XML envelopes and request IDs.
-- internal/cognito, messaging, ses, firehose, ssm and secrets: service-owned state
-  and HTTP adapters. SNS/SQS share one broker; queue collections are private.
-- internal/consumer: harness configuration, polling/settlement and processes,
-  using its QueueBroker port.
-- Unit/service tests are colocated; tests/sdk owns Python SDK/JWT proofs/models.
-- examples owns seed and SES fixture samples.
+Cognito now separates Username/email/sub and supports the required lifecycle,
+listing, temporary/permanent password, admin password/refresh and SRP flows.
+Custom authentication executes configured application-owned Node handlers,
+persists challenge history/private parameters and preserves enrolled real TOTP.
+Signed access/ID/refresh grants bind the account revision; disable, administrative
+reset and global sign-out invalidate old grants and pending challenges.
 
-Supported AWS behavior, CLI flags, root go build . and SES capture contracts
-remain intact. SES supports all six v1 and three v2 sending operations, using
-synchronous JSONL capture. Management APIs remain low-priority backlog work.
+SQLite migration preserves identity, lifecycle, signing keys and legacy grants.
+Legacy bcrypt-only users gain SRP by plaintext seeding or password setup;
+do not reset developer identity data. Node is required only for configured triggers.
 
-Verified 2026-10-06: full Go race suite with real SDK lane, tagged vet, five
-Python contracts, routing/health/fallback checks, native CLI build and
-startup/fixtures/JWKS/v1-v2 capture/SIGTERM, integration-tag compilation.
-RustFS integration execution and LocalStack coexistence were not exercised.
+Ownership: cognito owns state/auth and consumes TriggerInvoker; cognitotrigger
+owns execution/deadlines/children; app constructs, injects and joins the runner.
+SDK fixtures own complete-dispatcher Python/JavaScript and local Node/SES proofs.
+JavaScript dev SDKs are pinned to 3.1146.0 with an exact transitive lockfile.
 
-docs/ARCHITECTURE.md maps seams and test placement; README, AGENTS, examples,
-SDK paths, attribution links and manual CI discovery match the new layout.
-No dependencies or lockfiles changed.
+Verified 2026-10-06: full Go race suite, tagged vet, Python contracts, all SDK
+scenarios (one legacy Python assertion corrected and rechecked), real Node
+email-MFA/SES capture, two isolated runs, restart/error/process cleanup and
+native CLI lifecycle/custom/pending-restart/SIGTERM. Four release targets build
+and checksums verify. Linux amd64 executed; other targets were cross-built.
+Live RustFS and consuming-app handlers were not exercised.
 
-Next: publish an
-SES-capable binary release when requested; other SES operations remain backlogged.
+Next: commit/push, rebuild from the clean commit and publish v0.2.0 with checksums.
+Then remove task .venv, SDK node_modules, npm cache and temporary release/probe files.
+Logs use /tmp/eventbus-issue1-*.log under the existing 24-hour retention.
+See docs/COGNITO.md and docs/CUSTOM-TRIGGERS.md for supported contracts.
+Direct SQS SendMessage remains separate follow-up work.

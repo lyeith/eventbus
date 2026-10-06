@@ -2,6 +2,7 @@
 package cognito
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -14,12 +15,20 @@ const (
 	defaultRefreshTokenTTL = 24 * time.Hour
 )
 
+// TriggerInvoker is the application-execution boundary used by custom auth.
+// Cognito owns events and persisted state; the harness owns child processes.
+type TriggerInvoker interface {
+	Supports(poolID string) bool
+	Invoke(context.Context, string, string, map[string]any) (map[string]any, error)
+}
+
 // Options configures token issuance. Non-positive TTLs use the service defaults.
 // Issuers are the trimmed base URL followed by the pool ID.
 type Options struct {
 	IssuerBase      string
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	Triggers        TriggerInvoker
 }
 
 // Handler serves Cognito operations using an externally owned SQLite store.
@@ -29,6 +38,7 @@ type Handler struct {
 	issuerBase      string
 	accessTokenTTL  time.Duration
 	refreshTokenTTL time.Duration
+	triggers        TriggerInvoker
 }
 
 // NewHandler wires the store and immutable token configuration. It does not
@@ -45,6 +55,7 @@ func NewHandler(store *CognitoStore, options Options) *Handler {
 		issuerBase:      strings.TrimRight(options.IssuerBase, "/"),
 		accessTokenTTL:  options.AccessTokenTTL,
 		refreshTokenTTL: options.RefreshTokenTTL,
+		triggers:        options.Triggers,
 	}
 }
 

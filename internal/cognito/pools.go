@@ -1,48 +1,43 @@
 // Pool and app-client operations let scenarios provision isolated identities.
-// The emulator returns supported AWS fields and accepts deterministic fixture IDs.
+// Generated identifiers and the supported settings follow the Cognito protocol;
+// explicit PoolId/ClientId remain available for deterministic local fixtures.
 package cognito
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-// --- CreateUserPool ----------------------------------------------------
-
-// createUserPoolRequest mirrors the AWS wire request. We accept far more
-// fields in real Cognito; the dev service only reads PoolName + an
-// optional explicit PoolId override (handy for deterministic tests).
 type createUserPoolRequest struct {
-	PoolName       string                 `json:"PoolName"`
-	PoolID         string                 `json:"PoolId"` // dev-only override
-	Policies       *createPoolPoliciesEnv `json:"Policies"`
-	PasswordPolicy *PasswordPolicy        `json:"PasswordPolicy"`
+	PoolName              string                           `json:"PoolName"`
+	PoolID                string                           `json:"PoolId"` // dev-only override
+	Policies              *createPoolPoliciesEnv           `json:"Policies"`
+	PasswordPolicy        json.RawMessage                  `json:"PasswordPolicy"` // dev-only flat alias
+	UsernameAttributes    []string                         `json:"UsernameAttributes"`
+	AliasAttributes       []string                         `json:"AliasAttributes"`
+	UsernameConfiguration *createPoolUsernameConfiguration `json:"UsernameConfiguration"`
 }
 
-// createPoolPoliciesEnv mirrors the wrapped shape AWS uses
-// (`{"Policies": {"PasswordPolicy": {...}}}`). The flatter
-// `PasswordPolicy` field is the dev-friendly alias.
 type createPoolPoliciesEnv struct {
-	PasswordPolicy *PasswordPolicy `json:"PasswordPolicy"`
+	PasswordPolicy json.RawMessage `json:"PasswordPolicy"`
 }
 
-// handleCreateUserPool implements CreateUserPool. The dev service generates
-// a `local-pool-<random>` id when none is supplied; tests that need a
-// specific id pass `PoolId` explicitly (the dev-only override).
-//
-// Behaviour:
-//   - PoolName missing → InvalidParameterException.
-//   - Pool with same id already exists → returns the existing row
-//     (UpsertPool's ON CONFLICT DO NOTHING). This keeps "ensure pool
-//     exists" call loops safe.
-//   - Wires password policy from either Policies.PasswordPolicy or the
-//     flat PasswordPolicy alias (whichever is non-nil).
+type createPoolUsernameConfiguration struct {
+	CaseSensitive *bool `json:"CaseSensitive"`
+}
+
+// handleCreateUserPool creates an AWS-shaped pool, or reapplies an explicit
+// local fixture ID. Omitted configuration on a fixture reapplication preserves
+// its existing policy and identity rules.
 func (s *Handler) handleCreateUserPool(w http.ResponseWriter, r *http.Request) {
 	var req createUserPoolRequest
 	if !readCognitoJSON(w, r, &req) {
@@ -52,32 +47,67 @@ func (s *Handler) handleCreateUserPool(w http.ResponseWriter, r *http.Request) {
 		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "PoolName is required")
 		return
 	}
-
+	signIn, err := createPoolSignInConfig(req)
+	if err != nil {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		return
+	}
+	rawPolicy := req.PasswordPolicy
+	if !hasJSONValue(rawPolicy) && req.Policies != nil {
+		rawPolicy = req.Policies.PasswordPolicy
+	}
+	policy, err := createPoolPasswordPolicy(rawPolicy)
+	if err != nil {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		return
+	}
 	poolID := req.PoolID
 	if poolID == "" {
 		poolID = newPoolID()
 	}
-
 	ctx := r.Context()
+	exists, err := s.cognito.PoolExists(ctx, poolID)
+	if err != nil {
+		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+		return
+	}
+	if exists {
+		previous, err := s.cognito.GetPoolSignInConfig(ctx, poolID)
+		if err != nil {
+			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+			return
+		}
+		if req.UsernameAttributes == nil && req.AliasAttributes == nil {
+			signIn.EmailAsUsername, signIn.EmailAlias = previous.EmailAsUsername, previous.EmailAlias
+		}
+		if req.UsernameConfiguration == nil {
+			signIn.CaseSensitive = previous.CaseSensitive
+		}
+		if !hasJSONValue(rawPolicy) {
+			policy, err = loadPoolPasswordPolicy(ctx, s.cognito, poolID)
+			if err != nil {
+				cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+				return
+			}
+		}
+	}
 	if err := s.cognito.UpsertPool(ctx, poolID, "us-east-1"); err != nil {
 		log.Error().Err(err).Msg("UpsertPool failed in CreateUserPool")
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		return
 	}
-
-	// Determine which policy shape (if any) was supplied.
-	var policy *PasswordPolicy
-	switch {
-	case req.PasswordPolicy != nil:
-		policy = req.PasswordPolicy
-	case req.Policies != nil && req.Policies.PasswordPolicy != nil:
-		policy = req.Policies.PasswordPolicy
+	if err := s.cognito.SetPoolSignInConfig(ctx, poolID, signIn); err != nil {
+		if errors.Is(err, errPoolSignInConfigImmutable) {
+			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		} else {
+			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+		}
+		return
 	}
 	if policy != nil {
-		raw, jerr := json.Marshal(policy)
-		if jerr != nil {
-			log.Error().Err(jerr).Msg("marshal PasswordPolicy failed")
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", jerr.Error())
+		raw, err := json.Marshal(policy)
+		if err != nil {
+			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 			return
 		}
 		if err := s.cognito.SetPoolPasswordPolicy(ctx, poolID, string(raw)); err != nil {
@@ -86,50 +116,139 @@ func (s *Handler) handleCreateUserPool(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
 	now := float64(time.Now().Unix())
-	resp := map[string]interface{}{
-		"UserPool": map[string]interface{}{
-			"Id":               poolID,
-			"Name":             req.PoolName,
-			"CreationDate":     now,
-			"LastModifiedDate": now,
-			"Status":           "Enabled",
-		},
+	out := map[string]interface{}{
+		"Id": poolID, "Name": req.PoolName, "CreationDate": now,
+		"LastModifiedDate": now, "Status": "Enabled",
+		"UsernameConfiguration": map[string]interface{}{"CaseSensitive": signIn.CaseSensitive},
 	}
-	cognitoJSONResponse(w, http.StatusOK, resp)
+	if signIn.EmailAsUsername {
+		out["UsernameAttributes"] = []string{"email"}
+	}
+	if signIn.EmailAlias {
+		out["AliasAttributes"] = []string{"email"}
+	}
+	if policy != nil {
+		out["Policies"] = map[string]interface{}{"PasswordPolicy": poolPasswordPolicyResponse(policy)}
+	}
+	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{"UserPool": out})
 }
 
-// --- CreateUserPoolClient ----------------------------------------------
+func createPoolSignInConfig(req createUserPoolRequest) (PoolSignInConfig, error) {
+	config := PoolSignInConfig{CaseSensitive: true}
+	if len(req.UsernameAttributes) > 0 && len(req.AliasAttributes) > 0 {
+		return config, errors.New("UsernameAttributes and AliasAttributes are mutually exclusive")
+	}
+	for _, attributes := range [][]string{req.UsernameAttributes, req.AliasAttributes} {
+		if len(attributes) > 1 || len(attributes) == 1 && attributes[0] != "email" {
+			return config, errors.New("the local Cognito service supports only the email sign-in attribute")
+		}
+	}
+	config.EmailAsUsername = len(req.UsernameAttributes) == 1
+	config.EmailAlias = len(req.AliasAttributes) == 1
+	if req.UsernameConfiguration != nil {
+		if req.UsernameConfiguration.CaseSensitive == nil {
+			return config, errors.New("UsernameConfiguration.CaseSensitive is required")
+		}
+		config.CaseSensitive = *req.UsernameConfiguration.CaseSensitive
+	}
+	return config, nil
+}
 
-// createUserPoolClientRequest mirrors the AWS wire request. Only the
-// fields the platform actually reads are surfaced; the rest get stored
-// implicitly as defaults.
+// The shared PasswordPolicy decoder owns AWS/fixture spelling and precedence.
+// Request-member presence is retained here so omission uses AWS defaults while
+// explicit false complexity flags and invalid numeric zero remain distinguishable.
+func createPoolPasswordPolicy(raw json.RawMessage) (*PasswordPolicy, error) {
+	policy := &PasswordPolicy{
+		MinLength: 8, RequireUppercase: true, RequireLowercase: true,
+		RequireDigits: true, RequireSymbols: true, TemporaryPasswordValidityDays: 7,
+	}
+	if !hasJSONValue(raw) {
+		return policy, nil
+	}
+	var supplied PasswordPolicy
+	if err := json.Unmarshal(raw, &supplied); err != nil {
+		return nil, fmt.Errorf("invalid PasswordPolicy: %w", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return nil, errors.New("PasswordPolicy must be an object")
+	}
+	hasField := func(names ...string) bool {
+		for field := range fields {
+			for _, name := range names {
+				if strings.EqualFold(field, name) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if hasField("MinimumLength", "min_length") {
+		policy.MinLength = supplied.MinLength
+	}
+	if hasField("RequireUppercase", "require_uppercase") {
+		policy.RequireUppercase = supplied.RequireUppercase
+	}
+	if hasField("RequireLowercase", "require_lowercase") {
+		policy.RequireLowercase = supplied.RequireLowercase
+	}
+	if hasField("RequireNumbers", "RequireDigits", "require_digits") {
+		policy.RequireDigits = supplied.RequireDigits
+	}
+	if hasField("RequireSymbols", "require_symbols") {
+		policy.RequireSymbols = supplied.RequireSymbols
+	}
+	if hasField("TemporaryPasswordValidityDays", "temporary_password_validity_days") {
+		policy.TemporaryPasswordValidityDays = supplied.TemporaryPasswordValidityDays
+	}
+	if policy.MinLength < 6 || policy.MinLength > 99 {
+		return nil, errors.New("PasswordPolicy.MinimumLength must be between 6 and 99")
+	}
+	if policy.TemporaryPasswordValidityDays < 0 || policy.TemporaryPasswordValidityDays > 365 {
+		return nil, errors.New("PasswordPolicy.TemporaryPasswordValidityDays must be between 0 and 365")
+	}
+	if policy.TemporaryPasswordValidityDays == 0 {
+		policy.TemporaryPasswordValidityDays = 7
+	}
+	return policy, nil
+}
+
+func hasJSONValue(raw json.RawMessage) bool {
+	return len(raw) != 0 && strings.TrimSpace(string(raw)) != "null"
+}
+
+func poolPasswordPolicyResponse(policy *PasswordPolicy) map[string]interface{} {
+	return map[string]interface{}{
+		"MinimumLength": policy.MinLength, "RequireUppercase": policy.RequireUppercase,
+		"RequireLowercase": policy.RequireLowercase, "RequireNumbers": policy.RequireDigits,
+		"RequireSymbols": policy.RequireSymbols, "TemporaryPasswordValidityDays": policy.TemporaryPasswordValidityDays,
+	}
+}
+
 type createUserPoolClientRequest struct {
-	UserPoolID     string `json:"UserPoolId"`
-	ClientName     string `json:"ClientName"`
-	ClientID       string `json:"ClientId"` // dev-only override
-	GenerateSecret bool   `json:"GenerateSecret"`
+	UserPoolID          string   `json:"UserPoolId"`
+	ClientName          string   `json:"ClientName"`
+	ClientID            string   `json:"ClientId"` // dev-only override
+	GenerateSecret      bool     `json:"GenerateSecret"`
+	ExplicitAuthFlows   []string `json:"ExplicitAuthFlows"`
+	AuthSessionValidity *int     `json:"AuthSessionValidity"`
 }
 
-// handleCreateUserPoolClient implements CreateUserPoolClient. Returns the
-// generated `ClientId` and `ClientSecret` (when `GenerateSecret=true`).
-//
-// Behaviour:
-//   - UserPoolId or ClientName missing → InvalidParameterException.
-//   - Pool not found → ResourceNotFoundException.
-//   - Existing client id (when caller supplies one) → updated in place.
 func (s *Handler) handleCreateUserPoolClient(w http.ResponseWriter, r *http.Request) {
 	var req createUserPoolClientRequest
 	if !readCognitoJSON(w, r, &req) {
 		return
 	}
 	if req.UserPoolID == "" || req.ClientName == "" {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException",
-			"UserPoolId and ClientName are required")
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "UserPoolId and ClientName are required")
 		return
 	}
-
+	flows, sessionMinutes, err := createClientAuthConfig(req)
+	if err != nil {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		return
+	}
 	ctx := r.Context()
 	exists, err := s.cognito.PoolExists(ctx, req.UserPoolID)
 	if err != nil {
@@ -138,40 +257,80 @@ func (s *Handler) handleCreateUserPoolClient(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if !exists {
-		cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException",
-			fmt.Sprintf("User pool %s does not exist", req.UserPoolID))
+		cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", fmt.Sprintf("User pool %s does not exist", req.UserPoolID))
 		return
 	}
-
 	clientID := req.ClientID
 	if clientID == "" {
 		clientID = newClientID()
+	} else {
+		previous, err := s.cognito.LookupClient(ctx, clientID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+			return
+		}
+		if err == nil && previous.PoolID != req.UserPoolID {
+			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ClientId already belongs to another user pool")
+			return
+		}
 	}
-	var secret string
+	secret := ""
 	if req.GenerateSecret {
 		secret = newClientSecret()
 	}
-
 	if err := s.cognito.UpsertClient(ctx, clientID, req.UserPoolID, secret); err != nil {
-		log.Error().Err(err).Msg("UpsertClient failed in CreateUserPoolClient")
+		if errors.Is(err, errClientPoolConflict) {
+			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ClientId already belongs to another user pool")
+		} else {
+			log.Error().Err(err).Msg("UpsertClient failed in CreateUserPoolClient")
+			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+		}
+		return
+	}
+	if err := s.cognito.SetClientAuthConfig(ctx, clientID, flows, sessionMinutes); err != nil {
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		return
 	}
-
 	now := float64(time.Now().Unix())
 	out := map[string]interface{}{
-		"UserPoolId":       req.UserPoolID,
-		"ClientId":         clientID,
-		"ClientName":       req.ClientName,
-		"CreationDate":     now,
-		"LastModifiedDate": now,
+		"UserPoolId": req.UserPoolID, "ClientId": clientID, "ClientName": req.ClientName,
+		"CreationDate": now, "LastModifiedDate": now,
+		"ExplicitAuthFlows": flows, "AuthSessionValidity": sessionMinutes,
 	}
 	if secret != "" {
 		out["ClientSecret"] = secret
 	}
-	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{
-		"UserPoolClient": out,
-	})
+	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{"UserPoolClient": out})
+}
+
+func createClientAuthConfig(req createUserPoolClientRequest) ([]string, int, error) {
+	flows := req.ExplicitAuthFlows
+	if flows == nil {
+		flows = []string{"ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_CUSTOM_AUTH"}
+	}
+	legacy, modern := false, false
+	for _, flow := range flows {
+		switch flow {
+		case "ADMIN_NO_SRP_AUTH", "CUSTOM_AUTH_FLOW_ONLY", "USER_PASSWORD_AUTH":
+			legacy = true
+		case "ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_CUSTOM_AUTH", "ALLOW_USER_PASSWORD_AUTH",
+			"ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_AUTH":
+			modern = true
+		default:
+			return nil, 0, fmt.Errorf("invalid ExplicitAuthFlows value %q", flow)
+		}
+	}
+	if legacy && modern {
+		return nil, 0, errors.New("legacy ExplicitAuthFlows values cannot be combined with ALLOW_ values")
+	}
+	sessionMinutes := 3
+	if req.AuthSessionValidity != nil {
+		sessionMinutes = *req.AuthSessionValidity
+	}
+	if sessionMinutes < 3 || sessionMinutes > 15 {
+		return nil, 0, errors.New("AuthSessionValidity must be between 3 and 15 minutes")
+	}
+	return flows, sessionMinutes, nil
 }
 
 // --- DeleteUserPool ----------------------------------------------------
@@ -232,35 +391,23 @@ func (s *Handler) handleDeleteUserPoolClient(w http.ResponseWriter, r *http.Requ
 	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{})
 }
 
-// --- helpers -----------------------------------------------------------
-
-// newPoolID returns a deterministic-prefix opaque pool id for tests.
-// Format: `local-pool-<6 hex chars>`. Six bytes of entropy is enough to
-// keep collisions astronomically unlikely across a single test run.
+// Generated IDs fit the AWS model constraints and work with SRP pool parsing.
+// Explicit local fixture IDs never pass through these generators.
 func newPoolID() string {
-	return "local-pool-" + randomHex(3)
+	return "us-east-1_" + randomHex(12)
 }
 
-// newClientID matches newPoolID's shape, prefixed `local-client-`.
 func newClientID() string {
-	return "local-client-" + randomHex(3)
+	return randomHex(16)
 }
 
-// newClientSecret returns 24 bytes of crypto-random data hex-encoded
-// (48 chars) — enough for tests, far below real Cognito's secret length
-// but still resistant to guessing in dev.
 func newClientSecret() string {
 	return randomHex(24)
 }
 
-// randomHex returns 2*n hex chars from crypto/rand. Panics on rand failure
-// (catastrophic and we want to know about it; this is not a hot path).
 func randomHex(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failure is a panic-worthy condition — there's
-		// nowhere meaningful to return the error, and the dev service
-		// should fail loud.
 		panic(fmt.Errorf("crypto/rand: %w", err))
 	}
 	return hex.EncodeToString(b)

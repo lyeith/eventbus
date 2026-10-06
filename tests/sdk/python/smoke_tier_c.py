@@ -96,6 +96,7 @@ def main() -> int:
             UserPoolId=pool_id,
             ClientName="smoke-tier-c-client",
             GenerateSecret=True,
+            ExplicitAuthFlows=["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
         )
         client_id = pool_client["UserPoolClient"]["ClientId"]
         client_secret = pool_client["UserPoolClient"]["ClientSecret"]
@@ -109,7 +110,10 @@ def main() -> int:
             TemporaryPassword=PASSWORD,
             MessageAction="SUPPRESS",
         )
-        print(f"  [3/6] AdminCreateUser ok ({EMAIL})")
+        client.admin_set_user_password(
+            UserPoolId=pool_id, Username=EMAIL, Password=PASSWORD, Permanent=True,
+        )
+        print(f"  [3/6] AdminCreateUser + permanent password ok ({EMAIL})")
 
         # 3. InitiateAuth WITH the right SECRET_HASH → success.
         secret_hash = compute_secret_hash(client_secret, EMAIL, client_id)

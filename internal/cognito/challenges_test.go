@@ -55,6 +55,8 @@ func TestVerifyChallengeSession_Malformed(t *testing.T) {
 func TestChallengeSessions_RoundTrip(t *testing.T) {
 	store, _ := newCognitoTestStore(t)
 	ctx := t.Context()
+	require.NoError(t, store.UpsertPool(ctx, "pool-1", "us-east-1"))
+	require.NoError(t, store.CreateUser(ctx, "sub-1", "pool-1", "session@example.test", "hash", false))
 
 	require.NoError(t, store.CreateChallengeSession(ctx, "sess-1", "sub-1", "pool-1", "client-1", "SOFTWARE_TOKEN_MFA", time.Minute))
 	row, err := store.LookupChallengeSession(ctx, "sess-1")
@@ -74,6 +76,8 @@ func TestChallengeSessions_RoundTrip(t *testing.T) {
 func TestChallengeSessionCleanup(t *testing.T) {
 	store, _ := newCognitoTestStore(t)
 	ctx := t.Context()
+	require.NoError(t, store.UpsertPool(ctx, "p", "us-east-1"))
+	require.NoError(t, store.CreateUser(ctx, "s", "p", "cleanup@example.test", "hash", false))
 
 	// One that's already expired (negative TTL → expires_at < now immediately).
 	require.NoError(t, store.CreateChallengeSession(ctx, "old", "s", "p", "c", "SOFTWARE_TOKEN_MFA", -time.Hour))

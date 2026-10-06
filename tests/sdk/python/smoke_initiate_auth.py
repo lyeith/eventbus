@@ -86,6 +86,9 @@ def main() -> int:
     print(f"  [1/6] AdminCreateUser ok ({EMAIL})")
 
     try:
+        client.admin_set_user_password(
+            UserPoolId=POOL_ID, Username=EMAIL, Password=PASSWORD, Permanent=True,
+        )
         # 2. USER_PASSWORD_AUTH — mint access + refresh tokens.
         login = client.initiate_auth(
             ClientId=CLIENT_ID,

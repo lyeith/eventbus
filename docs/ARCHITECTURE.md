@@ -9,14 +9,15 @@ internal/
   app/                   Flags, construction, listener and resource lifetime
   server/                AWS protocol selection, routing and /health
   awsprotocol/           Shared JSON/XML envelopes and request IDs
-  cognito/               SQLite identities, auth, MFA, JWT/JWKS and seeds
+  cognito/               SQLite identities, lifecycle, SRP/auth, JWT/JWKS and seeds
+  cognitotrigger/        Application-owned Node trigger execution and child lifetime
   messaging/             One SNS/SQS broker, filtering and HTTP adapters
   consumer/              Harness configuration, polling, settlement and processes
   ses/                   Fixtures, sending, MIME, capture and v1/v2 adapters
   firehose/              Stream state, buffered S3 delivery and HTTP adapter
   ssm/                   Parameter state and HTTP adapter
   secrets/               Secret/version state, ARN configuration and HTTP adapter
-tests/sdk/               Dispatcher proofs using real Python SDK/JWT clients
+tests/sdk/               Dispatcher proofs using pinned Python/JavaScript SDKs and JWT/SRP clients
 examples/                Application-owned fixture format examples
 ```
 
@@ -32,6 +33,9 @@ examples/                Application-owned fixture format examples
   need the same broker. Queue collections remain private to that owner.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message
   types. It owns subprocess policy, batch responses, retries and dead letters.
+- `cognito` declares its TriggerInvoker port and owns challenge state and decisions.
+  `cognitotrigger` executes configured app handlers; it imports no Cognito package.
+  `app` injects and joins the runner before releasing stores/capture.
 - `awsprotocol` holds reusable wire helpers, without service state. SES and
   Cognito retain their distinct decoders, size limits and error envelopes.
 
@@ -43,10 +47,11 @@ private. Application acceptance behavior belongs in the consuming application.
 | Change | Test owner |
 | --- | --- |
 | Store, validation, capture, filtering or operation behavior | Colocated service tests; real SQLite for Cognito |
+| Node custom trigger configuration, execution, deadlines and child cleanup | `internal/cognitotrigger` tests |
 | Consumer configuration, process execution or settlement | `internal/consumer` tests |
 | Target/path selection, health or protocol fallback | `internal/server` tests with composed service handlers |
 | Worker joins, HTTP drain or independent resource closure | `internal/app` tests |
-| boto3/JWT interoperability, complete dispatcher and child runner | `tests/sdk`, opt-in `sdksmoke` tag |
+| Python/JavaScript SDK, SRP/JWT and trigger/SES interoperability, complete dispatcher and child runner | `tests/sdk`, opt-in `sdksmoke` tag |
 | Firehose behavior against an owned RustFS endpoint | `internal/firehose`, opt-in `integration` tag |
 
 Unit tests stay beside their owner so private details need no test-only exports.

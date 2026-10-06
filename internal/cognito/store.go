@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -158,6 +159,19 @@ func (s *CognitoStore) bootstrap() error {
 		// ChangePassword's attempt limit (cognito_password.go).
 		`ALTER TABLE users ADD COLUMN password_failures INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN password_locked_until INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE pools ADD COLUMN sign_in_config TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE clients ADD COLUMN explicit_auth_flows TEXT`,
+		`ALTER TABLE clients ADD COLUMN auth_session_validity INTEGER NOT NULL DEFAULT 3`,
+		`ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN username_key TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN srp_salt TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN srp_verifier TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN password_changed_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE challenge_sessions ADD COLUMN state_json TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE challenge_sessions ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range migrations {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -169,7 +183,7 @@ func (s *CognitoStore) bootstrap() error {
 		}
 	}
 
-	return nil
+	return s.migrateUserIdentity(ctx)
 }
 
 // --- Pool / Client CRUD --------------------------------------------------
@@ -292,35 +306,57 @@ func (s *CognitoStore) PoolExists(ctx context.Context, id string) (bool, error) 
 	return n > 0, nil
 }
 
-// UpsertClient inserts or updates the secret for a client in the given pool.
+var errClientPoolConflict = errors.New("client ID already belongs to another user pool")
+
+// UpsertClient inserts or updates the secret for a client in its owning pool.
+// A conflicting pool never changes the existing client's secret or configuration.
 func (s *CognitoStore) UpsertClient(ctx context.Context, id, poolID, secret string) error {
 	if id == "" || poolID == "" {
 		return errors.New("client id and pool id required")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO clients (id, pool_id, secret, created_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET secret = excluded.secret
+		WHERE clients.pool_id = excluded.pool_id
 	`, id, poolID, secret, time.Now().Unix())
-	return err
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return errClientPoolConflict
+	}
+	return nil
 }
 
 // CognitoClient is a thin row representation of the clients table.
 type CognitoClient struct {
-	ID     string
-	PoolID string
-	Secret string
+	ID                  string
+	PoolID              string
+	Secret              string
+	ExplicitAuthFlows   []string
+	AuthSessionValidity int
 }
 
 // LookupClient returns the client row keyed on id. Returns sql.ErrNoRows if
 // no such client exists. Used by InitiateAuth to resolve `ClientId` → pool.
 func (s *CognitoStore) LookupClient(ctx context.Context, id string) (*CognitoClient, error) {
 	var c CognitoClient
+	var flows sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, pool_id, secret FROM clients WHERE id = ?
-	`, id).Scan(&c.ID, &c.PoolID, &c.Secret)
+		SELECT id, pool_id, secret,explicit_auth_flows,auth_session_validity FROM clients WHERE id = ?
+	`, id).Scan(&c.ID, &c.PoolID, &c.Secret, &flows, &c.AuthSessionValidity)
 	if err != nil {
 		return nil, err
+	}
+	if flows.Valid {
+		if err := json.Unmarshal([]byte(flows.String), &c.ExplicitAuthFlows); err != nil {
+			return nil, err
+		}
 	}
 	return &c, nil
 }
@@ -330,14 +366,21 @@ func (s *CognitoStore) LookupClient(ctx context.Context, id string) (*CognitoCli
 // CognitoUser is a thin row representation; richer attribute access uses
 // LoadUserAttributes.
 type CognitoUser struct {
-	Sub          string
-	PoolID       string
-	Email        string
-	PasswordHash string
-	MFAEnabled   bool
-	TOTPSecret   string
-	Status       string
-	CreatedAt    int64
+	Sub               string
+	PoolID            string
+	Username          string
+	Email             string
+	Enabled           bool
+	UpdatedAt         int64
+	SRPSalt           string
+	SRPVerifier       string
+	PasswordChangedAt int64
+	AuthVersion       int64
+	PasswordHash      string
+	MFAEnabled        bool
+	TOTPSecret        string
+	Status            string
+	CreatedAt         int64
 	// PendingTOTPSecret is the secret AssociateSoftwareToken issued and
 	// VerifySoftwareToken has not yet confirmed.
 	PendingTOTPSecret string
@@ -357,38 +400,36 @@ type CognitoUser struct {
 
 // userColumns is the column list scanUserRow reads, in order.
 const userColumns = `sub, pool_id, email, password_hash, mfa_enabled, totp_secret, status, created_at,
-	totp_pending_secret, software_token_verified, tokens_revoked_before, password_failures, password_locked_until`
+	totp_pending_secret, software_token_verified, tokens_revoked_before, password_failures, password_locked_until,
+	username, enabled, updated_at, srp_salt, srp_verifier, password_changed_at, auth_version`
 
-// UpsertUser writes or updates a user row, keyed on (pool_id, email).
-// If the user does not exist, a new sub (UUID-shaped opaque) is generated.
-// Returns the resolved sub.
+// UpsertUser is the legacy hash-only seed/test helper. It retains username=email
+// and confirms new users; plaintext callers should use UpsertSeedUser instead.
 func (s *CognitoStore) UpsertUser(ctx context.Context, poolID, email, passwordHash string, mfaEnabled bool) (string, error) {
 	if poolID == "" || email == "" {
 		return "", errors.New("pool id and email required")
 	}
-	// Look up existing user by (pool_id, email) — emails are the natural key
-	// in the platform's actual usage even though `sub` is the PK.
-	var sub string
-	err := s.db.QueryRowContext(ctx, `SELECT sub FROM users WHERE pool_id = ? AND email = ?`, poolID, email).Scan(&sub)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		sub = newOpaqueID()
-		_, ierr := s.db.ExecContext(ctx, `
-			INSERT INTO users (sub, pool_id, email, password_hash, mfa_enabled, status, created_at)
-			VALUES (?, ?, ?, ?, ?, 'CONFIRMED', ?)
-		`, sub, poolID, email, passwordHash, boolToInt(mfaEnabled), time.Now().Unix())
-		if ierr != nil {
-			return "", ierr
-		}
-		return sub, nil
-	case err != nil:
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	config, err := s.GetPoolSignInConfig(ctx, poolID)
+	if err != nil {
 		return "", err
 	}
-	// Exists — update mutable fields. Status is left alone to preserve any
-	// runtime transitions later phases introduce.
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE users SET password_hash = ?, mfa_enabled = ? WHERE sub = ?
-	`, passwordHash, boolToInt(mfaEnabled), sub)
+	username := normalizeSignIn(email, config)
+	var sub string
+	err = s.db.QueryRowContext(ctx, `SELECT sub FROM users WHERE pool_id = ? AND username_key = ?`, poolID, username).Scan(&sub)
+	if errors.Is(err, sql.ErrNoRows) {
+		sub = newOpaqueID()
+		now := time.Now().Unix()
+		_, err = s.db.ExecContext(ctx, `INSERT INTO users
+			(sub,pool_id,username,username_key,email,password_hash,mfa_enabled,status,created_at,updated_at,password_changed_at)
+			VALUES (?,?,?,?,?,?,?,'CONFIRMED',?,?,?)`, sub, poolID, username, username, email, passwordHash, boolToInt(mfaEnabled), now, now, now)
+		return sub, err
+	}
+	if err != nil {
+		return "", err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE users SET password_hash=?,srp_salt='',srp_verifier='',mfa_enabled=?,updated_at=? WHERE sub=?`, passwordHash, boolToInt(mfaEnabled), time.Now().Unix(), sub)
 	return sub, err
 }
 
@@ -410,19 +451,6 @@ func (s *CognitoStore) LookupUserBySub(ctx context.Context, sub string) (*Cognit
 		FROM users WHERE sub = ?
 	`, sub)
 	return scanUserRow(row)
-}
-
-// LookupPoolUser resolves an admin API's Username, which Cognito accepts as
-// the user's sub or their username (email here), within one pool.
-func (s *CognitoStore) LookupPoolUser(ctx context.Context, poolID, username string) (*CognitoUser, error) {
-	user, err := s.LookupUserBySub(ctx, username)
-	if err == nil && user.PoolID == poolID {
-		return user, nil
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	return s.LookupUserByEmail(ctx, poolID, username)
 }
 
 // SetPendingTOTPSecret records the secret AssociateSoftwareToken issued.
@@ -448,13 +476,24 @@ func (s *CognitoStore) SetMFAEnabled(ctx context.Context, sub string, enabled bo
 	return err
 }
 
-// RevokeUserTokens records a global sign-out at `at` (unix seconds). It only
-// moves forward.
+// RevokeUserTokens advances the grant revision atomically with invalidating
+// challenges. The seconds cutoff remains monotonic for legacy grants.
 func (s *CognitoStore) RevokeUserTokens(ctx context.Context, sub string, at int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE users SET tokens_revoked_before = MAX(tokens_revoked_before, ?) WHERE sub = ?
-	`, at, sub)
-	return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET auth_version=auth_version+1,
+		tokens_revoked_before=MAX(tokens_revoked_before,?) WHERE sub=?`, at, sub); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM challenge_sessions WHERE sub=?`, sub); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ChangeUserPassword stores a new password hash, as a successful
@@ -527,21 +566,21 @@ func (s *CognitoStore) SetUserTOTPSecret(ctx context.Context, sub, secret string
 	return err
 }
 
-// CreateUser performs a strict INSERT — fails if (pool_id, email) already
-// exists. AdminCreateUser semantics require a clean failure on collision so
-// the handler can surface UsernameExistsException; the upsert path used by
-// the seed loader would silently overwrite.
-//
-// Returns the caller-supplied sub on success, or an error if the row already
-// exists or another DB error occurs.
+// CreateUser is the legacy hash-only test helper with username=email identity.
+// New HTTP operations and seeds use plaintext provisioning for SRP credentials.
 func (s *CognitoStore) CreateUser(ctx context.Context, sub, poolID, email, passwordHash string, mfaEnabled bool) error {
 	if sub == "" || poolID == "" || email == "" {
 		return errors.New("sub, pool id, and email required")
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (sub, pool_id, email, password_hash, mfa_enabled, status, created_at)
-		VALUES (?, ?, ?, ?, ?, 'CONFIRMED', ?)
-	`, sub, poolID, email, passwordHash, boolToInt(mfaEnabled), time.Now().Unix())
+	config, err := s.GetPoolSignInConfig(ctx, poolID)
+	if err != nil {
+		return err
+	}
+	username := normalizeSignIn(email, config)
+	now := time.Now().Unix()
+	_, err = s.db.ExecContext(ctx, `INSERT INTO users
+		(sub,pool_id,username,username_key,email,password_hash,mfa_enabled,status,created_at,updated_at,password_changed_at)
+		VALUES (?,?,?,?,?,?,?,'CONFIRMED',?,?,?)`, sub, poolID, username, username, email, passwordHash, boolToInt(mfaEnabled), now, now, now)
 	return err
 }
 
@@ -562,33 +601,110 @@ func (s *CognitoStore) DeleteUserByEmail(ctx context.Context, poolID, email stri
 }
 
 // scanUserRow is shared between LookupUserByEmail / LookupUserBySub.
-func scanUserRow(row *sql.Row) (*CognitoUser, error) {
+func scanUserRow(row interface{ Scan(...interface{}) error }) (*CognitoUser, error) {
 	var u CognitoUser
-	var mfa, verified int
+	var mfa, verified, enabled int
 	if err := row.Scan(
 		&u.Sub, &u.PoolID, &u.Email, &u.PasswordHash, &mfa, &u.TOTPSecret, &u.Status, &u.CreatedAt,
 		&u.PendingTOTPSecret, &verified, &u.TokensRevokedBefore, &u.PasswordFailures, &u.PasswordLockedUntil,
+		&u.Username, &enabled, &u.UpdatedAt, &u.SRPSalt, &u.SRPVerifier, &u.PasswordChangedAt, &u.AuthVersion,
 	); err != nil {
 		return nil, err
 	}
+	u.Enabled = enabled != 0
 	u.MFAEnabled = mfa != 0
 	u.SoftwareTokenVerified = verified != 0
 	return &u, nil
 }
 
-// SetUserAttribute upserts a single user attribute row.
+// SetUserAttribute keeps the profile and searchable email projection together.
+// Reapplying an unchanged fixture attribute preserves modification timestamps.
 func (s *CognitoStore) SetUserAttribute(ctx context.Context, sub, name, value string) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO user_attributes (sub, name, value)
-		VALUES (?, ?, ?)
-		ON CONFLICT(sub, name) DO UPDATE SET value = excluded.value
-	`, sub, name, value)
-	return err
+	if name == "" {
+		return errors.New("attribute name required")
+	}
+	if name == "sub" {
+		if sub != value {
+			return errors.New("sub is immutable")
+		}
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, err := s.LookupUserBySub(ctx, sub)
+	if err != nil {
+		return err
+	}
+	config, err := s.GetPoolSignInConfig(ctx, user.PoolID)
+	if err != nil {
+		return err
+	}
+	if name == "email" {
+		value = normalizeSignIn(value, config)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if name == "email" || name == "email_verified" {
+		email := user.Email
+		if name == "email" {
+			email = value
+		}
+		var verified string
+		err = tx.QueryRowContext(ctx, `SELECT value FROM user_attributes WHERE sub=? AND name='email_verified'`, sub).Scan(&verified)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if name == "email_verified" {
+			verified = value
+		}
+		if email != "" && (config.EmailAsUsername || config.EmailAlias && verified == "true") {
+			var count int
+			query := `SELECT COUNT(*) FROM users WHERE pool_id=? AND sub!=? AND email=? COLLATE `
+			if config.CaseSensitive {
+				query += "BINARY"
+			} else {
+				query += "NOCASE"
+			}
+			if config.EmailAlias {
+				query += ` AND EXISTS(SELECT 1 FROM user_attributes a WHERE a.sub=users.sub AND a.name='email_verified' AND a.value='true')`
+			}
+			if err = tx.QueryRowContext(ctx, query, user.PoolID, sub, email).Scan(&count); err != nil {
+				return err
+			}
+			if count != 0 {
+				return errEmailAliasExists
+			}
+		}
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO user_attributes(sub,name,value) VALUES(?,?,?) ON CONFLICT(sub,name)
+		DO UPDATE SET value=excluded.value WHERE user_attributes.value!=excluded.value`, sub, name, value)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if name == "email" {
+		if _, err = tx.ExecContext(ctx, `UPDATE users SET email=? WHERE sub=?`, value, sub); err != nil {
+			return err
+		}
+	}
+	if changed != 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE users SET updated_at=MAX(updated_at,?) WHERE sub=?`, time.Now().Unix(), sub); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // LoadUserAttributes returns the attribute map for a user.
 func (s *CognitoStore) LoadUserAttributes(ctx context.Context, sub string) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, value FROM user_attributes WHERE sub = ?`, sub)
+	rows, err := s.db.QueryContext(ctx, `SELECT name, value FROM user_attributes WHERE sub = ? AND name != 'sub'
+		UNION ALL SELECT 'sub', sub FROM users WHERE sub = ?`, sub, sub)
 	if err != nil {
 		return nil, err
 	}
@@ -617,6 +733,8 @@ type CognitoChallengeSession struct {
 	Used          bool
 	CreatedAt     int64
 	ExpiresAt     int64
+	StateJSON     string
+	AuthVersion   int64
 }
 
 // CreateChallengeSession inserts a new challenge_sessions row. The opaque
@@ -625,21 +743,41 @@ type CognitoChallengeSession struct {
 //
 // `ttl` is the wall-clock validity window; rows are reaped by the 60s
 // cleanup goroutine after expires_at < now.
-func (s *CognitoStore) CreateChallengeSession(
-	ctx context.Context,
-	sessionID, sub, poolID, clientID, challengeName string,
-	ttl time.Duration,
-) error {
+func (s *CognitoStore) CreateChallengeSession(ctx context.Context, sessionID, sub, poolID, clientID, challengeName string, ttl time.Duration) error {
+	return s.CreateChallengeSessionWithState(ctx, sessionID, sub, poolID, clientID, challengeName, ttl, "")
+}
+
+// CreateChallengeSessionWithState atomically binds trigger history and the
+// enabled user's current grant revision to the opaque challenge session.
+func (s *CognitoStore) CreateChallengeSessionWithState(ctx context.Context, sessionID, sub, poolID, clientID, challengeName string, ttl time.Duration, stateJSON string) error {
 	if sessionID == "" || sub == "" || poolID == "" || clientID == "" || challengeName == "" {
-		return errors.New("session, sub, pool_id, client_id and challenge_name required")
+		return errors.New("session,sub,pool,client and challenge required")
+	}
+	if stateJSON != "" && !json.Valid([]byte(stateJSON)) {
+		return errors.New("session state must be JSON")
 	}
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO challenge_sessions
-			(session, sub, pool_id, client_id, challenge_name, used, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-	`, sessionID, sub, poolID, clientID, challengeName, now, now+int64(ttl.Seconds()))
-	return err
+	result, err := s.db.ExecContext(ctx, `INSERT INTO challenge_sessions
+		(session,sub,pool_id,client_id,challenge_name,used,created_at,expires_at,state_json,auth_version)
+		SELECT ?,sub,pool_id,?,?,0,?,?,?,auth_version FROM users WHERE sub=? AND pool_id=? AND enabled=1`, sessionID, clientID, challengeName, now, now+int64(ttl.Seconds()), stateJSON, sub, poolID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		user, err := s.LookupUserBySub(ctx, sub)
+		if err != nil {
+			return err
+		}
+		if user.PoolID != poolID {
+			return sql.ErrNoRows
+		}
+		return errUserDisabled
+	}
+	return nil
 }
 
 // LookupChallengeSession returns the row for sessionID. Returns sql.ErrNoRows
@@ -650,11 +788,11 @@ func (s *CognitoStore) LookupChallengeSession(ctx context.Context, sessionID str
 		used int
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT session, sub, pool_id, client_id, challenge_name, used, created_at, expires_at
+		SELECT session, sub, pool_id, client_id, challenge_name, used, created_at, expires_at, state_json,auth_version
 		FROM challenge_sessions WHERE session = ?
 	`, sessionID).Scan(
 		&row.Session, &row.Sub, &row.PoolID, &row.ClientID,
-		&row.ChallengeName, &used, &row.CreatedAt, &row.ExpiresAt,
+		&row.ChallengeName, &used, &row.CreatedAt, &row.ExpiresAt, &row.StateJSON, &row.AuthVersion,
 	)
 	if err != nil {
 		return nil, err

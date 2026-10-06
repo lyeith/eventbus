@@ -1,0 +1,17 @@
+# Application-owned handler files are resolved against --work-dir.
+# Each configured pool requires all three triggers. The default timeout is
+# Cognito's 5-second synchronous limit; a smaller local timeout is optional.
+node: node
+pools:
+  us-east-1_LocalPool:
+    DefineAuthChallenge:
+      handler: ./auth/define.mjs#handler
+    CreateAuthChallenge:
+      handler: ./auth/create.cjs#handler
+      env:
+        AWS_REGION: us-east-1
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+        AWS_ENDPOINT_URL_SES: http://localhost:14100
+    VerifyAuthChallengeResponse:
+      handler: ./auth/verify.mjs#handler

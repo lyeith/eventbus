@@ -16,3 +16,10 @@ Advanced stored-template Handlebars rendering is also low priority; captures
 retain the source request and template data, with an optional simple rendering
 view. SMTP and SES Mail Manager are separate interfaces and are not in the
 current HTTP sending scope.
+
+## Messaging follow-up
+
+Direct SQS SendMessage is separate from the Cognito work in
+[issue #1](https://github.com/lyeith/eventbus/issues/1). Add it for a concrete
+consumer with real SDK receive/delete/visibility/retry/DLQ checks; batch/FIFO and
+Node queue consumers need their own demonstrated requirements.

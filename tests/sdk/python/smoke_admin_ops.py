@@ -67,9 +67,10 @@ def main() -> int:
         MessageAction="SUPPRESS",
     )
     user = resp.get("User", {})
+    assert user.get("UserStatus") == "FORCE_CHANGE_PASSWORD", user
     attrs = {a["Name"]: a["Value"] for a in user.get("Attributes", [])}
     assert "sub" in attrs, f"missing sub in response attributes: {attrs}"
-    assert attrs.get("email_verified") == "true", f"email_verified must be true, got {attrs.get('email_verified')!r}"
+    assert "email_verified" not in attrs, f"AdminCreateUser must not invent verification: {attrs}"
     print(f"  [1/5] AdminCreateUser ok (sub={attrs['sub']})")
 
     # 2. Create same user again — must raise UsernameExistsException.

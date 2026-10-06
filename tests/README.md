@@ -1,8 +1,8 @@
 # Verification
 
-Tests follow the ownership described in [Architecture](../docs/ARCHITECTURE.md).
-Go unit and service HTTP tests live beside their packages under `internal/`;
-`tests/sdk/` owns complete-dispatcher Python SDK/JWT proofs and model fixtures.
+Tests follow [Architecture](../docs/ARCHITECTURE.md). Go unit and service HTTP
+tests live beside their packages under `internal/`; `tests/sdk/` owns complete
+HTTP-dispatcher proofs with frozen Python and JavaScript SDKs.
 
 Run from the repository root:
 
@@ -12,8 +12,9 @@ go test -race ./...
 go vet ./...
 ```
 
-For the frozen Python and boto3/JWT lane, follow [SDK verification](sdk/README.md).
-It requires no running application stack.
+[SDK verification](sdk/README.md) adds lifecycle, SRP/custom authentication,
+Node trigger execution, SES capture and restart evidence. It requires Node >=20
+and frozen SDK dependencies, with no running application stack.
 
 Firehose's optional native S3 suite requires an explicitly owned loopback RustFS
 endpoint. It creates and removes a unique bucket:

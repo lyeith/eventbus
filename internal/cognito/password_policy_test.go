@@ -35,7 +35,7 @@ func TestAdminCreateUser_PolicyViolation_TooShort(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusBadRequest, status)
 	assert.Equal(t, "InvalidPasswordException", body["__type"])
-	assert.Contains(t, body["message"], "12 characters")
+	assert.Equal(t, changePasswordPolicyPrefix+"Password not long enough", body["message"])
 }
 
 func TestAdminCreateUser_PolicyViolation_NoDigit(t *testing.T) {
@@ -53,7 +53,7 @@ func TestAdminCreateUser_PolicyViolation_NoDigit(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusBadRequest, status)
 	assert.Equal(t, "InvalidPasswordException", body["__type"])
-	assert.Contains(t, body["message"], "digit")
+	assert.Equal(t, changePasswordPolicyPrefix+"Password must have numeric characters", body["message"])
 }
 
 func TestAdminCreateUser_PolicyViolation_NoUppercase(t *testing.T) {
@@ -167,4 +167,40 @@ func TestPasswordPolicy_Validate_MultipleFailures(t *testing.T) {
 	assert.Contains(t, err.Error(), "uppercase")
 	assert.Contains(t, err.Error(), "digit")
 	assert.Contains(t, err.Error(), "symbol")
+}
+
+func TestPasswordPolicyAWSJSONAndLegacyFixtures(t *testing.T) {
+	var policy PasswordPolicy
+	require.NoError(t, json.Unmarshal([]byte(`{"MinimumLength":12,"RequireNumbers":true,"RequireUppercase":true,"TemporaryPasswordValidityDays":2,"require_digits":false}`), &policy))
+	require.Equal(t, 12, policy.MinLength)
+	require.True(t, policy.RequireDigits)
+	require.True(t, policy.RequireUppercase)
+	require.Equal(t, 2, policy.TemporaryPasswordValidityDays)
+	encoded, err := json.Marshal(policy)
+	require.NoError(t, err)
+	var wire map[string]interface{}
+	require.NoError(t, json.Unmarshal(encoded, &wire))
+	require.Equal(t, float64(12), wire["MinimumLength"])
+	require.Equal(t, true, wire["RequireNumbers"])
+	require.NotContains(t, wire, "min_length")
+	require.NotContains(t, wire, "RequireDigits")
+	require.NoError(t, json.Unmarshal([]byte(`{"min_length":9,"require_digits":true,"require_symbols":true}`), &policy))
+	require.Equal(t, 9, policy.MinLength)
+	require.True(t, policy.RequireDigits)
+	require.True(t, policy.RequireSymbols)
+}
+
+func TestPasswordPolicyCountsCharactersAndFailsClosed(t *testing.T) {
+	require.Error(t, (&PasswordPolicy{MinLength: 6}).Validate("界界"))
+	require.NoError(t, (&PasswordPolicy{MinLength: 6}).Validate("界界界界界界"))
+	_, ts, store := newCognitoTestServer(t)
+	require.NoError(t, store.UpsertPool(t.Context(), "policy-corrupt", "us-east-1"))
+	require.NoError(t, store.SetPoolPasswordPolicy(t.Context(), "policy-corrupt", "{"))
+	_, err := loadPoolPasswordPolicy(t.Context(), store, "policy-corrupt")
+	require.Error(t, err)
+	status, body := postCognito(t, ts.URL, "AdminCreateUser", map[string]interface{}{
+		"UserPoolId": "policy-corrupt", "Username": "test", "TemporaryPassword": "Password1!",
+	})
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.Equal(t, "InternalErrorException", body["__type"])
 }

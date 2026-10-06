@@ -134,7 +134,7 @@ func TestInitiateAuth_RefreshTokenAuth_SecretHashRequired_HappyPath(t *testing.T
 		email    = "alice@example.com"
 		password = "TempPass1!"
 	)
-	sub := seedClientPoolUserWithSecret(t, store, poolID, clientID, secret, email, password)
+	seedClientPoolUserWithSecret(t, store, poolID, clientID, secret, email, password)
 
 	// 1. USER_PASSWORD_AUTH to get a refresh token (with the right hash).
 	loginStatus, loginBody := postCognito(t, ts.URL, "InitiateAuth", map[string]interface{}{
@@ -149,13 +149,14 @@ func TestInitiateAuth_RefreshTokenAuth_SecretHashRequired_HappyPath(t *testing.T
 	require.Equal(t, http.StatusOK, loginStatus, "body=%v", loginBody)
 	refresh := readAuthResult(t, loginBody)["RefreshToken"].(string)
 
-	// 2. REFRESH_TOKEN_AUTH — SECRET_HASH computed from the user's sub.
+	// Username is a sign-in attribute in this pool, so refresh hashes use
+	// the canonical username claim, which this legacy fixture sets to email.
 	status, body := postCognito(t, ts.URL, "InitiateAuth", map[string]interface{}{
 		"AuthFlow": "REFRESH_TOKEN_AUTH",
 		"ClientId": clientID,
 		"AuthParameters": map[string]string{
 			"REFRESH_TOKEN": refresh,
-			"SECRET_HASH":   computeSecretHash(secret, sub, clientID),
+			"SECRET_HASH":   computeSecretHash(secret, email, clientID),
 		},
 	})
 	require.Equal(t, http.StatusOK, status, "body=%v", body)

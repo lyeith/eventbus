@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/lyeith/eventbus/internal/awsprotocol"
 	"github.com/rs/zerolog/log"
 )
 
@@ -41,6 +42,18 @@ func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action str
 	switch action {
 	case "AdminCreateUser":
 		handler = s.handleAdminCreateUser
+	case "AdminGetUser":
+		handler = s.handleAdminGetUser
+	case "ListUsers":
+		handler = s.handleListUsers
+	case "AdminSetUserPassword":
+		handler = s.handleAdminSetUserPassword
+	case "AdminDisableUser":
+		handler = s.handleAdminDisableUser
+	case "AdminEnableUser":
+		handler = s.handleAdminEnableUser
+	case "AdminRespondToAuthChallenge":
+		handler = s.handleAdminRespondToAuthChallenge
 	case "AdminDeleteUser":
 		handler = s.handleAdminDeleteUser
 	case "GetUser":
@@ -91,6 +104,9 @@ func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action str
 // cognitoJSONError writes the AWS JSON-1.1 typed-error envelope.
 func cognitoJSONError(w http.ResponseWriter, statusCode int, code, message string) {
 	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+	if w.Header().Get("X-Amzn-RequestId") == "" {
+		w.Header().Set("X-Amzn-RequestId", awsprotocol.RequestID())
+	}
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"__type":  code,
@@ -101,6 +117,9 @@ func cognitoJSONError(w http.ResponseWriter, statusCode int, code, message strin
 // cognitoJSONResponse writes a successful JSON-1.1 response.
 func cognitoJSONResponse(w http.ResponseWriter, statusCode int, body interface{}) {
 	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+	if w.Header().Get("X-Amzn-RequestId") == "" {
+		w.Header().Set("X-Amzn-RequestId", awsprotocol.RequestID())
+	}
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(body)
 }

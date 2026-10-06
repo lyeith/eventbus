@@ -197,11 +197,10 @@ func TestFactors_GlobalSignOutRevokesEverySession(t *testing.T) {
 		assert.Equal(t, "NotAuthorizedException", body["__type"])
 	}
 
-	// A sign-in in a later second is a new, valid session.
-	time.Sleep(1100 * time.Millisecond)
+	// A new login is valid immediately, even in the same second as sign-out.
 	later, _ := passwordSignIn(t, ts.URL)
-	status, _ = refreshStatus(t, ts.URL, later.refresh)
-	assert.Equal(t, http.StatusOK, status)
+	status, body = refreshStatus(t, ts.URL, later.refresh)
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
 }
 
 func TestFactors_AdminUserGlobalSignOutByUsername(t *testing.T) {
@@ -216,6 +215,13 @@ func TestFactors_AdminUserGlobalSignOutByUsername(t *testing.T) {
 	status, body = refreshStatus(t, ts.URL, session.refresh)
 	assert.Equal(t, http.StatusBadRequest, status)
 	assert.Equal(t, "NotAuthorizedException", body["__type"])
+	status, body = postCognito(t, ts.URL, "GetUser", map[string]interface{}{"AccessToken": session.access})
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "NotAuthorizedException", body["__type"])
+
+	later, _ := passwordSignIn(t, ts.URL)
+	status, body = refreshStatus(t, ts.URL, later.refresh)
+	require.Equal(t, http.StatusOK, status, "a new login must survive immediate administrative sign-out: body=%v", body)
 }
 
 func TestFactors_RevokeTokenEndsOneSessionOnly(t *testing.T) {
@@ -248,4 +254,135 @@ func TestFactors_RevokeTokenEndsOneSessionOnly(t *testing.T) {
 	})
 	require.Equal(t, http.StatusBadRequest, status)
 	assert.Equal(t, "UnsupportedTokenTypeException", body["__type"])
+}
+
+func TestFactors_RevokeTokenRequiresClientSecret(t *testing.T) {
+	_, ts, store := newCognitoTestServer(t)
+	const secret = "ClientSecretForRevoke123456"
+	seedClientPoolUserWithSecret(t, store, factorPool, factorClient, secret, factorEmail, factorPass)
+	status, body := postCognito(t, ts.URL, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "USER_PASSWORD_AUTH", "ClientId": factorClient,
+		"AuthParameters": map[string]string{
+			"USERNAME": factorEmail, "PASSWORD": factorPass,
+			"SECRET_HASH": computeSecretHash(secret, factorEmail, factorClient),
+		},
+	})
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+	result := readAuthResult(t, body)
+	refresh := result["RefreshToken"].(string)
+	access := result["AccessToken"].(string)
+	grant, err := grantOf(parseClaimsUnverified(t, refresh))
+	require.NoError(t, err)
+	latestAccess := access
+
+	for _, tc := range []struct {
+		name, provided string
+		omit           bool
+	}{
+		{"missing", "", true},
+		{"empty", "", false},
+		{"wrong", "WrongClientSecret1234567890", false},
+		{"secret hash instead of raw secret", computeSecretHash(secret, factorEmail, factorClient), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := map[string]interface{}{"Token": refresh, "ClientId": factorClient}
+			if !tc.omit {
+				request["ClientSecret"] = tc.provided
+			}
+			status, body := postCognito(t, ts.URL, "RevokeToken", request)
+			require.Equal(t, http.StatusBadRequest, status, "body=%v", body)
+			require.Equal(t, "UnauthorizedException", body["__type"])
+			require.NotEmpty(t, body["message"])
+			require.NotContains(t, body, "Message", "Cognito errors retain the JSON-1.1 envelope")
+			revoked, err := store.RefreshTokenRevoked(t.Context(), grant.OriginJTI)
+			require.NoError(t, err)
+			require.False(t, revoked, "failed client authentication must not revoke the grant")
+
+			status, body = postCognito(t, ts.URL, "InitiateAuth", map[string]interface{}{
+				"AuthFlow": "REFRESH_TOKEN_AUTH", "ClientId": factorClient,
+				"AuthParameters": map[string]string{
+					"REFRESH_TOKEN": refresh, "SECRET_HASH": computeSecretHash(secret, factorEmail, factorClient),
+				},
+			})
+			require.Equal(t, http.StatusOK, status, "body=%v", body)
+			latestAccess = readAuthResult(t, body)["AccessToken"].(string)
+		})
+	}
+
+	for range 2 {
+		status, body = postCognito(t, ts.URL, "RevokeToken", map[string]interface{}{
+			"Token": refresh, "ClientId": factorClient, "ClientSecret": secret,
+		})
+		require.Equal(t, http.StatusOK, status, "correct raw client secret authorizes idempotent revocation: body=%v", body)
+	}
+	status, body = postCognito(t, ts.URL, "InitiateAuth", map[string]interface{}{
+		"AuthFlow": "REFRESH_TOKEN_AUTH", "ClientId": factorClient,
+		"AuthParameters": map[string]string{
+			"REFRESH_TOKEN": refresh, "SECRET_HASH": computeSecretHash(secret, factorEmail, factorClient),
+		},
+	})
+	require.Equal(t, http.StatusBadRequest, status)
+	require.Equal(t, "NotAuthorizedException", body["__type"])
+	for _, token := range []string{access, latestAccess} {
+		status, body = postCognito(t, ts.URL, "GetUser", map[string]interface{}{"AccessToken": token})
+		require.Equal(t, http.StatusBadRequest, status)
+		require.Equal(t, "NotAuthorizedException", body["__type"])
+	}
+}
+
+func TestFactors_RevokeTokenRejectsUnknownAndOtherClients(t *testing.T) {
+	_, ts, store := newCognitoTestServer(t)
+	seedClientPoolUser(t, store, factorPool, factorClient, factorEmail, factorPass)
+	const otherSecret = "OtherClientSecret1234567890"
+	require.NoError(t, store.UpsertClient(t.Context(), "other-secret-client", factorPool, otherSecret))
+	require.NoError(t, store.UpsertClient(t.Context(), "other-public-client", factorPool, ""))
+	session, _ := passwordSignIn(t, ts.URL)
+	grant, err := grantOf(parseClaimsUnverified(t, session.refresh))
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name, client, secret, code string
+	}{
+		{"unknown client", "missing-client", "", "UnauthorizedException"},
+		{"unknown client with secret", "missing-client", otherSecret, "UnauthorizedException"},
+		{"other client without secret", "other-secret-client", "", "UnauthorizedException"},
+		{"other client with correct secret", "other-secret-client", otherSecret, "NotAuthorizedException"},
+		{"other public client", "other-public-client", "", "NotAuthorizedException"},
+		{"unexpected public client secret", factorClient, otherSecret, "UnauthorizedException"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := postCognito(t, ts.URL, "RevokeToken", map[string]interface{}{
+				"Token": session.refresh, "ClientId": tc.client, "ClientSecret": tc.secret,
+			})
+			require.Equal(t, http.StatusBadRequest, status, "body=%v", body)
+			require.Equal(t, tc.code, body["__type"])
+			revoked, err := store.RefreshTokenRevoked(t.Context(), grant.OriginJTI)
+			require.NoError(t, err)
+			require.False(t, revoked)
+			status, body = refreshStatus(t, ts.URL, session.refresh)
+			require.Equal(t, http.StatusOK, status, "another client's revocation attempt leaves the original session usable: body=%v", body)
+		})
+	}
+
+	deleted, err := store.DeleteClient(t.Context(), factorPool, factorClient)
+	require.NoError(t, err)
+	require.True(t, deleted)
+	status, body := postCognito(t, ts.URL, "RevokeToken", map[string]interface{}{
+		"Token": session.refresh, "ClientId": factorClient,
+	})
+	require.Equal(t, http.StatusBadRequest, status)
+	require.Equal(t, "UnauthorizedException", body["__type"])
+	revoked, err := store.RefreshTokenRevoked(t.Context(), grant.OriginJTI)
+	require.NoError(t, err)
+	require.False(t, revoked, "a deleted client cannot authorize revocation of its old grant")
+}
+
+func TestFactors_RevokeTokenClientLookupFailure(t *testing.T) {
+	_, ts, store := newCognitoTestServer(t)
+	require.NoError(t, store.Close())
+	status, body := postCognito(t, ts.URL, "RevokeToken", map[string]interface{}{
+		"Token": "token", "ClientId": factorClient,
+	})
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.Equal(t, "InternalErrorException", body["__type"], "storage errors must not become client-authentication failures")
 }

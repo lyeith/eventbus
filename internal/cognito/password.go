@@ -37,9 +37,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -91,7 +91,7 @@ func (s *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.PreviousPassword == nil ||
-		bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(*req.PreviousPassword)) != nil {
+		compareUserPasswordHash(user.PasswordHash, *req.PreviousPassword) != nil {
 		if err := s.cognito.RecordPasswordFailure(ctx, user.Sub, now, changePasswordAttemptLimit, changePasswordLockout); err != nil {
 			log.Error().Err(err).Msg("RecordPasswordFailure failed in ChangePassword")
 			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
@@ -110,14 +110,12 @@ func (s *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		cognitoJSONError(w, http.StatusBadRequest, "InvalidPasswordException", changePasswordPolicyPrefix+rule)
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.ProposedPassword), bcrypt.DefaultCost)
-	if err != nil {
-		log.Error().Err(err).Msg("bcrypt failed in ChangePassword")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", "failed to hash password")
-		return
-	}
-	if err := s.cognito.ChangeUserPassword(ctx, user.Sub, string(hash)); err != nil {
-		log.Error().Err(err).Msg("ChangeUserPassword failed in ChangePassword")
+	if err := s.cognito.ChangeUserPasswordAtVersion(ctx, user.Sub, req.ProposedPassword, user.AuthVersion); err != nil {
+		if errors.Is(err, errTokenRevoked) {
+			cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Access Token has been revoked")
+			return
+		}
+		log.Error().Err(err).Msg("ChangeUserPasswordAtVersion failed in ChangePassword")
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		return
 	}
@@ -130,7 +128,7 @@ func changePasswordValidation(req changePasswordRequest) string {
 	var failures []string
 	check := func(member string, value string) {
 		switch {
-		case len(value) > cognitoPasswordMaxLength:
+		case utf8.RuneCountInString(value) > cognitoPasswordMaxLength:
 			failures = append(failures, fmt.Sprintf(
 				"Value at '%s' failed to satisfy constraint: Member must have length less than or equal to %d",
 				member, cognitoPasswordMaxLength))

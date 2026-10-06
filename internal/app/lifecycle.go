@@ -12,6 +12,10 @@ import (
 	"github.com/lyeith/eventbus/internal/firehose"
 )
 
+type contextCloser interface {
+	Close(context.Context) error
+}
+
 // The listener is the only owner allowed to invoke Close after HTTP draining.
 // Workers are dependencies of the stores: a failed join must withhold release.
 // Unlike independent cleanup registrations, these stages deliberately stop on a
@@ -20,6 +24,7 @@ type eventBusLifecycle struct {
 	store        *cognito.CognitoStore
 	firehose     *firehose.FirehoseManager
 	ses          io.Closer
+	triggers     contextCloser
 	consumers    *consumer.ConsumerManager
 	cancel       context.CancelFunc
 	requeueDone  <-chan struct{}
@@ -62,6 +67,14 @@ func (owned *eventBusLifecycle) close(ctx context.Context) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("resource cleanup not started: %w", err)
+	}
+	if owned.triggers != nil {
+		if err := owned.triggers.Close(ctx); err != nil {
+			return fmt.Errorf("join Cognito triggers; stores retained: %w", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("resource cleanup not started after trigger join: %w", err)
 	}
 	var flushErr, storeErr, captureErr error
 	if owned.firehose != nil {

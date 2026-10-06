@@ -18,6 +18,10 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
   through consumer-owned interfaces. Service packages own stores and operations.
 - `internal/messaging` owns shared SNS/SQS state; `internal/consumer` owns process
   execution and settlement through its QueueBroker port. Keep queue state private.
+- `internal/cognito` owns lifecycle, SRP and persisted challenge decisions; its
+  TriggerInvoker port receives an application-owned runner from `internal/app`.
+- `internal/cognitotrigger` owns Node execution, deadlines and child cleanup;
+  it imports no Cognito service. Apps own handler policy and dependencies.
 - `internal/ses` owns fixtures, capture, MIME and both sending adapters.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.
@@ -28,7 +32,7 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
 
 Run scoped Go tests, then race/vet checks appropriate to the change.
 [README](README.md#verify-and-build-releases) lists commands;
-[SDK verification](tests/sdk/README.md) explains the frozen Python lane.
+[SDK verification](tests/sdk/README.md) explains the frozen Python/JavaScript lanes.
 The opt-in Firehose integration suite requires an explicitly owned loopback
 RustFS endpoint.
 

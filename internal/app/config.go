@@ -15,6 +15,7 @@ type config struct {
 	issuerBase      string
 	jwksBase        string
 	cognitoPools    string
+	cognitoTriggers string
 	cognitoDB       string
 	accessTokenTTL  time.Duration
 	refreshTokenTTL time.Duration
@@ -31,7 +32,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	accountID := flags.String("account-id", "000000000000", "AWS account ID")
 	s3Endpoint := flags.String("s3-endpoint", "http://localhost:9000", "S3 endpoint for Firehose flush (RustFS)")
 	consumersFile := flags.String("consumers", "", "Path to consumers.yaml (enables Lambda pollers)")
-	workDir := flags.String("work-dir", "", "Project root for uv run (auto-detected if empty)")
+	workDir := flags.String("work-dir", "", "Application root for consumer and trigger handlers (auto-detected if empty)")
 	// Cognito dev service flags. The `iss` claim emitted in tokens is
 	// `<issuer-base>/<pool-id>`; JWKS is served at
 	// `<jwks-base>/<pool-id>/.well-known/jwks.json`. Both default to the
@@ -39,6 +40,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	issuerBase := flags.String("issuer-base", "http://localhost:4100", "Base URL for Cognito 'iss' claim and JWKS path")
 	jwksBase := flags.String("jwks-base", "", "Base URL for JWKS endpoints (defaults to --issuer-base)")
 	cognitoPools := flags.String("cognito-pools", "", "Path to cognito_pools.yaml (optional seed file)")
+	cognitoTriggers := flags.String("cognito-triggers", "", "Application-owned Cognito custom trigger YAML (relative to --work-dir)")
 	cognitoDB := flags.String("cognito-db", "/tmp/cognito-dev.db", "SQLite path for the local Cognito dev store")
 	// Token TTLs default to 1h access / 24h refresh; refresh authentication
 	// preserves the original refresh token.
@@ -61,6 +63,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		issuerBase:      *issuerBase,
 		jwksBase:        *jwksBase,
 		cognitoPools:    *cognitoPools,
+		cognitoTriggers: *cognitoTriggers,
 		cognitoDB:       *cognitoDB,
 		accessTokenTTL:  *accessTokenTTL,
 		refreshTokenTTL: *refreshTokenTTL,

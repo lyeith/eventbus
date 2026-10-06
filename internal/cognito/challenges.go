@@ -1,304 +1,269 @@
-// Cognito MFA and new-password challenge operations.
+// Cognito MFA, password replacement and persisted authentication challenges.
 package cognito
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
-
-	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/bcrypt"
 )
 
-// challengeSessionTTL is the wall-clock validity for an opaque challenge
-// session. 5 minutes is comfortably longer than a human takes to type a
-// 6-digit MFA code and shorter than real Cognito's 3-minute default by a
-// margin that doesn't matter in dev. Cleanup goroutine reaps after this.
+// Legacy fixture clients retain a five-minute session when no client lifetime
+// is configured. API-created clients use Cognito's configured minute lifetime.
 const challengeSessionTTL = 5 * time.Minute
 
-// supportedChallenges enumerates the ChallengeName values the dev service
-// accepts on RespondToAuthChallenge. Mirrors what cognito.py:127-170 and
-// cognito.go:467-496 send through.
 var supportedChallenges = map[string]bool{
-	"SOFTWARE_TOKEN_MFA":    true,
-	"SMS_MFA":               true,
-	"NEW_PASSWORD_REQUIRED": true,
+	"SOFTWARE_TOKEN_MFA": true, "SMS_MFA": true,
+	"NEW_PASSWORD_REQUIRED": true, "PASSWORD_VERIFIER": true, "CUSTOM_CHALLENGE": true,
 }
 
-// respondToAuthChallengeRequest mirrors the AWS wire request.
-//
-// `ChallengeResponses` is a free-form string map; the required fields are
-// challenge-specific (see issueMFAChallenge / handleRespondToAuthChallenge
-// for the per-type validation).
 type respondToAuthChallengeRequest struct {
+	UserPoolID         string            `json:"UserPoolId"`
 	ClientID           string            `json:"ClientId"`
 	ChallengeName      string            `json:"ChallengeName"`
 	Session            string            `json:"Session"`
 	ChallengeResponses map[string]string `json:"ChallengeResponses"`
+	ClientMetadata     map[string]string `json:"ClientMetadata"`
 }
 
-// adminInitiateAuthRequest mirrors the AWS wire request for AdminInitiateAuth.
-// The dev service supports only ADMIN_NO_SRP_AUTH (cognito.go:826-833).
 type adminInitiateAuthRequest struct {
 	UserPoolID     string            `json:"UserPoolId"`
 	ClientID       string            `json:"ClientId"`
 	AuthFlow       string            `json:"AuthFlow"`
 	AuthParameters map[string]string `json:"AuthParameters"`
+	ClientMetadata map[string]string `json:"ClientMetadata"`
 }
 
-// issueMFAChallenge generates an HMAC-stamped session, persists a row to
-// challenge_sessions with the SOFTWARE_TOKEN_MFA name, and writes the
-// challenge response (no AuthenticationResult). Called from
-// handleInitiateAuthUserPassword when the user has mfa_enabled=true.
 func (s *Handler) issueMFAChallenge(w http.ResponseWriter, r *http.Request, poolID, clientID string, user *CognitoUser) {
-	ctx := r.Context()
-
-	signing, err := s.cognito.EnsureSigningKey(ctx, poolID)
-	if err != nil {
-		log.Error().Err(err).Msg("EnsureSigningKey failed in issueMFAChallenge")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+	client, err := s.cognito.LookupClient(r.Context(), clientID)
+	if err != nil || client.PoolID != poolID {
+		cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid client")
 		return
 	}
-	privPEM, err := encodePrivateKeyPEM(signing.Private)
-	if err != nil {
-		log.Error().Err(err).Msg("encodePrivateKeyPEM failed in issueMFAChallenge")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-		return
-	}
-
-	sessionWire, randomPrefix, err := EncodeChallengeSession([]byte(privPEM))
-	if err != nil {
-		log.Error().Err(err).Msg("EncodeChallengeSession failed")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-		return
-	}
-	dbKey := challengeSessionDBKey(randomPrefix)
-	if err := s.cognito.CreateChallengeSession(ctx, dbKey, user.Sub, poolID, clientID, "SOFTWARE_TOKEN_MFA", challengeSessionTTL); err != nil {
-		log.Error().Err(err).Msg("CreateChallengeSession failed")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-		return
-	}
-
-	resp := map[string]interface{}{
-		"ChallengeName": "SOFTWARE_TOKEN_MFA",
-		"Session":       sessionWire,
-		"ChallengeParameters": map[string]string{
-			"USER_ID_FOR_SRP": user.Email,
-			"USERNAME":        user.Email,
-		},
-	}
-	cognitoJSONResponse(w, http.StatusOK, resp)
+	s.issueMFAStateChallenge(w, r, client, user, nil)
 }
 
-// handleRespondToAuthChallenge validates an owned, unexpired, unused session.
-// Software tokens use real TOTP when a secret is enrolled; otherwise software
-// and SMS fixtures accept six ASCII digits. New-password challenges enforce
-// the pool policy before hashing the replacement password.
+func (s *Handler) issueMFAStateChallenge(w http.ResponseWriter, r *http.Request, client *CognitoClient, user *CognitoUser, state *authChallengeState) {
+	s.issueStateChallenge(w, r, client, user, "SOFTWARE_TOKEN_MFA",
+		map[string]string{"USER_ID_FOR_SRP": user.Username, "USERNAME": user.Username}, state)
+}
+
 func (s *Handler) handleRespondToAuthChallenge(w http.ResponseWriter, r *http.Request) {
+	s.respondToAuthChallenge(w, r, false)
+}
+
+func (s *Handler) handleAdminRespondToAuthChallenge(w http.ResponseWriter, r *http.Request) {
+	s.respondToAuthChallenge(w, r, true)
+}
+
+func (s *Handler) respondToAuthChallenge(w http.ResponseWriter, r *http.Request, admin bool) {
 	var req respondToAuthChallengeRequest
 	if !readCognitoJSON(w, r, &req) {
 		return
 	}
-	if req.ClientID == "" {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ClientId is required")
-		return
-	}
-	if req.ChallengeName == "" {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ChallengeName is required")
-		return
-	}
-	if req.Session == "" {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "Session is required")
+	if req.ClientID == "" || req.ChallengeName == "" || req.Session == "" || (admin && req.UserPoolID == "") {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ClientId, ChallengeName and Session are required; admin operations also require UserPoolId")
 		return
 	}
 	if !supportedChallenges[req.ChallengeName] {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException",
-			fmt.Sprintf("Unsupported ChallengeName: %s", req.ChallengeName))
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", fmt.Sprintf("Unsupported ChallengeName: %s", req.ChallengeName))
 		return
 	}
-
-	ctx := r.Context()
-
-	// Resolve client → pool first so we can fetch the right signing key for
-	// HMAC verification. Unknown client → ResourceNotFoundException.
-	client, err := s.cognito.LookupClient(ctx, req.ClientID)
+	client, err := s.cognito.LookupClient(r.Context(), req.ClientID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException",
-				fmt.Sprintf("App client %s does not exist", req.ClientID))
-			return
+			cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "App client does not exist")
+		} else {
+			authInternalError(w, err, "RespondToAuthChallenge")
 		}
-		log.Error().Err(err).Msg("LookupClient failed in RespondToAuthChallenge")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		return
 	}
-
-	signing, err := s.cognito.LoadSigningKey(ctx, client.PoolID)
+	if admin && req.UserPoolID != client.PoolID {
+		cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "App client does not exist in the user pool")
+		return
+	}
+	signing, err := s.cognito.LoadSigningKey(r.Context(), client.PoolID)
 	if err != nil {
-		// No signing key → no way the client could have a valid session
-		// for this pool. Collapse to NotAuthorizedException.
-		log.Debug().Err(err).Str("pool", client.PoolID).Msg("LoadSigningKey failed in RespondToAuthChallenge")
-		cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid session")
+		invalidChallengeSession(w)
 		return
 	}
-	privPEM, err := encodePrivateKeyPEM(signing.Private)
+	privatePEM, err := encodePrivateKeyPEM(signing.Private)
 	if err != nil {
-		log.Error().Err(err).Msg("encodePrivateKeyPEM failed in RespondToAuthChallenge")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+		authInternalError(w, err, "RespondToAuthChallenge")
 		return
 	}
-
-	// 1. HMAC verification — runs BEFORE the DB lookup so forged sessions
-	//    are rejected without a query.
-	prefix, err := VerifyChallengeSession(req.Session, []byte(privPEM))
+	prefix, err := VerifyChallengeSession(req.Session, []byte(privatePEM))
 	if err != nil {
-		log.Debug().Err(err).Msg("Session HMAC verification failed")
-		cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid session")
+		invalidChallengeSession(w)
 		return
 	}
-	dbKey := challengeSessionDBKey(prefix)
-
-	// 2. DB lookup.
-	row, err := s.cognito.LookupChallengeSession(ctx, dbKey)
+	row, err := s.cognito.LookupChallengeSession(r.Context(), challengeSessionDBKey(prefix))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid session")
+			invalidChallengeSession(w)
+		} else {
+			authInternalError(w, err, "RespondToAuthChallenge")
+		}
+		return
+	}
+	if row.Used || row.ClientID != client.ID || row.PoolID != client.PoolID || row.ChallengeName != req.ChallengeName {
+		invalidChallengeSession(w)
+		return
+	}
+	if row.ExpiresAt <= time.Now().Unix() {
+		if row.StateJSON != "" {
+			invalidChallengeSession(w)
+		} else {
+			cognitoJSONError(w, http.StatusBadRequest, "ExpiredCodeException", "Code has expired")
+		}
+		return
+	}
+	user, err := s.cognito.LookupUserBySub(r.Context(), row.Sub)
+	if err != nil || !user.Enabled || user.PoolID != row.PoolID || user.AuthVersion != row.AuthVersion {
+		invalidChallengeSession(w)
+		return
+	}
+	if req.ChallengeName == "PASSWORD_VERIFIER" || req.ChallengeName == "CUSTOM_CHALLENGE" {
+		s.respondStateChallenge(w, r, req, client, user, row)
+		return
+	}
+	var state authChallengeState
+	if row.StateJSON != "" {
+		if json.Unmarshal([]byte(row.StateJSON), &state) != nil || (state.Mode != "custom" && state.Mode != "srp") || !state.PasswordVerified || state.SRP != nil ||
+			req.ChallengeResponses["USERNAME"] != user.Username {
+			invalidChallengeSession(w)
 			return
 		}
-		log.Error().Err(err).Msg("LookupChallengeSession failed")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-		return
-	}
-
-	// 3. Replay rejection.
-	if row.Used {
-		cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid session")
-		return
-	}
-
-	// 4. Expiry. The cleanup goroutine usually reaps these, but we still
-	//    check here in case a request lands within the 60s window.
-	if row.ExpiresAt < time.Now().Unix() {
-		cognitoJSONError(w, http.StatusBadRequest, "ExpiredCodeException", "Code has expired")
-		return
-	}
-
-	// 5. Challenge type must match the stored type. A client can't ask for
-	//    NEW_PASSWORD_REQUIRED against a session that was issued for
-	//    SOFTWARE_TOKEN_MFA.
-	if row.ChallengeName != req.ChallengeName {
-		cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Challenge type mismatch")
-		return
-	}
-
-	// SECRET_HASH (§3k) on RespondToAuthChallenge — only enforced when the
-	// client has a secret configured. The username field is the
-	// challenge-response USERNAME (matches what the Go provider sends at
-	// cognito.go:535-540). Mismatch / missing-when-required collapses to
-	// NotAuthorizedException for indistinguishability.
-	if client.Secret != "" {
-		username := req.ChallengeResponses["USERNAME"]
-		if username == "" {
-			// Fall back to the stored row's email if USERNAME wasn't echoed
-			// — provider implementations differ on whether the client
-			// re-sends USERNAME, so be tolerant.
-			if userRow, lerr := s.cognito.LookupUserBySub(ctx, row.Sub); lerr == nil {
-				username = userRow.Email
-			}
-		}
-		if err := verifySecretHash(client.Secret, username, client.ID, req.ChallengeResponses["SECRET_HASH"]); err != nil {
-			cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid session")
+		if state.Mode == "custom" && req.ChallengeName == "SOFTWARE_TOKEN_MFA" && user.TOTPSecret == "" {
+			invalidChallengeSession(w)
 			return
 		}
 	}
-
-	// 6. Per-challenge validation.
+	username := req.ChallengeResponses["USERNAME"]
+	// Existing explicit MFA fixtures may omit USERNAME. Echoed identities must
+	// always refer to this account, and secret clients hash its canonical name.
+	if username != "" && username != user.Username {
+		invalidChallengeSession(w)
+		return
+	}
+	if err := verifySecretHash(client.Secret, user.Username, client.ID, req.ChallengeResponses["SECRET_HASH"]); err != nil {
+		invalidChallengeSession(w)
+		return
+	}
 	switch req.ChallengeName {
 	case "SOFTWARE_TOKEN_MFA":
 		code := req.ChallengeResponses["SOFTWARE_TOKEN_MFA_CODE"]
-		// Look up the user to check whether they have a TOTP secret enrolled.
-		// Missing user mid-challenge collapses to NotAuthorizedException.
-		userRow, lerr := s.cognito.LookupUserBySub(ctx, row.Sub)
-		if lerr != nil {
-			cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid session")
+		if err := validateTOTPCode(user.TOTPSecret, code); err != nil && (!errors.Is(err, errFallbackToAnyDigits) || !isSixDigits(code)) {
+			cognitoJSONError(w, http.StatusBadRequest, "CodeMismatchException", "Invalid code")
 			return
 		}
-		if verr := validateTOTPCode(userRow.TOTPSecret, code); verr != nil {
-			if !errors.Is(verr, errFallbackToAnyDigits) {
-				cognitoJSONError(w, http.StatusBadRequest, "CodeMismatchException", "Invalid code")
-				return
-			}
-			// No secret enrolled → "any 6 digits" preserves the cheap dev
-			// path for fixtures without an enrolled secret.
-			if !isSixDigits(code) {
-				cognitoJSONError(w, http.StatusBadRequest, "CodeMismatchException", "Invalid code")
-				return
-			}
-		}
 	case "SMS_MFA":
-		// SMS_MFA stays on "any 6 digits" — there is no enrolment story
-		// for SMS in the dev service (no carrier hookup).
-		code := req.ChallengeResponses["SMS_MFA_CODE"]
-		if !isSixDigits(code) {
+		if !isSixDigits(req.ChallengeResponses["SMS_MFA_CODE"]) {
 			cognitoJSONError(w, http.StatusBadRequest, "CodeMismatchException", "Invalid code")
 			return
 		}
 	case "NEW_PASSWORD_REQUIRED":
-		newPassword := req.ChallengeResponses["NEW_PASSWORD"]
-		if newPassword == "" {
-			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException",
-				"NEW_PASSWORD is required for NEW_PASSWORD_REQUIRED")
-			return
-		}
-		// Password policy (§3g): if the pool has one configured, enforce
-		// it before bcrypt. InvalidPasswordException matches the typed
-		// error decoder in both providers (cognito.py / cognito.go).
-		policy, perr := loadPoolPasswordPolicy(ctx, s.cognito, row.PoolID)
-		if perr == nil && policy != nil {
-			if vErr := policy.Validate(newPassword); vErr != nil {
-				cognitoJSONError(w, http.StatusBadRequest, "InvalidPasswordException", vErr.Error())
-				return
-			}
-		}
-		hash, herr := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
-		if herr != nil {
-			log.Error().Err(herr).Msg("bcrypt failed in NEW_PASSWORD_REQUIRED")
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", "failed to hash password")
-			return
-		}
-		if _, uerr := s.cognito.DB().ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE sub = ?`, string(hash), row.Sub); uerr != nil {
-			log.Error().Err(uerr).Msg("UPDATE password failed in NEW_PASSWORD_REQUIRED")
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", uerr.Error())
-			return
-		}
-	}
-
-	// 7. Mark session used (replay rejection on subsequent calls).
-	if err := s.cognito.MarkChallengeSessionUsed(ctx, dbKey); err != nil {
-		log.Error().Err(err).Msg("MarkChallengeSessionUsed failed")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+		s.respondNewPassword(w, r, req, client, user, row)
 		return
 	}
-
-	// 8. Look up user → mint tokens. If the user was deleted between
-	//    challenge issuance and response, fail loudly.
-	user, err := s.cognito.LookupUserBySub(ctx, row.Sub)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid session")
-			return
-		}
-		log.Error().Err(err).Msg("LookupUserBySub failed in RespondToAuthChallenge")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+	if !s.consumeChallenge(w, r, row) {
 		return
 	}
-
-	s.writeAuthenticated(w, r, row.PoolID, row.ClientID, user, "RespondToAuthChallenge")
+	if row.StateJSON != "" && state.Mode == "custom" {
+		state.History = append(state.History, challengeResult{Name: req.ChallengeName, Result: true})
+		s.advanceCustomAuth(w, r, client, user, state, req.ClientMetadata)
+	} else {
+		s.writeAuthenticated(w, r, row.PoolID, row.ClientID, user, "RespondToAuthChallenge")
+	}
 }
 
-// isSixDigits validates the code shape for fixtures without a TOTP secret.
+func invalidChallengeSession(w http.ResponseWriter) {
+	cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Invalid session")
+}
+
+func (s *Handler) consumeChallenge(w http.ResponseWriter, r *http.Request, row *CognitoChallengeSession) bool {
+	consumed, err := s.cognito.ConsumeChallengeSession(r.Context(), row.Session)
+	if err != nil {
+		authInternalError(w, err, "RespondToAuthChallenge")
+		return false
+	}
+	if !consumed {
+		invalidChallengeSession(w)
+		return false
+	}
+	return true
+}
+
+func (s *Handler) respondNewPassword(w http.ResponseWriter, r *http.Request, req respondToAuthChallengeRequest, client *CognitoClient, user *CognitoUser, row *CognitoChallengeSession) {
+	password := req.ChallengeResponses["NEW_PASSWORD"]
+	if password == "" {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "NEW_PASSWORD is required for NEW_PASSWORD_REQUIRED")
+		return
+	}
+	policy, err := loadPoolPasswordPolicy(r.Context(), s.cognito, user.PoolID)
+	if err != nil {
+		authInternalError(w, err, "RespondToAuthChallenge")
+		return
+	}
+	if message := lifecyclePasswordValidation(password, nil); message != "" {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidPasswordException", message)
+		return
+	}
+	if err := policy.Validate(password); err != nil {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidPasswordException", err.Error())
+		return
+	}
+	expired, err := s.temporaryPasswordExpired(r.Context(), user)
+	if err != nil {
+		authInternalError(w, err, "RespondToAuthChallenge")
+		return
+	}
+	if expired {
+		invalidChallengeSession(w)
+		return
+	}
+	var state authChallengeState
+	if row.StateJSON != "" {
+		if json.Unmarshal([]byte(row.StateJSON), &state) != nil || (state.Mode != "custom" && state.Mode != "srp") || !state.PasswordVerified {
+			invalidChallengeSession(w)
+			return
+		}
+	}
+	if !s.consumeChallenge(w, r, row) {
+		return
+	}
+	completedVersion := user.AuthVersion + 1
+	if err := s.cognito.SetUserPasswordAtVersion(r.Context(), user.Sub, password, "CONFIRMED", user.AuthVersion); err != nil {
+		if errors.Is(err, errTokenRevoked) {
+			invalidChallengeSession(w)
+		} else {
+			authInternalError(w, err, "RespondToAuthChallenge")
+		}
+		return
+	}
+	user, err = s.cognito.LookupUserBySub(r.Context(), user.Sub)
+	if err != nil || !user.Enabled || user.AuthVersion != completedVersion {
+		invalidChallengeSession(w)
+		return
+	}
+	if row.StateJSON != "" {
+		state.History = append(state.History, challengeResult{Name: "NEW_PASSWORD_REQUIRED", Result: true})
+	}
+	if user.MFAEnabled {
+		var pending *authChallengeState
+		if row.StateJSON != "" {
+			pending = &state
+		}
+		s.issueMFAStateChallenge(w, r, client, user, pending)
+	} else if row.StateJSON != "" && state.Mode == "custom" {
+		s.advanceCustomAuth(w, r, client, user, state, req.ClientMetadata)
+	} else {
+		s.writeAuthenticated(w, r, user.PoolID, client.ID, user, "RespondToAuthChallenge")
+	}
+}
+
 func isSixDigits(s string) bool {
 	if len(s) != 6 {
 		return false

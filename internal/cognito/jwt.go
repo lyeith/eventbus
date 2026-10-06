@@ -15,6 +15,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -365,9 +367,12 @@ func decodePublicKeyPEM(s string) (*rsa.PublicKey, error) {
 // so a refresh renews iat and expiry but never the authentication time, and revoking the
 // refresh token (RevokeToken) also revokes its access tokens, as in Cognito.
 type tokenGrant struct {
-	AuthTime  time.Time
-	OriginJTI string
+	AuthTime    time.Time
+	OriginJTI   string
+	AuthVersion int64
 }
+
+const authVersionClaim = "eventbus:auth_version"
 
 func (grant tokenGrant) valid() error {
 	if grant.AuthTime.IsZero() {
@@ -375,6 +380,9 @@ func (grant tokenGrant) valid() error {
 	}
 	if strings.TrimSpace(grant.OriginJTI) == "" {
 		return errors.New("origin jti required")
+	}
+	if grant.AuthVersion < 0 {
+		return errors.New("invalid authentication version")
 	}
 	return nil
 }
@@ -410,30 +418,98 @@ func SignAccessToken(
 	if err := grant.valid(); err != nil {
 		return "", err
 	}
+	user, err := store.LookupUserBySub(ctx, sub)
+	if err != nil {
+		return "", fmt.Errorf("load token identity: %w", err)
+	}
+	if user.PoolID != poolID {
+		return "", errors.New("user does not belong to token pool")
+	}
 	signing, err := store.EnsureSigningKey(ctx, poolID)
 	if err != nil {
 		return "", fmt.Errorf("ensure signing key: %w", err)
 	}
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"sub":        sub,
-		"email":      email,
-		"iss":        strings.TrimRight(issuerBase, "/") + "/" + poolID,
-		"aud":        clientID,
-		"iat":        now.Unix(),
-		"exp":        now.Add(ttl).Unix(),
-		"token_use":  "access",
-		"username":   email,
-		"client_id":  clientID,
-		"auth_time":  grant.AuthTime.Unix(),
-		"origin_jti": grant.OriginJTI,
-		"jti":        newJTI(),
+		"sub":            sub,
+		"email":          user.Email,
+		"iss":            strings.TrimRight(issuerBase, "/") + "/" + poolID,
+		"aud":            clientID,
+		"iat":            now.Unix(),
+		"exp":            now.Add(ttl).Unix(),
+		"token_use":      "access",
+		"username":       user.Username,
+		"client_id":      clientID,
+		"auth_time":      grant.AuthTime.Unix(),
+		"origin_jti":     grant.OriginJTI,
+		"jti":            newJTI(),
+		authVersionClaim: grant.AuthVersion,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = signing.Kid
 	signed, err := tok.SignedString(signing.Private)
 	if err != nil {
 		return "", fmt.Errorf("sign access token: %w", err)
+	}
+	return signed, nil
+}
+
+// SignIDToken exposes user attributes with the Cognito identity-token claims.
+// Reserved claims always come from the authenticated account and grant; a
+// mutable user attribute cannot replace the issuer, audience or token purpose.
+func SignIDToken(ctx context.Context, store *CognitoStore, issuerBase, poolID, clientID string, user *CognitoUser, grant tokenGrant, ttl time.Duration) (string, error) {
+	if store == nil || user == nil {
+		return "", errors.New("store and user required")
+	}
+	if user.PoolID != poolID {
+		return "", errors.New("user does not belong to token pool")
+	}
+	if err := grant.valid(); err != nil {
+		return "", err
+	}
+	attributes, err := store.LoadUserAttributes(ctx, user.Sub)
+	if err != nil {
+		return "", fmt.Errorf("load ID token attributes: %w", err)
+	}
+	signing, err := store.EnsureSigningKey(ctx, poolID)
+	if err != nil {
+		return "", fmt.Errorf("ensure signing key: %w", err)
+	}
+	claims := jwt.MapClaims{}
+	for name, value := range attributes {
+		switch name {
+		case "email_verified", "phone_number_verified":
+			if verified, err := strconv.ParseBool(value); err == nil {
+				claims[name] = verified
+			}
+		default:
+			claims[name] = value
+		}
+	}
+	if user.Email != "" {
+		claims["email"] = user.Email
+	}
+	now := time.Now()
+	for name, value := range (jwt.MapClaims{
+		"sub":              user.Sub,
+		"iss":              strings.TrimRight(issuerBase, "/") + "/" + poolID,
+		"aud":              clientID,
+		"iat":              now.Unix(),
+		"exp":              now.Add(ttl).Unix(),
+		"token_use":        "id",
+		"cognito:username": user.Username,
+		"auth_time":        grant.AuthTime.Unix(),
+		"origin_jti":       grant.OriginJTI,
+		"jti":              newJTI(),
+		authVersionClaim:   grant.AuthVersion,
+	}) {
+		claims[name] = value
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = signing.Kid
+	signed, err := tok.SignedString(signing.Private)
+	if err != nil {
+		return "", fmt.Errorf("sign ID token: %w", err)
 	}
 	return signed, nil
 }
@@ -467,15 +543,16 @@ func SignRefreshToken(
 	}
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"sub":       sub,
-		"iss":       strings.TrimRight(issuerBase, "/") + "/" + poolID,
-		"aud":       clientID,
-		"iat":       now.Unix(),
-		"exp":       now.Add(ttl).Unix(),
-		"token_use": "refresh",
-		"client_id": clientID,
-		"auth_time": grant.AuthTime.Unix(),
-		"jti":       grant.OriginJTI,
+		"sub":            sub,
+		"iss":            strings.TrimRight(issuerBase, "/") + "/" + poolID,
+		"aud":            clientID,
+		"iat":            now.Unix(),
+		"exp":            now.Add(ttl).Unix(),
+		"token_use":      "refresh",
+		"client_id":      clientID,
+		"auth_time":      grant.AuthTime.Unix(),
+		"jti":            grant.OriginJTI,
+		authVersionClaim: grant.AuthVersion,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = signing.Kid
@@ -555,6 +632,9 @@ func VerifyRefreshToken(
 	if tokenUse != "refresh" {
 		return nil, fmt.Errorf("token_use %q is not %q", tokenUse, "refresh")
 	}
+	if clientID, _ := verifiedClaims["client_id"].(string); clientID != expectedClientID {
+		return nil, errors.New("refresh token client does not match")
+	}
 	if sub, _ := verifiedClaims["sub"].(string); sub == "" {
 		return nil, errors.New("missing sub claim")
 	}
@@ -571,25 +651,53 @@ func grantOf(claims jwt.MapClaims) (tokenGrant, error) {
 	if strings.TrimSpace(jti) == "" {
 		return tokenGrant{}, errors.New("refresh token carries no jti")
 	}
+	version, err := authVersionOf(claims)
+	if err != nil {
+		return tokenGrant{}, err
+	}
 	for _, name := range []string{"auth_time", "iat"} {
 		if value, ok := claims[name].(float64); ok && value > 0 {
-			return tokenGrant{AuthTime: time.Unix(int64(value), 0).UTC(), OriginJTI: jti}, nil
+			return tokenGrant{AuthTime: time.Unix(int64(value), 0).UTC(), OriginJTI: jti, AuthVersion: version}, nil
 		}
 	}
 	return tokenGrant{}, errors.New("refresh token carries no authentication time")
+}
+
+// Earlier grants omitted the private account version and represent version
+// zero. Present values must be non-negative integers, never coerced strings or
+// truncated fractions. Verification callers compare this to current state.
+func authVersionOf(claims jwt.MapClaims) (int64, error) {
+	value, present := claims[authVersionClaim]
+	if !present {
+		return 0, nil
+	}
+	switch value := value.(type) {
+	case int64:
+		if value >= 0 {
+			return value, nil
+		}
+	case float64:
+		if value >= 0 && value < math.Exp2(63) && value == math.Trunc(value) {
+			return int64(value), nil
+		}
+	case json.Number:
+		if version, err := value.Int64(); err == nil && version >= 0 {
+			return version, nil
+		}
+	}
+	return 0, errors.New("invalid authentication version claim")
 }
 
 // errTokenRevoked is a token that verified but was revoked by GlobalSignOut,
 // AdminUserGlobalSignOut or RevokeToken.
 var errTokenRevoked = errors.New("token has been revoked")
 
-// checkNotRevoked refuses a token whose authentication is at or before the
-// user's latest global sign-out, or whose refresh token (originJTI) was
-// revoked. Cognito applies the same revocation to its own APIs; a resource
-// server validating the JWT offline still accepts it until it expires, which
-// is why Trust keeps its own session cutoff.
+// checkNotRevoked checks the legacy timestamp cutoff for version-zero accounts
+// and per-grant refresh revocation. Versioned accounts use the callers' exact
+// AuthVersion comparison, allowing fresh authentication in the same second as
+// global sign-out. Offline JWT verification does not consult either state.
 func (s *CognitoStore) checkNotRevoked(ctx context.Context, user *CognitoUser, authTime int64, originJTI string) error {
-	if user.TokensRevokedBefore > 0 && authTime <= user.TokensRevokedBefore {
+	if user.AuthVersion == 0 && user.TokensRevokedBefore > 0 && authTime <= user.TokensRevokedBefore {
 		return errTokenRevoked
 	}
 	revoked, err := s.RefreshTokenRevoked(ctx, originJTI)

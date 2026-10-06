@@ -35,13 +35,18 @@ for client and container addressing.
    through supported SDK operations, using application-owned names.
 3. For deterministic login, copy [cognito_pools.yaml](../examples/cognito_pools.yaml)
    into the app and pass `--cognito-pools /path/to/app/cognito_pools.yaml`.
-   Reapplying preserves user IDs and updates mutable fields.
+   Reapplying preserves user IDs and lifecycle state for the same password.
+   [Cognito contracts](COGNITO.md) explains identity, temporary passwords and migration.
 4. Configure JWT validation with issuer `<issuer-base>/<pool-id>` and JWKS
    `<jwks-base>/<pool-id>/.well-known/jwks.json`. `/health` reports the base URLs;
    append the pool ID. `--jwks-base` defaults to `--issuer-base`.
 5. For stored SES templates or strict identity checks, copy
    [ses.yaml](../examples/ses.yaml) and pass `--ses-config <path>`.
    Management APIs do not create these resources yet.
+
+For custom SRP/email MFA, pass `--cognito-triggers <path> --work-dir <app-root>`
+with the app-owned Node handlers and declared local SES endpoint/credentials.
+[Custom triggers](CUSTOM-TRIGGERS.md) documents the execution contract.
 
 An SDK endpoint override changes where real SDK requests go. Use the
 application's existing SDK and configuration; EventBus does not install client

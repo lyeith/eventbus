@@ -77,6 +77,7 @@ func TestAdminCreateUser_HappyPath(t *testing.T) {
 		"Username":   "alice@example.com",
 		"UserAttributes": []map[string]string{
 			{"Name": "email", "Value": "alice@example.com"},
+			{"Name": "email_verified", "Value": "true"},
 		},
 		"TemporaryPassword": "TempPass1!",
 		"MessageAction":     "SUPPRESS",
@@ -86,7 +87,7 @@ func TestAdminCreateUser_HappyPath(t *testing.T) {
 	user, ok := body["User"].(map[string]interface{})
 	require.True(t, ok, "User missing from response: %v", body)
 	assert.Equal(t, "alice@example.com", user["Username"])
-	assert.Equal(t, "CONFIRMED", user["UserStatus"])
+	assert.Equal(t, "FORCE_CHANGE_PASSWORD", user["UserStatus"])
 	assert.Equal(t, true, user["Enabled"])
 	assert.IsType(t, float64(0), user["UserCreateDate"])
 	assert.IsType(t, float64(0), user["UserLastModifiedDate"])
@@ -97,7 +98,7 @@ func TestAdminCreateUser_HappyPath(t *testing.T) {
 	// DB state: user row + attribute rows present, password is bcrypt hash.
 	got, err := store.LookupUserByEmail(context.Background(), poolID, "alice@example.com")
 	require.NoError(t, err)
-	assert.Equal(t, "CONFIRMED", got.Status)
+	assert.Equal(t, "FORCE_CHANGE_PASSWORD", got.Status)
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(got.PasswordHash), []byte("TempPass1!")))
 
 	attrs, err := store.LoadUserAttributes(context.Background(), got.Sub)
@@ -173,35 +174,30 @@ func TestAdminCreateUser_GeneratesSub(t *testing.T) {
 	}
 
 	// Also: matches what's persisted.
-	got, err := store.LookupUserByEmail(context.Background(), poolID, "subshape@example.com")
+	got, err := store.LookupPoolUser(context.Background(), poolID, "subshape@example.com")
 	require.NoError(t, err)
 	assert.Equal(t, sub, got.Sub)
 }
 
-// TestAdminCreateUser_AlwaysSetsEmailVerifiedTrue covers the design contract
-// in §3c — the platform reads `email_verified` and assumes Cognito always
-// sets it to true on AdminCreateUser. Even if the caller didn't pass the
-// attribute, the dev service must inject it.
-func TestAdminCreateUser_AlwaysSetsEmailVerifiedTrue(t *testing.T) {
-	_, ts, store := newCognitoTestServer(t)
-	const poolID = "pool-email-verified"
-	seedPool(t, store, poolID)
-
-	_, body := postCognito(t, ts.URL, "AdminCreateUser", map[string]interface{}{
-		"UserPoolId": poolID,
-		"Username":   "noverify@example.com",
-		// Deliberately no UserAttributes — the handler must still inject
-		// email + email_verified=true.
+func TestAdminCreateUser_DoesNotInventEmailOrVerification(t *testing.T) {
+	_, server, store := newCognitoTestServer(t)
+	seedPool(t, store, "unverified-pool")
+	status, body := postCognito(t, server.URL, "AdminCreateUser", map[string]interface{}{
+		"UserPoolId": "unverified-pool", "Username": "stable-user", "MessageAction": "SUPPRESS",
+		"UserAttributes": []map[string]string{{"Name": "email", "Value": "invitee@example.test"}},
 	})
-	user := body["User"].(map[string]interface{})
-	assertAttribute(t, user["Attributes"], "email_verified", "true")
-
-	// And persisted.
-	got, err := store.LookupUserByEmail(context.Background(), poolID, "noverify@example.com")
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+	user, err := store.LookupPoolUser(t.Context(), "unverified-pool", "stable-user")
 	require.NoError(t, err)
-	attrs, err := store.LoadUserAttributes(context.Background(), got.Sub)
+	attributes, err := store.LoadUserAttributes(t.Context(), user.Sub)
 	require.NoError(t, err)
-	assert.Equal(t, "true", attrs["email_verified"])
+	require.Equal(t, "invitee@example.test", attributes["email"])
+	require.NotContains(t, attributes, "email_verified")
+	status, body = postCognito(t, server.URL, "AdminCreateUser", map[string]interface{}{"UserPoolId": "unverified-pool", "Username": "without-email", "MessageAction": "SUPPRESS"})
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+	user, err = store.LookupPoolUser(t.Context(), "unverified-pool", "without-email")
+	require.NoError(t, err)
+	require.Empty(t, user.Email)
 }
 
 // --- AdminDeleteUser ----------------------------------------------------
@@ -218,7 +214,7 @@ func TestAdminDeleteUser_HappyPath(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, createStatus)
 
-	got, err := store.LookupUserByEmail(context.Background(), poolID, "doomed@example.com")
+	got, err := store.LookupPoolUser(context.Background(), poolID, "doomed@example.com")
 	require.NoError(t, err)
 	sub := got.Sub
 
@@ -230,7 +226,7 @@ func TestAdminDeleteUser_HappyPath(t *testing.T) {
 	assert.Empty(t, body)
 
 	// users row gone.
-	_, err = store.LookupUserByEmail(context.Background(), poolID, "doomed@example.com")
+	_, err = store.LookupPoolUser(context.Background(), poolID, "doomed@example.com")
 	assert.Error(t, err, "user row should be gone")
 
 	// user_attributes also gone (FK cascade).
@@ -277,6 +273,7 @@ func TestGetUser_HappyPath(t *testing.T) {
 	createStatus, createBody := postCognito(t, ts.URL, "AdminCreateUser", map[string]interface{}{
 		"UserPoolId":        poolID,
 		"Username":          "carol@example.com",
+		"UserAttributes":    []map[string]string{{"Name": "email", "Value": "carol@example.com"}, {"Name": "email_verified", "Value": "true"}},
 		"TemporaryPassword": "TempPass1!",
 	})
 	require.Equal(t, http.StatusOK, createStatus)

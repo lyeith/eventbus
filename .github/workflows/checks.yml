@@ -44,7 +44,15 @@ jobs:
           version: '0.11.17'
           enable-cache: true
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/sdk/javascript/package-lock.json
       - run: uv sync --frozen
+      - name: Frozen JavaScript SDK dependencies
+        working-directory: tests/sdk/javascript
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Smoke fixture contracts
         shell: bash
         run: set -o pipefail; uv run --frozen python -m unittest discover -s tests/sdk/python -p 'test_*.py' 2>&1 | tee sdk-contracts.log

@@ -21,9 +21,11 @@ func TestEventBusBindFailureReleasesConstructedResources(t *testing.T) {
 	defer occupied.Close()
 	store, err := cognito.OpenCognitoStore(filepath.Join(t.TempDir(), "cognito.db"))
 	require.NoError(t, err)
-	listener := newEventBusListener(&http.Server{Addr: occupied.Addr().String()}, &eventBusLifecycle{store: store}, time.Second)
+	triggerClosed := false
+	listener := newEventBusListener(&http.Server{Addr: occupied.Addr().String()}, &eventBusLifecycle{store: store, triggers: contextCloseFunc(func(context.Context) error { triggerClosed = true; return nil })}, time.Second)
 	require.Error(t, listener.Run(context.Background()))
 	require.Error(t, store.DB().Ping(), "failed bind must close the unused SQLite store")
+	require.True(t, triggerClosed, "failed bind must close the unused trigger runtime")
 }
 
 func TestEventBusPreCanceledRunDoesNotBind(t *testing.T) {

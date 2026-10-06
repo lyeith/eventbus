@@ -1,14 +1,11 @@
-// Cognito app-client secret hashing and refresh identity extraction.
+// Cognito app-client secret hashing.
 package cognito
 
 import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
 )
 
 // computeSecretHash matches the Go provider's exact computation:
@@ -46,30 +43,4 @@ func verifySecretHash(clientSecret, username, clientID, provided string) error {
 		return errors.New("SECRET_HASH mismatch")
 	}
 	return nil
-}
-
-// refreshTokenSubUnverified parses the JWT WITHOUT verifying its signature
-// to pull out the `sub` claim. Used by REFRESH_TOKEN_AUTH SECRET_HASH
-// enforcement, which has to compute the expected hash from the token's
-// embedded user id BEFORE verifying the token (chicken-and-egg). Caller
-// MUST still call VerifyRefreshToken afterwards — this is just a peek.
-func refreshTokenSubUnverified(refreshToken string) (string, error) {
-	// JWT layout: header.payload.signature, all base64url, '.' separated.
-	parts := strings.Split(refreshToken, ".")
-	if len(parts) != 3 {
-		return "", errors.New("malformed jwt")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", fmt.Errorf("decode jwt payload: %w", err)
-	}
-	var claims map[string]interface{}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", fmt.Errorf("parse jwt payload: %w", err)
-	}
-	sub, _ := claims["sub"].(string)
-	if sub == "" {
-		return "", errors.New("jwt missing sub")
-	}
-	return sub, nil
 }

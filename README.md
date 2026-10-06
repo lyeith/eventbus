@@ -27,6 +27,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 
 - [Agent workflow](docs/AGENT-HARNESS.md): configure the app, seed resources,
   run consumers, inspect results and manage state.
+- [Cognito contracts](docs/COGNITO.md): lifecycle, SRP, custom triggers and persistence.
 - [SES capture](docs/SES.md): sending operations, fixtures and JSONL contract.
 - [Architecture](docs/ARCHITECTURE.md): package ownership, seams and test placement.
 - [Verification](tests/README.md): unit, SDK and native S3 test lanes.
@@ -36,7 +37,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 
 | Area | Local behavior |
 | --- | --- |
-| Cognito | Pools, clients and users; password/admin/refresh auth, MFA challenges, TOTP, JWT/JWKS, password changes and sign-out/revocation. Supported subset; `AdminGetUser` is unsupported. |
+| Cognito | Pools, clients and user lifecycle; password/admin/refresh/SRP auth, application-owned Node custom challenges, TOTP, signed JWT/JWKS and revocation. [Operation coverage](docs/COGNITO.md). |
 | SNS | Topics, SQS subscriptions, attribute filters, publish and listing. |
 | SQS | Queues, URL/attributes, receive, visibility, long polling, deletion and purge. Messages arrive through SNS; direct `SendMessage` is unsupported. |
 | Consumers | Go binaries or Python handlers receive Lambda-style SQS events, with timeouts, partial batch retry and dead-letter queues. |
@@ -62,11 +63,13 @@ SQLite and the capture file.
 go test ./...
 go test -race ./...
 go vet ./...
+npm ci --prefix tests/sdk/javascript --ignore-scripts --no-audit --no-fund
 uv sync --frozen
 uv run --frozen python -m unittest discover -s tests/sdk/python -p 'test_*.py'
 EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -tags sdksmoke ./...
 ```
 
+The SDK lane requires Node 20 or newer and the frozen dependencies above.
 Tests own their listeners and stores. Application acceptance tests belong in
 the consuming application. The optional Firehose integration suite needs an
 explicitly owned loopback RustFS endpoint:

@@ -130,3 +130,83 @@ func TestApplyCognitoSeed_CreatesSigningKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, key.Kid, 16)
 }
+
+func TestApplyCognitoSeed_BackfillsLegacyVerifierWithoutRenewingLifecycle(t *testing.T) {
+	store, _ := newCognitoTestStore(t)
+	ctx := t.Context()
+	require.NoError(t, store.UpsertPool(ctx, "legacy-seed", "us-east-1"))
+	hash, err := hashUserPassword("LegacyPass1!")
+	require.NoError(t, err)
+	sub, err := store.UpsertUser(ctx, "legacy-seed", "legacy@example.test", hash, false)
+	require.NoError(t, err)
+	require.NoError(t, store.SetUserAttribute(ctx, sub, "email", "legacy@example.test"))
+	require.NoError(t, store.SetUserAttribute(ctx, sub, "email_verified", "true"))
+	require.NoError(t, store.SetUserEnabled(ctx, sub, false))
+	_, err = store.DB().ExecContext(ctx, `UPDATE users SET status='FORCE_CHANGE_PASSWORD',created_at=100,updated_at=101,password_changed_at=102 WHERE sub=?`, sub)
+	require.NoError(t, err)
+	before, err := store.LookupUserBySub(ctx, sub)
+	require.NoError(t, err)
+	seed := &CognitoSeedFile{Pools: []CognitoSeedPool{{ID: "legacy-seed", Region: "us-east-1", Users: []CognitoSeedUser{{Email: "legacy@example.test", Password: "LegacyPass1!"}}}}}
+	require.NoError(t, ApplyCognitoSeed(ctx, store, seed))
+	after, err := store.LookupUserBySub(ctx, sub)
+	require.NoError(t, err)
+	require.NotEmpty(t, after.SRPSalt)
+	require.NotEmpty(t, after.SRPVerifier)
+	before.SRPSalt, before.SRPVerifier = after.SRPSalt, after.SRPVerifier
+	require.Equal(t, before, after, "same-password verifier backfill must preserve disabled state, temporary expiry and grant revision")
+	require.NoError(t, ApplyCognitoSeed(ctx, store, seed))
+	again, err := store.LookupUserBySub(ctx, sub)
+	require.NoError(t, err)
+	require.Equal(t, after, again, "reapplication must not regenerate credentials or modification timestamps")
+}
+
+func TestApplyCognitoSeed_ExplicitUsernameAndAliasConfiguration(t *testing.T) {
+	store, _ := newCognitoTestStore(t)
+	ctx := t.Context()
+	seed, err := LoadCognitoSeed(writeSeedFile(t, `
+pools:
+  - id: alias-seed
+    sign_in:
+      email_alias: true
+      case_sensitive: false
+    users:
+      - username: StableUsername
+        email: Invitee@Example.test
+        password: SeedPass1!
+        attributes:
+          email_verified: "false"
+          custom:role: developer
+`))
+	require.NoError(t, err)
+	require.NoError(t, ApplyCognitoSeed(ctx, store, seed))
+	user, err := store.LookupPoolUser(ctx, "alias-seed", "STABLEUSERNAME")
+	require.NoError(t, err)
+	require.Equal(t, "stableusername", user.Username)
+	require.Equal(t, "invitee@example.test", user.Email)
+	require.NotEqual(t, user.Username, user.Email)
+	require.True(t, user.Enabled)
+	require.Equal(t, "CONFIRMED", user.Status)
+	attributes, err := store.LoadUserAttributes(ctx, user.Sub)
+	require.NoError(t, err)
+	require.Equal(t, "false", attributes["email_verified"])
+	require.Equal(t, "developer", attributes["custom:role"])
+	_, err = store.ResolveSignInUser(ctx, "alias-seed", "Invitee@Example.test")
+	require.Error(t, err, "unverified email aliases cannot sign in")
+	require.NoError(t, ApplyCognitoSeed(ctx, store, seed))
+	again, err := store.LookupUserBySub(ctx, user.Sub)
+	require.NoError(t, err)
+	require.Equal(t, user, again)
+}
+
+func TestApplyCognitoSeed_EmailUsernameKeepsGeneratedIdentity(t *testing.T) {
+	store, _ := newCognitoTestStore(t)
+	seed := &CognitoSeedFile{Pools: []CognitoSeedPool{{ID: "email-seed", Region: "us-east-1", SignIn: &CognitoSeedSignIn{EmailAsUsername: true}, Users: []CognitoSeedUser{{Email: "email@example.test", Password: "SeedPass1!"}}}}}
+	require.NoError(t, ApplyCognitoSeed(t.Context(), store, seed))
+	user, err := store.ResolveSignInUser(t.Context(), "email-seed", "email@example.test")
+	require.NoError(t, err)
+	require.Equal(t, user.Sub, user.Username)
+	require.NoError(t, ApplyCognitoSeed(t.Context(), store, seed))
+	again, err := store.ResolveSignInUser(t.Context(), "email-seed", "email@example.test")
+	require.NoError(t, err)
+	require.Equal(t, user, again)
+}

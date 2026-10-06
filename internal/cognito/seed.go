@@ -1,5 +1,5 @@
 // YAML fixtures bootstrap deterministic pools, app clients and users.
-// Seeding is idempotent; passwords are bcrypt-hashed before storage.
+// Seeding is idempotent; passwords become bcrypt hashes and SRP verifiers.
 package cognito
 
 import (
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 
-	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,9 +22,18 @@ type CognitoSeedFile struct {
 type CognitoSeedPool struct {
 	ID             string              `yaml:"id"`
 	Region         string              `yaml:"region"`
+	SignIn         *CognitoSeedSignIn  `yaml:"sign_in"`
 	PasswordPolicy *PasswordPolicy     `yaml:"password_policy"`
 	Clients        []CognitoSeedClient `yaml:"clients"`
 	Users          []CognitoSeedUser   `yaml:"users"`
+}
+
+// CognitoSeedSignIn makes fixture sign-in rules explicit; omitted case sensitivity
+// defaults to true, matching pools created by the AWS API.
+type CognitoSeedSignIn struct {
+	EmailAsUsername bool  `yaml:"email_as_username"`
+	EmailAlias      bool  `yaml:"email_alias"`
+	CaseSensitive   *bool `yaml:"case_sensitive"`
 }
 
 type CognitoSeedClient struct {
@@ -38,6 +46,8 @@ type CognitoSeedClient struct {
 // pquerna/otp instead of the "any 6 digits" fallback. Useful for tests
 // that exercise real TOTP behaviour deterministically.
 type CognitoSeedUser struct {
+	Username   string            `yaml:"username"`
+	Enabled    *bool             `yaml:"enabled"`
 	Email      string            `yaml:"email"`
 	Password   string            `yaml:"password"`
 	MFAEnabled bool              `yaml:"mfa_enabled"`
@@ -67,8 +77,8 @@ func LoadCognitoSeed(path string) (*CognitoSeedFile, error) {
 			f.Pools[i].Region = "us-east-1"
 		}
 		for j, u := range p.Users {
-			if u.Email == "" {
-				return nil, fmt.Errorf("pool %q user %d: email is required", p.ID, j)
+			if u.Email == "" && u.Username == "" {
+				return nil, fmt.Errorf("pool %q user %d: email is required when username is omitted", p.ID, j)
 			}
 			if u.Password == "" {
 				return nil, fmt.Errorf("pool %q user %q: password is required", p.ID, u.Email)
@@ -79,9 +89,8 @@ func LoadCognitoSeed(path string) (*CognitoSeedFile, error) {
 }
 
 // ApplyCognitoSeed writes the loaded seed into the store. Safe to invoke on
-// every process start — pre-existing rows are updated in place, not
-// duplicated, and the bcrypt hash is recomputed from the plaintext each time
-// so password changes in the YAML take effect on restart.
+// every process start. Existing identities and unchanged lifecycle state are
+// preserved; changed fixture passwords replace both bcrypt and SRP credentials.
 func ApplyCognitoSeed(ctx context.Context, store *CognitoStore, seed *CognitoSeedFile) error {
 	if store == nil {
 		return errors.New("nil cognito store")
@@ -92,6 +101,15 @@ func ApplyCognitoSeed(ctx context.Context, store *CognitoStore, seed *CognitoSee
 	for _, pool := range seed.Pools {
 		if err := store.UpsertPool(ctx, pool.ID, pool.Region); err != nil {
 			return fmt.Errorf("upsert pool %q: %w", pool.ID, err)
+		}
+		if pool.SignIn != nil {
+			configuration := PoolSignInConfig{EmailAsUsername: pool.SignIn.EmailAsUsername, EmailAlias: pool.SignIn.EmailAlias, CaseSensitive: true}
+			if pool.SignIn.CaseSensitive != nil {
+				configuration.CaseSensitive = *pool.SignIn.CaseSensitive
+			}
+			if err := store.SetPoolSignInConfig(ctx, pool.ID, configuration); err != nil {
+				return fmt.Errorf("set sign_in for pool %q: %w", pool.ID, err)
+			}
 		}
 		// Per-pool password policy . JSON-encode for
 		// storage; the password_policy.go loader decodes on demand.
@@ -118,13 +136,14 @@ func ApplyCognitoSeed(ctx context.Context, store *CognitoStore, seed *CognitoSee
 			}
 		}
 		for _, u := range pool.Users {
-			hash, err := bcrypt.GenerateFromPassword([]byte(u.Password), bcrypt.DefaultCost)
-			if err != nil {
-				return fmt.Errorf("hash password for %q: %w", u.Email, err)
-			}
-			sub, err := store.UpsertUser(ctx, pool.ID, u.Email, string(hash), u.MFAEnabled)
+			sub, err := store.UpsertSeedUser(ctx, pool.ID, u.Username, u.Email, u.Password, u.MFAEnabled)
 			if err != nil {
 				return fmt.Errorf("upsert user %q: %w", u.Email, err)
+			}
+			if u.Enabled != nil {
+				if err := store.SetUserEnabled(ctx, sub, *u.Enabled); err != nil {
+					return fmt.Errorf("set enabled for %q: %w", u.Email, err)
+				}
 			}
 			// Per-user TOTP secret . Empty secret is the
 			// default; non-empty enables deterministic TOTP validation.
@@ -133,15 +152,19 @@ func ApplyCognitoSeed(ctx context.Context, store *CognitoStore, seed *CognitoSee
 					return fmt.Errorf("set totp_secret for %q: %w", u.Email, err)
 				}
 			}
-			// `email` and `email_verified` are the only attributes the
-			// platform actually reads . Set them unconditionally
-			// for seeded users — the platform calls AdminCreateUser with
-			// email_verified=true everywhere.
-			if err := store.SetUserAttribute(ctx, sub, "email", u.Email); err != nil {
-				return fmt.Errorf("set email attr for %q: %w", u.Email, err)
-			}
-			if err := store.SetUserAttribute(ctx, sub, "email_verified", "true"); err != nil {
-				return fmt.Errorf("set email_verified attr for %q: %w", u.Email, err)
+			// Legacy email fixtures remain verified by default. Explicit fixture
+			// attributes can override verification without changing the username.
+			if u.Email != "" {
+				if err := store.SetUserAttribute(ctx, sub, "email", u.Email); err != nil {
+					return fmt.Errorf("set email attr for %q: %w", u.Email, err)
+				}
+				verified := "true"
+				if value, exists := u.Attributes["email_verified"]; exists {
+					verified = value
+				}
+				if err := store.SetUserAttribute(ctx, sub, "email_verified", verified); err != nil {
+					return fmt.Errorf("set email_verified for %q: %w", u.Email, err)
+				}
 			}
 			for k, v := range u.Attributes {
 				if err := store.SetUserAttribute(ctx, sub, k, v); err != nil {

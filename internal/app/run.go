@@ -22,12 +22,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func Run() (resultErr error) {
+func Run() error {
 	cfg, err := readConfig(flag.NewFlagSet(os.Args[0], flag.ExitOnError), os.Args[1:])
 	if err != nil {
 		return err
 	}
+	return run(context.Background(), cfg)
+}
 
+func run(ctx context.Context, cfg config) (resultErr error) {
 	// Configure zerolog
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	if cfg.debug {
@@ -72,6 +75,19 @@ func Run() (resultErr error) {
 	}
 	sesManager := ses.NewSESManager(sesFixtures, capture)
 	owned.ses = sesManager
+	projectRoot := cfg.workDir
+	if projectRoot == "" {
+		projectRoot = consumer.FindProjectRoot(".")
+	}
+	triggers, err := loadCognitoTriggers(cfg.cognitoTriggers, projectRoot)
+	if err != nil {
+		return fmt.Errorf("failed to configure Cognito triggers: %w", err)
+	}
+	cognitoOptions := cognito.Options{IssuerBase: cfg.issuerBase, AccessTokenTTL: cfg.accessTokenTTL, RefreshTokenTTL: cfg.refreshTokenTTL}
+	if triggers != nil {
+		owned.triggers = triggers
+		cognitoOptions.Triggers = triggers
+	}
 	jwksURL := cfg.jwksBase
 	if jwksURL == "" {
 		jwksURL = cfg.issuerBase
@@ -81,7 +97,7 @@ func Run() (resultErr error) {
 		Firehose:       firehose.NewHandler(firehoseManager),
 		SSM:            ssm.NewHandler(ssmStore),
 		Secrets:        secrets.NewHandler(secretsStore),
-		Cognito:        cognito.NewHandler(cognitoStore, cognito.Options{IssuerBase: cfg.issuerBase, AccessTokenTTL: cfg.accessTokenTTL, RefreshTokenTTL: cfg.refreshTokenTTL}),
+		Cognito:        cognito.NewHandler(cognitoStore, cognitoOptions),
 		SES:            ses.NewHandler(sesManager),
 		CognitoURLs:    &server.CognitoURLs{Issuer: strings.TrimRight(cfg.issuerBase, "/"), JWKS: strings.TrimRight(jwksURL, "/")},
 		QueryBodyLimit: ses.QueryBodyLimit,
@@ -111,11 +127,6 @@ func Run() (resultErr error) {
 			return fmt.Errorf("failed to load consumer config: %w", err)
 		}
 
-		projectRoot := cfg.workDir
-		if projectRoot == "" {
-			projectRoot = consumer.FindProjectRoot(".")
-		}
-
 		consumerManager = consumer.NewConsumerManager(broker, projectRoot)
 		owned.consumers = consumerManager
 		consumerManager.Start(workerCtx, consumersConfig.Consumers)
@@ -133,5 +144,5 @@ func Run() (resultErr error) {
 
 	shutdown := newEventBusListener(httpServer, owned, 30*time.Second)
 	listenerOwns = true
-	return shutdown.Run(context.Background())
+	return shutdown.Run(ctx)
 }

@@ -4,6 +4,7 @@
 package cognito
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base32"
@@ -53,8 +54,9 @@ type adminUserGlobalSignOutRequest struct {
 }
 
 type revokeTokenRequest struct {
-	Token    string `json:"Token"`
-	ClientID string `json:"ClientId"`
+	Token        string `json:"Token"`
+	ClientID     string `json:"ClientId"`
+	ClientSecret string `json:"ClientSecret"`
 }
 
 // newTOTPSecret returns a 160-bit base32 secret, the size authenticator apps
@@ -246,6 +248,22 @@ func (s *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Token == "" || req.ClientID == "" {
 		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "Token and ClientId are required")
+		return
+	}
+	client, err := s.cognito.LookupClient(r.Context(), req.ClientID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			cognitoJSONError(w, http.StatusBadRequest, "UnauthorizedException", "Invalid client credentials")
+			return
+		}
+		log.Error().Err(err).Msg("RevokeToken client lookup failed")
+		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", "Failed to authorize token revocation")
+		return
+	}
+	// RevokeToken accepts the app-client secret itself, rather than the
+	// username-bound SECRET_HASH used by authentication operations.
+	if !hmac.Equal([]byte(client.Secret), []byte(req.ClientSecret)) {
+		cognitoJSONError(w, http.StatusBadRequest, "UnauthorizedException", "Invalid client credentials")
 		return
 	}
 	claims, err := VerifyRefreshToken(r.Context(), s.cognito, s.issuerBase, req.ClientID, req.Token)

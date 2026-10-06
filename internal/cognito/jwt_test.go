@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"math/big"
 	"testing"
 	"time"
@@ -165,4 +166,57 @@ func TestComputeKid_StableAcrossRuns(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, kid1, kid2)
 	assert.Len(t, kid1, 16)
+}
+
+func TestAuthVersionClaim_LegacyAndStrictIntegerValidation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		claims jwt.MapClaims
+		want   int64
+		valid  bool
+	}{
+		{name: "legacy", claims: jwt.MapClaims{}, valid: true},
+		{name: "zero", claims: jwt.MapClaims{authVersionClaim: float64(0)}, valid: true},
+		{name: "current", claims: jwt.MapClaims{authVersionClaim: float64(4)}, want: 4, valid: true},
+		{name: "json-number", claims: jwt.MapClaims{authVersionClaim: json.Number("9")}, want: 9, valid: true},
+		{name: "negative", claims: jwt.MapClaims{authVersionClaim: float64(-1)}},
+		{name: "fraction", claims: jwt.MapClaims{authVersionClaim: float64(1.5)}},
+		{name: "string", claims: jwt.MapClaims{authVersionClaim: "0"}},
+		{name: "null", claims: jwt.MapClaims{authVersionClaim: nil}},
+		{name: "overflow", claims: jwt.MapClaims{authVersionClaim: math.Exp2(63)}},
+		{name: "nan", claims: jwt.MapClaims{authVersionClaim: math.NaN()}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			version, err := authVersionOf(test.claims)
+			if test.valid {
+				require.NoError(t, err)
+				assert.Equal(t, test.want, version)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestSignIDToken_ReservedClaimsCannotBeOverwrittenByAttributes(t *testing.T) {
+	_, ts, store := newCognitoTestServer(t)
+	user := createAdminAuthUser(t, ts.URL, store, PoolSignInConfig{CaseSensitive: true}, "", true)
+	for name, value := range map[string]string{
+		"iss": "https://foreign.example", "aud": "foreign-client", "token_use": "access",
+		"cognito:username": "someone-else", authVersionClaim: "0",
+	} {
+		require.NoError(t, store.SetUserAttribute(t.Context(), user.Sub, name, value))
+	}
+	grant := newTokenGrant()
+	grant.AuthVersion = user.AuthVersion
+	id, err := SignIDToken(t.Context(), store, "http://localhost:4100", adminAuthPool, adminAuthClient, user, grant, time.Hour)
+	require.NoError(t, err)
+	claims := parseClaimsUnverified(t, id)
+	assert.Equal(t, "http://localhost:4100/"+adminAuthPool, claims["iss"])
+	assert.Equal(t, adminAuthClient, claims["aud"])
+	assert.Equal(t, "id", claims["token_use"])
+	assert.Equal(t, user.Username, claims["cognito:username"])
+	assert.Equal(t, float64(user.AuthVersion), claims[authVersionClaim])
+	_, err = VerifyAccessToken(t.Context(), store, "http://localhost:4100", id)
+	require.Error(t, err)
 }

@@ -60,6 +60,50 @@ func TestChangePassword_ReplacesThePasswordAndKeepsSessions(t *testing.T) {
 		"AuthParameters": map[string]string{"REFRESH_TOKEN": session.refresh},
 	})
 	assert.Equal(t, http.StatusOK, status, "the refresh token from before the change still works: body=%v", body)
+	user, err := store.LookupUserByEmail(t.Context(), factorPool, factorEmail)
+	require.NoError(t, err)
+	assert.Zero(t, user.AuthVersion, "self-service changes preserve grants")
+	assert.NotEmpty(t, user.SRPSalt)
+	assert.NotEmpty(t, user.SRPVerifier, "self-service updates password and SRP credentials together")
+}
+
+func TestChangePassword_LongPasswordUpdatesSRPAndPreservesGrants(t *testing.T) {
+	_, ts, store := newCognitoTestServer(t)
+	user := createAdminAuthUser(t, ts.URL, store, PoolSignInConfig{CaseSensitive: true}, "", true)
+	status, body := adminPasswordAuth(t, ts.URL, authFlowAdminUserPassword, user.Username, "", adminAuthPassword)
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+	result := readAuthResult(t, body)
+	proposed := strings.Repeat("Long2!", 40) // AWS accepts passwords above bcrypt's 72-byte limit.
+	status, body = changePassword(t, ts.URL, result["AccessToken"].(string), ptr(adminAuthPassword), proposed)
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+	updated, err := store.LookupUserBySub(t.Context(), user.Sub)
+	require.NoError(t, err)
+	assert.Equal(t, user.AuthVersion, updated.AuthVersion)
+	assert.NotEqual(t, user.SRPVerifier, updated.SRPVerifier)
+	assert.NotEmpty(t, updated.SRPSalt)
+	require.NoError(t, compareUserPasswordHash(updated.PasswordHash, proposed))
+	assert.Error(t, compareUserPasswordHash(updated.PasswordHash, adminAuthPassword))
+	status, body = adminPasswordAuth(t, ts.URL, authFlowAdminUserPassword, user.Username, "", proposed)
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+	status, body = adminRefreshAuth(t, ts.URL, "AdminInitiateAuth", authFlowRefreshToken, result["RefreshToken"].(string), "")
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+}
+
+func TestChangePassword_UnicodeLengthUsesCharacters(t *testing.T) {
+	_, ts, store := newCognitoTestServer(t)
+	user := createAdminAuthUser(t, ts.URL, store, PoolSignInConfig{CaseSensitive: true}, "", true)
+	status, body := adminPasswordAuth(t, ts.URL, authFlowAdminUserPassword, user.Username, "", adminAuthPassword)
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+	access := readAuthResult(t, body)["AccessToken"].(string)
+	proposed := strings.Repeat("界", 256)
+	status, body = changePassword(t, ts.URL, access, ptr(adminAuthPassword), proposed)
+	require.Equal(t, http.StatusOK, status, "256 characters remain valid above 256 bytes: %v", body)
+	status, body = adminPasswordAuth(t, ts.URL, authFlowAdminUserPassword, user.Username, "", proposed)
+	require.Equal(t, http.StatusOK, status, "body=%v", body)
+	status, body = changePassword(t, ts.URL, access, ptr(proposed), proposed+"界")
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Equal(t, "InvalidParameterException", body["__type"])
+	assert.Contains(t, body["message"], "length less than or equal to 256")
 }
 
 func TestChangePassword_WrongOrMissingPreviousPassword(t *testing.T) {

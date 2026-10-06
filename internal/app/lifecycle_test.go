@@ -42,11 +42,13 @@ func TestEventBusFailedHTTPDrainRetainsSQLite(t *testing.T) {
 		require.NoError(t, <-handlerResult)
 		require.NoError(t, store.Close())
 	}()
-	owned := &eventBusLifecycle{store: store}
+	triggerClosed := false
+	owned := &eventBusLifecycle{store: store, triggers: contextCloseFunc(func(context.Context) error { triggerClosed = true; return nil })}
 	manager := newEventBusListener(server.Config, owned, 40*time.Millisecond)
 	require.ErrorIs(t, manager.Shutdown(context.Background()), errHTTPNotDrained)
 	require.ErrorIs(t, manager.Shutdown(context.Background()), errHTTPNotDrained, "failed drain must remain terminal")
 	require.NoError(t, store.DB().Ping(), "shutdown timeout must not close SQLite underneath a live handler")
+	require.False(t, triggerClosed, "failed HTTP drain must retain the trigger runtime")
 }
 
 func TestEventBusJoinsBackgroundUsersBeforeClosingSQLite(t *testing.T) {
@@ -117,4 +119,66 @@ func TestSESLifecycleClosesCaptureAfterWorkers(t *testing.T) {
 	joined := &eventBusLifecycle{ses: capture, requeueDone: done}
 	require.ErrorContains(t, joined.Close(t.Context()), "close failed")
 	require.True(t, closed)
+}
+
+type contextCloseFunc func(context.Context) error
+
+func (f contextCloseFunc) Close(ctx context.Context) error { return f(ctx) }
+
+func TestTriggerLifecycleJoinsBeforeReleasingStoresAndCapture(t *testing.T) {
+	store, err := cognito.OpenCognitoStore(filepath.Join(t.TempDir(), "cognito.db"))
+	require.NoError(t, err)
+	workerDone := make(chan struct{})
+	entered, release := make(chan struct{}), make(chan struct{})
+	captureClosed := false
+	owned := &eventBusLifecycle{
+		store: store, requeueDone: workerDone,
+		ses: closeFunc(func() error { captureClosed = true; return nil }),
+		triggers: contextCloseFunc(func(ctx context.Context) error {
+			select {
+			case <-workerDone:
+			default:
+				return errors.New("worker not joined")
+			}
+			if err := store.DB().PingContext(ctx); err != nil {
+				return err
+			}
+			close(entered)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}),
+	}
+	close(workerDone)
+	result := make(chan error, 1)
+	go func() { result <- owned.Close(t.Context()) }()
+	<-entered
+	require.NoError(t, store.DB().Ping())
+	require.False(t, captureClosed)
+	close(release)
+	require.NoError(t, <-result)
+	require.Error(t, store.DB().Ping())
+	require.True(t, captureClosed)
+	require.NoError(t, owned.Close(t.Context()))
+}
+
+func TestFailedTriggerJoinRetainsStoresAndCapture(t *testing.T) {
+	store, err := cognito.OpenCognitoStore(filepath.Join(t.TempDir(), "cognito.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	captureClosed := false
+	owned := &eventBusLifecycle{
+		store:    store,
+		ses:      closeFunc(func() error { captureClosed = true; return nil }),
+		triggers: contextCloseFunc(func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }),
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, owned.Close(ctx), context.DeadlineExceeded)
+	require.NoError(t, store.DB().Ping())
+	require.False(t, captureClosed)
+	require.ErrorIs(t, owned.Close(t.Context()), context.DeadlineExceeded, "failed lifetime join must remain terminal")
 }

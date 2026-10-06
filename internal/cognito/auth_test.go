@@ -90,8 +90,10 @@ func TestInitiateAuth_UserPasswordAuth_HappyPath(t *testing.T) {
 	auth := readAuthResult(t, body)
 	access, _ := auth["AccessToken"].(string)
 	refresh, _ := auth["RefreshToken"].(string)
+	id, _ := auth["IdToken"].(string)
 	require.NotEmpty(t, access)
 	require.NotEmpty(t, refresh)
+	require.NotEmpty(t, id)
 	assert.Equal(t, "Bearer", auth["TokenType"])
 	assert.Equal(t, float64(3600), auth["ExpiresIn"], "default access TTL is 1h")
 
@@ -105,6 +107,16 @@ func TestInitiateAuth_UserPasswordAuth_HappyPath(t *testing.T) {
 	assert.Equal(t, "access", accessClaims["token_use"])
 	assert.Equal(t, email, accessClaims["username"])
 	assert.Equal(t, clientID, accessClaims["client_id"])
+	assert.Equal(t, float64(0), accessClaims[authVersionClaim])
+	idClaims := parseClaimsUnverified(t, id)
+	assert.Equal(t, sub, idClaims["sub"])
+	assert.Equal(t, email, idClaims["email"])
+	assert.Equal(t, true, idClaims["email_verified"])
+	assert.Equal(t, email, idClaims["cognito:username"])
+	assert.Equal(t, clientID, idClaims["aud"])
+	assert.Equal(t, "id", idClaims["token_use"])
+	assert.Equal(t, accessClaims["auth_time"], idClaims["auth_time"])
+	assert.Equal(t, accessClaims["origin_jti"], idClaims["origin_jti"])
 	require.Contains(t, accessClaims, "iat")
 	require.Contains(t, accessClaims, "exp")
 	require.Contains(t, accessClaims, "auth_time")
@@ -365,6 +377,10 @@ func TestInitiateAuth_RefreshTokenAuth_HappyPath(t *testing.T) {
 	assert.Greater(t, newExp, originalExp, "new access exp must be later than original")
 	assert.Equal(t, "access", newClaims["token_use"])
 	assert.Equal(t, email, newClaims["email"], "refresh path must look up user → email for new access")
+	idClaims := parseClaimsUnverified(t, refreshAuth["IdToken"].(string))
+	assert.Equal(t, "id", idClaims["token_use"])
+	assert.Equal(t, originalAccessClaims["auth_time"], idClaims["auth_time"])
+	assert.Equal(t, originalAccessClaims["origin_jti"], idClaims["origin_jti"])
 }
 
 // TestInitiateAuth_RefreshTokenAuth_DoesNotRotate verifies that the
@@ -502,9 +518,8 @@ func TestInitiateAuth_RefreshTokenAuth_MissingClientId(t *testing.T) {
 	assert.Equal(t, "ResourceNotFoundException", body["__type"])
 }
 
-// TestInitiateAuth_BadAuthFlow ensures unsupported flows fail loudly. The
-// dev service deliberately does NOT support USER_SRP_AUTH (§3h); routing
-// ADMIN_NO_SRP_AUTH through the public endpoint is also wrong.
+// Unsupported flows, admin-only entry points and missing SRP parameters use
+// the same AWS InvalidParameterException envelope.
 func TestInitiateAuth_BadAuthFlow(t *testing.T) {
 	_, ts, store := newCognitoTestServer(t)
 	require.NoError(t, store.UpsertPool(t.Context(), "local-pool-1", "us-east-1"))
