@@ -11,7 +11,8 @@ LocalStack or native backends. Apps own their scenarios and assertions.
 
 ## Start
 
-Build with Go 1.25 or newer. Run in the foreground on an unused port:
+Download a checksummed binary from [v0.2.0](https://github.com/lyeith/eventbus/releases/tag/v0.2.0),
+or build with Go 1.25 or newer. Run in the foreground on an unused port:
 
 ```sh
 go build -o eventbus .
