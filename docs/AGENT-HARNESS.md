@@ -33,14 +33,14 @@ for client and container addressing.
    `us-east-1`. Keep S3 and DynamoDB endpoints separate.
 2. Provision topics, queues, subscriptions, streams, parameters and secrets
    through supported SDK operations, using application-owned names.
-3. For deterministic login, copy [cognito_pools.example.yaml](../cognito_pools.example.yaml)
+3. For deterministic login, copy [cognito_pools.yaml](../examples/cognito_pools.yaml)
    into the app and pass `--cognito-pools /path/to/app/cognito_pools.yaml`.
    Reapplying preserves user IDs and updates mutable fields.
 4. Configure JWT validation with issuer `<issuer-base>/<pool-id>` and JWKS
    `<jwks-base>/<pool-id>/.well-known/jwks.json`. `/health` reports the base URLs;
    append the pool ID. `--jwks-base` defaults to `--issuer-base`.
 5. For stored SES templates or strict identity checks, copy
-   [ses.example.yaml](../ses.example.yaml) and pass `--ses-config <path>`.
+   [ses.yaml](../examples/ses.yaml) and pass `--ses-config <path>`.
    Management APIs do not create these resources yet.
 
 An SDK endpoint override changes where real SDK requests go. Use the

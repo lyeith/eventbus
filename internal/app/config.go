@@ -1,0 +1,71 @@
+package app
+
+import (
+	"flag"
+	"time"
+)
+
+type config struct {
+	port            int
+	region          string
+	accountID       string
+	s3Endpoint      string
+	consumersFile   string
+	workDir         string
+	issuerBase      string
+	jwksBase        string
+	cognitoPools    string
+	cognitoDB       string
+	accessTokenTTL  time.Duration
+	refreshTokenTTL time.Duration
+	sesLog          string
+	sesConfig       string
+	debug           bool
+}
+
+// readConfig accepts an owned FlagSet so CLI parsing does not mutate Go's
+// process-global flags. The CLI uses ExitOnError to preserve exit behavior.
+func readConfig(flags *flag.FlagSet, args []string) (config, error) {
+	port := flags.Int("port", 4100, "Port to listen on")
+	region := flags.String("region", "us-east-1", "AWS region")
+	accountID := flags.String("account-id", "000000000000", "AWS account ID")
+	s3Endpoint := flags.String("s3-endpoint", "http://localhost:9000", "S3 endpoint for Firehose flush (RustFS)")
+	consumersFile := flags.String("consumers", "", "Path to consumers.yaml (enables Lambda pollers)")
+	workDir := flags.String("work-dir", "", "Project root for uv run (auto-detected if empty)")
+	// Cognito dev service flags. The `iss` claim emitted in tokens is
+	// `<issuer-base>/<pool-id>`; JWKS is served at
+	// `<jwks-base>/<pool-id>/.well-known/jwks.json`. Both default to the
+	// same value so plain local works without flags.
+	issuerBase := flags.String("issuer-base", "http://localhost:4100", "Base URL for Cognito 'iss' claim and JWKS path")
+	jwksBase := flags.String("jwks-base", "", "Base URL for JWKS endpoints (defaults to --issuer-base)")
+	cognitoPools := flags.String("cognito-pools", "", "Path to cognito_pools.yaml (optional seed file)")
+	cognitoDB := flags.String("cognito-db", "/tmp/cognito-dev.db", "SQLite path for the local Cognito dev store")
+	// Token TTLs default to 1h access / 24h refresh; refresh authentication
+	// preserves the original refresh token.
+	accessTokenTTL := flags.Duration("access-token-ttl", time.Hour, "TTL for issued access tokens (e.g. 1h, 30m)")
+	refreshTokenTTL := flags.Duration("refresh-token-ttl", 24*time.Hour, "TTL for issued refresh tokens (e.g. 24h, 7d)")
+	sesLog := flags.String("ses-log", "-", "SES JSON Lines capture path ('-' for stdout; no email delivery)")
+	sesConfig := flags.String("ses-config", "", "Optional SES sending fixtures (templates, identities, configuration sets, received messages)")
+	debug := flags.Bool("debug", false, "Enable debug logging")
+
+	if err := flags.Parse(args); err != nil {
+		return config{}, err
+	}
+	return config{
+		port:            *port,
+		region:          *region,
+		accountID:       *accountID,
+		s3Endpoint:      *s3Endpoint,
+		consumersFile:   *consumersFile,
+		workDir:         *workDir,
+		issuerBase:      *issuerBase,
+		jwksBase:        *jwksBase,
+		cognitoPools:    *cognitoPools,
+		cognitoDB:       *cognitoDB,
+		accessTokenTTL:  *accessTokenTTL,
+		refreshTokenTTL: *refreshTokenTTL,
+		sesLog:          *sesLog,
+		sesConfig:       *sesConfig,
+		debug:           *debug,
+	}, nil
+}

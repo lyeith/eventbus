@@ -54,7 +54,7 @@ A capture shows API acceptance, not delivery.
 
 ## Fixtures and limits
 
-Pass `--ses-config <path>` using [ses.example.yaml](../ses.example.yaml).
+Pass `--ses-config <path>` using [ses.yaml](../examples/ses.yaml).
 It supplies stored/custom verification templates, configuration sets, verified
 identities and original received messages for bounce requests. These immutable
 fixtures replace sending prerequisites while [management APIs remain backlogged](BACKLOG.md).
@@ -75,5 +75,5 @@ Handlebars and unavailable variables produce `capture_rendering_error` while
 preserving API acceptance and original input. SMTP capture is separate.
 
 [SDK tests](../tests/README.md) verify all nine operations against
-[pinned official AWS models](../tests/aws_models/README.md), including current
+[pinned official AWS models](../tests/sdk/aws_models/README.md), including current
 optional fields, binary round trips, partial bulk results and error envelopes.

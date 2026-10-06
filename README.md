@@ -28,7 +28,8 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Agent workflow](docs/AGENT-HARNESS.md): configure the app, seed resources,
   run consumers, inspect results and manage state.
 - [SES capture](docs/SES.md): sending operations, fixtures and JSONL contract.
-- [SDK verification](tests/README.md): isolated compatibility tests.
+- [Architecture](docs/ARCHITECTURE.md): package ownership, seams and test placement.
+- [Verification](tests/README.md): unit, SDK and native S3 test lanes.
 - [Backlog](docs/BACKLOG.md): deferred SES operations.
 
 ## Supported behavior
@@ -62,7 +63,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 uv sync --frozen
-uv run --frozen python -m unittest discover -s tests -p 'test_*.py'
+uv run --frozen python -m unittest discover -s tests/sdk/python -p 'test_*.py'
 EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -tags sdksmoke ./...
 ```
 
@@ -71,7 +72,7 @@ the consuming application. The optional Firehose integration suite needs an
 explicitly owned loopback RustFS endpoint:
 
 ```sh
-S3_ENDPOINT_URL=http://localhost:9000 go test -race -tags integration ./...
+S3_ENDPOINT_URL=http://localhost:9000 go test -race -tags integration ./internal/firehose
 ```
 
 It creates and deletes a uniquely named bucket. Do not use an unrelated store.
@@ -91,4 +92,4 @@ Historical source: extracted from Plans commit `c4bf5de1a257022b8b985d91f93b1c68
 
 [MIT](LICENSE), copyright 2026 David Wong. Third-party dependencies retain their
 own licenses. The reduced AWS model fixtures retain their Apache-2.0 license,
-notices and [attribution](tests/aws_models/README.md).
+notices and [attribution](tests/sdk/aws_models/README.md).

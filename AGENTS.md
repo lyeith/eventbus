@@ -13,9 +13,12 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
   Apps own SDK configuration, seeds, resource names, provisioning and consumers.
 - Preserve supported AWS wire behavior and startup flags. The README lists
   coverage and limits; source and tests are authoritative.
-- `server.go` dispatches APIs. Service handlers own AWS operations;
-  `ses_v1.go` and `ses_v2.go` own SES protocol adapters.
-  `ses.go` owns fixtures/capture; `ses_message.go` owns shared MIME validation.
+- [Architecture](docs/ARCHITECTURE.md) maps package ownership and test placement.
+  `internal/app` constructs and closes resources; `internal/server` only routes
+  through consumer-owned interfaces. Service packages own stores and operations.
+- `internal/messaging` owns shared SNS/SQS state; `internal/consumer` owns process
+  execution and settlement through its QueueBroker port. Keep queue state private.
+- `internal/ses` owns fixtures, capture, MIME and both sending adapters.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.
 - Do not reset a developer identity database or interrupt an application stack.
@@ -25,7 +28,7 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
 
 Run scoped Go tests, then race/vet checks appropriate to the change.
 [README](README.md#verify-and-build-releases) lists commands;
-[SDK verification](tests/README.md) explains the frozen Python lane.
+[SDK verification](tests/sdk/README.md) explains the frozen Python lane.
 The opt-in Firehose integration suite requires an explicitly owned loopback
 RustFS endpoint.
 

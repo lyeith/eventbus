@@ -1,29 +1,37 @@
 # EventBus state
 
-- Public repository: https://github.com/lyeith/eventbus.
-- Branch: main; SES implementation committed as 6602261.
-- License: MIT, copyright 2026 David Wong; GitHub recognizes the license.
-- SES, standalone agent documentation and MIT licensing are committed/pushed.
-- No new binary release. v0.1.0 binaries predate SES; consumer pins are unchanged.
-- No task-owned emulator or test process remains running.
+- Public repository: https://github.com/lyeith/eventbus; MIT, David Wong, 2026.
+- Canonical source: /home/spite/Projects/eventbus on SSD, branch main.
+- Organization complete on main; Git records its revision and publication.
+- No new binary release; v0.1.0 binaries predate SES.
+- No task-owned runtime, test process, virtualenv or CLI artifact remains.
 
-SES supports the six v1 and three v2 sending operations. Captures are synchronous
-JSONL, to stdout by default or an append-only file selected by --ses-log.
---ses-config provides sending prerequisites while management APIs remain
-low-priority backlog work. Email is never delivered.
+EventBus is a standalone AWS emulator and agent development harness, supplementing
+LocalStack and other local AWS stacks. Applications own scenarios and assertions.
 
-Verification completed: focused SES unit/SDK tests, full Go suite and real SDK
-smoke under race, vet, Python fixture contracts, executable startup/shutdown,
-live file/stdout capture and restart append.
+The former root package is separated by ownership:
+- internal/app: configuration, construction, listener and resource lifetime.
+- internal/server: protocol selection, health and consumer-owned HTTP ports.
+- internal/awsprotocol: shared JSON/XML envelopes and request IDs.
+- internal/cognito, messaging, ses, firehose, ssm and secrets: service-owned state
+  and HTTP adapters. SNS/SQS share one broker; queue collections are private.
+- internal/consumer: harness configuration, polling/settlement and processes,
+  using its QueueBroker port.
+- Unit/service tests are colocated; tests/sdk owns Python SDK/JWT proofs/models.
+- examples owns seed and SES fixture samples.
 
-The capture template renderer supports simple substitutions. Rich Handlebars
-is retained with a capture rendering error. Structured-message size accounting
-uses deterministic MIME and does not reproduce AWS's private assembler.
+Supported AWS behavior, CLI flags, root go build . and SES capture contracts
+remain intact. SES supports all six v1 and three v2 sending operations, using
+synchronous JSONL capture. Management APIs remain low-priority backlog work.
 
-EventBus is standalone, supplementing LocalStack and other local AWS stacks.
-README and AGENTS make the verification/evaluation purpose explicit.
-docs/AGENT-HARNESS.md gives the app workflow; docs/SES.md owns capture details.
-Documentation links and consumer/auth instructions were checked against source.
+Verified 2026-10-06: full Go race suite with real SDK lane, tagged vet, five
+Python contracts, routing/health/fallback checks, native CLI build and
+startup/fixtures/JWKS/v1-v2 capture/SIGTERM, integration-tag compilation.
+RustFS integration execution and LocalStack coexistence were not exercised.
 
-Next: publish an SES-capable binary release when requested, or continue the
-low-priority SES backlog. LocalStack coexistence is not integration-tested.
+docs/ARCHITECTURE.md maps seams and test placement; README, AGENTS, examples,
+SDK paths, attribution links and manual CI discovery match the new layout.
+No dependencies or lockfiles changed.
+
+Next: publish an
+SES-capable binary release when requested; other SES operations remain backlogged.

@@ -1,44 +1,46 @@
 # Handoff
 
-SES sending is committed as 6602261 in the standalone emulator. The repository
-is public at https://github.com/lyeith/eventbus with the MIT license (2a1fb18),
-recognized by GitHub. No new binary release; v0.1.0 binaries predate SES.
+EventBus organization is implemented in the canonical SSD checkout on main.
+The organization work is complete. The public repository and
+MIT license remain as previously published. No release was produced.
 
-- V1: SendEmail, SendRawEmail, SendTemplatedEmail, SendBulkTemplatedEmail,
-  SendCustomVerificationEmail and SendBounce.
-- V2: SendEmail (Simple/Raw/Template), SendBulkEmail and
-  SendCustomVerificationEmail.
-- Capture: schema-versioned JSONL with original request, normalized emails,
-  request/message IDs and ordered API outcomes. Binary fields stay base64.
-- Successful file capture is appended and synced before returning success.
-  Writer failure is terminal; HTTP drain precedes capture closure.
-- Current optional fields are preserved. Fixtures provide templates,
-  configuration sets, identities and original messages for bounce testing.
-- Other SES APIs are low priority in docs/BACKLOG.md. Rich template rendering
-  and SMTP remain separate follow-ups.
+The root now contains only a thin main.go entrypoint. internal/app owns CLI
+configuration, construction, workers and HTTP/resource shutdown. The router in
+internal/server imports no services or stores; handlers satisfy its HTTP ports.
+internal/awsprotocol owns generic wire helpers formerly embedded in SQS.
+
+Services own state and adapters in internal/cognito, messaging, ses, firehose,
+ssm and secrets. Large Cognito/SES files split by purpose. Cognito tests still
+exercise real SQLite and JWT/JWKS. SNS/SQS share one broker; queue collections
+are private. Consumers are separate under internal/consumer, with configuration,
+manager and process files and a consumer-owned QueueBroker port.
+
+Tests follow their owner. Cross-resource shutdown tests live in app; router
+proofs compose real service handlers. Service HTTP fixtures run only that
+service. Firehose unit tests use owned HTTP sinks instead of localhost:9000.
+Secrets owns region/account configuration for ARN construction.
+
+tests/sdk now owns the tagged boto3/JWT proofs, shared process runner, Python
+scripts and pinned AWS models with unchanged Apache license/NOTICE. Fixture
+paths derive from the Go source directory. CI discovers Python contracts from
+tests/sdk/python. Example YAML moved to examples.
 
 Verified on SSD, 2026-10-06:
-- Focused SES race/SDK lane: 30 captured requests, all nine operations.
-- Full Go/race/SDK regression lane: passed, 71.366s.
+- go test -race -count=1 -tags sdksmoke ./...: passed all packages.
 - go vet -tags sdksmoke ./...: passed.
-- Python smoke contracts: 5 tests passed.
-- Native binary proof: v1/v2 live capture, restart append, stdout default,
-  SIGTERM shutdown and incomplete-file startup refusal passed.
-- git diff --check: passed.
+- Python fixture contracts: 5 passed.
+- Focused composed router/health/fallback/optional-service checks: passed.
+- integration-tag Firehose compilation: passed; no native endpoint was used.
+- Root CLI build plus help/invalid-flag exit, example fixture startup, trimmed
+  health URLs, JWKS, live SES v1/v2 capture and SIGTERM shutdown: passed.
+- git diff --check: passed. No dependency/lockfile changes.
+- Read-only extraction review found no lost operations/tests or wire changes;
+  all local documentation links resolve.
 
-Test logs are /tmp/eventbus-ses-*-20261006.log under existing 24-hour retention.
-SDK models are pinned, reduced official botocore fixtures with license/notice.
-Local SDK tests select SigV4 so EndpointId probes need no AWS CRT dependency.
-No dependencies or lockfiles changed. Publication review found no secrets,
-private runtime data or live app configuration; AWS fixture notices are retained.
+Logs: /tmp/eventbus-reorg-*-20261006.log, existing 24-hour retention.
+Temporary .venv, Python bytecode, CLI probe binary and probe data were removed;
+no owned processes remain. Plans' running stack and release pin were untouched.
 
-Documentation has a short README, a dedicated agent workflow and an SES
-record reference. A fresh-agent static review checked SDK/auth setup, consumers,
-capture parsing and shutdown; corrections explain DLQ provisioning, explicit
-consumer environment and debug diagnostics. Local links were verified.
-Positioning explicitly states standalone LocalStack supplementation and agent
-verification/evaluation. Service routing and event-pipeline ownership are
-documented; coexistence was reviewed statically, not exercised against LocalStack.
-
-The task's temporary virtualenv, probes and CLI binary have been removed.
-Plans' running stack and v0.1.0 pin were left unchanged.
+docs/ARCHITECTURE.md explains ownership/import direction and test placement.
+README, AGENTS, SDK guide, fixture/model links and workflow match the layout.
+Follow-up scope remains SES management/rich rendering and a new binary release.
