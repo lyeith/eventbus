@@ -25,6 +25,7 @@ type eventBusLifecycle struct {
 	firehose     *firehose.FirehoseManager
 	ses          io.Closer
 	triggers     contextCloser
+	functions    contextCloser
 	consumers    *consumer.ConsumerManager
 	cancel       context.CancelFunc
 	requeueDone  <-chan struct{}
@@ -67,6 +68,11 @@ func (owned *eventBusLifecycle) close(ctx context.Context) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("resource cleanup not started: %w", err)
+	}
+	if owned.functions != nil {
+		if err := owned.functions.Close(ctx); err != nil {
+			return fmt.Errorf("join Lambda functions; stores retained: %w", err)
+		}
 	}
 	if owned.triggers != nil {
 		if err := owned.triggers.Close(ctx); err != nil {

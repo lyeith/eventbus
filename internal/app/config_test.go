@@ -22,12 +22,13 @@ func TestCLIConfigDefaultsAndOverrides(t *testing.T) {
 			require.Equal(t, "http://localhost:4100", c.issuerBase)
 			require.Empty(t, c.jwksBase)
 			require.Empty(t, c.cognitoTriggers)
+			require.Empty(t, c.lambdaFunctions)
 			require.Equal(t, "/tmp/cognito-dev.db", c.cognitoDB)
 			require.Equal(t, time.Hour, c.accessTokenTTL)
 			require.Equal(t, 24*time.Hour, c.refreshTokenTTL)
 			require.Equal(t, "-", c.sesLog)
 		}},
-		{"overrides", []string{"--port", "14100", "--region", "local-1", "--account-id", "123", "--s3-endpoint", "http://127.0.0.1:9001", "--consumers", "app/consumers.yaml", "--work-dir", "app", "--issuer-base", "http://issuer", "--jwks-base", "http://keys", "--cognito-pools", "pools.yaml", "--cognito-triggers", "auth/triggers.yaml", "--cognito-db", "identities.db", "--access-token-ttl", "30m", "--refresh-token-ttl", "48h", "--ses-log", "emails.jsonl", "--ses-config", "ses.yaml", "--debug"}, func(t *testing.T, c config) {
+		{"overrides", []string{"--port", "14100", "--region", "local-1", "--account-id", "123", "--s3-endpoint", "http://127.0.0.1:9001", "--consumers", "app/consumers.yaml", "--work-dir", "app", "--issuer-base", "http://issuer", "--jwks-base", "http://keys", "--cognito-pools", "pools.yaml", "--cognito-triggers", "auth/triggers.yaml", "--lambda-functions", "functions.yaml", "--cognito-db", "identities.db", "--access-token-ttl", "30m", "--refresh-token-ttl", "48h", "--ses-log", "emails.jsonl", "--ses-config", "ses.yaml", "--debug"}, func(t *testing.T, c config) {
 			require.Equal(t, 14100, c.port)
 			require.Equal(t, "local-1", c.region)
 			require.Equal(t, "123", c.accountID)
@@ -38,6 +39,7 @@ func TestCLIConfigDefaultsAndOverrides(t *testing.T) {
 			require.Equal(t, "http://keys", c.jwksBase)
 			require.Equal(t, "pools.yaml", c.cognitoPools)
 			require.Equal(t, "auth/triggers.yaml", c.cognitoTriggers)
+			require.Equal(t, "functions.yaml", c.lambdaFunctions)
 			require.Equal(t, "identities.db", c.cognitoDB)
 			require.Equal(t, 30*time.Minute, c.accessTokenTTL)
 			require.Equal(t, 48*time.Hour, c.refreshTokenTTL)

@@ -11,7 +11,7 @@ LocalStack or native backends. Apps own their scenarios and assertions.
 
 ## Start
 
-Download a checksummed binary from [v0.2.0](https://github.com/lyeith/eventbus/releases/tag/v0.2.0),
+Download a checksummed binary from [v0.3.0](https://github.com/lyeith/eventbus/releases/tag/v0.3.0),
 or build with Go 1.25 or newer. Run in the foreground on an unused port:
 
 ```sh
@@ -29,6 +29,8 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Agent workflow](docs/AGENT-HARNESS.md): configure the app, seed resources,
   run consumers, inspect results and manage state.
 - [Cognito contracts](docs/COGNITO.md): lifecycle, SRP, custom triggers and persistence.
+- [API gateway](docs/GATEWAY.md): REQUEST authorizers, HTTP proxy routing and mappings.
+- [Lambda execution](docs/LAMBDA.md): application-owned Go, Python and Node handlers.
 - [SES capture](docs/SES.md): sending operations, fixtures and JSONL contract.
 - [Architecture](docs/ARCHITECTURE.md): package ownership, seams and test placement.
 - [Verification](tests/README.md): unit, SDK and native S3 test lanes.
@@ -41,6 +43,8 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 | Cognito | Pools, clients and user lifecycle; password/admin/refresh/SRP auth, application-owned Node custom challenges, TOTP, signed JWT/JWKS and revocation. [Operation coverage](docs/COGNITO.md). |
 | SNS | Topics, SQS subscriptions, attribute filters, publish and listing. |
 | SQS | Queues, URL/attributes, receive, visibility, long polling, deletion and purge. Messages arrive through SNS; direct `SendMessage` is unsupported. |
+| API gateway | Separate `eventbus-gateway` executable; REST REQUEST authorizers, IAM responses and HTTP proxy integrations. [Contracts](docs/GATEWAY.md). |
+| Lambda | Synchronous Invoke for application-owned Go/custom runtimes, Python, Node and command handlers. [Execution](docs/LAMBDA.md). |
 | Consumers | Go binaries or Python handlers receive Lambda-style SQS events, with timeouts, partial batch retry and dead-letter queues. |
 | SES | All six v1 and three v2 sending operations, captured as JSONL without delivery. Management APIs are backlogged. |
 | Firehose | Streams and buffered record/batch delivery to a separately configured S3-compatible endpoint. |
@@ -81,8 +85,8 @@ S3_ENDPOINT_URL=http://localhost:9000 go test -race -tags integration ./internal
 
 It creates and deletes a uniquely named bucket. Do not use an unrelated store.
 
-`scripts/build-release.sh` produces CGO-free Linux/macOS binaries for
-amd64/arm64 and `SHA256SUMS` in `dist/`; an optional argument selects another
+`scripts/build-release.sh` produces CGO-free EventBus and gateway binaries for
+Linux/macOS amd64/arm64 and `SHA256SUMS` in `dist/`; an optional argument selects another
 output directory. Building does not publish. GitHub checks run manually through
 `workflow_dispatch`; run local checks before a release.
 

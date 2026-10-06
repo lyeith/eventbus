@@ -12,12 +12,14 @@ for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   target_arch=${target#*-}
   CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
     go build -trimpath -ldflags='-s -w' -o "$output_dir/eventbus-$target" .
+  CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
+    go build -trimpath -ldflags='-s -w' -o "$output_dir/eventbus-gateway-$target" ./cmd/gateway
 done
 
 cd -- "$output_dir"
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum eventbus-linux-amd64 eventbus-linux-arm64 eventbus-darwin-amd64 eventbus-darwin-arm64 > SHA256SUMS
+  sha256sum eventbus-linux-amd64 eventbus-linux-arm64 eventbus-darwin-amd64 eventbus-darwin-arm64 eventbus-gateway-linux-amd64 eventbus-gateway-linux-arm64 eventbus-gateway-darwin-amd64 eventbus-gateway-darwin-arm64 > SHA256SUMS
 else
-  shasum -a 256 eventbus-linux-amd64 eventbus-linux-arm64 eventbus-darwin-amd64 eventbus-darwin-arm64 > SHA256SUMS
+  shasum -a 256 eventbus-linux-amd64 eventbus-linux-arm64 eventbus-darwin-amd64 eventbus-darwin-arm64 eventbus-gateway-linux-amd64 eventbus-gateway-linux-arm64 eventbus-gateway-darwin-amd64 eventbus-gateway-darwin-arm64 > SHA256SUMS
 fi
 printf 'Built EventBus release artifacts in %s\n' "$output_dir"

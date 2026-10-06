@@ -1,0 +1,16 @@
+# Run EventBus from the repository root with --lambda-functions this file.
+# Build the Go example first; omit its entry when only testing Node/Python.
+functions:
+  node-authorizer:
+    runtime: node
+    handler: examples/lambda/node-authorizer.mjs.handler
+    timeout: 5s
+  python-authorizer:
+    runtime: python
+    command: [uv, run, --no-project, python]
+    handler: examples/lambda/python_authorizer.py.handler
+    timeout: 5s
+  go-authorizer:
+    runtime: provided
+    command: [/tmp/eventbus-example-authorizer]
+    timeout: 5s

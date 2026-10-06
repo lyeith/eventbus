@@ -1,47 +1,32 @@
 # Handoff
 
-Issue #1 is complete on public main; implementation commit 1df3ee8.
-v0.2.0 is published with four CGO-free binaries and SHA256SUMS:
-https://github.com/lyeith/eventbus/releases/tag/v0.2.0
-The tag points to the implementation commit. Uploaded sizes and SHA-256 hashes
-for all five assets match the locally verified release artifacts.
+Generic API gateway and multi-language Lambda authorizer execution are implemented.
+EventBus owns the reusable gateway and execution; Plans retains Trust, authorizer
+policy, private backend paths, route configuration and OpenAPI/AppGraph ownership.
 
-Cognito owns separate Username/email/sub, lifecycle and paginated email lookup,
-policy/client settings, admin password/refresh, real SRP and persisted challenges.
-Password proof, exact account revisions, one-use sessions and enrolled real
-TOTP protect custom auth. Temporary passwords require replacement; Define is
-invoked at that transition before custom policy continues.
-Signed access and ID tokens preserve canonical identity and protected claims.
+cmd/gateway is a separate executable. Its boundary is AWS REST REQUEST events,
+IAM policy responses and synchronous Lambda Invoke. Unsupported policy semantics
+fail closed; authorizer context is an opaque scalar mapping, never client output.
+Authorizer TTL defaults to AWS 300 seconds; Plans explicitly sets zero.
 
-Generic Node execution is separate under cognitotrigger. App supplies it through
-Cognito's TriggerInvoker port using --cognito-triggers and --work-dir.
-It executes app-owned ESM/CJS Define/Create/Verify handlers with typed failures,
-bounded events/results, deadlines, isolated environment and joined child cleanup.
-No Node prerequisite exists when triggers are unconfigured.
+internal/lambda supports provided Go/custom Runtime API, Python sync handlers,
+Node ESM/CJS async/callback handlers and JSON command adapters. Outputs/logs are
+separate and bounded. Declared environment avoids inheriting host credentials;
+process groups and runtime listeners close/join on success, timeout or shutdown.
+app injects the optional service into the dispatcher and closes after HTTP drain.
 
-Migration and seed reapplication preserve identities, signing keys and lifecycle.
-Plaintext seed or password setup backfills legacy SRP credentials; bcrypt alone
-cannot supply a verifier. No developer stack/database was touched.
+Verification on SSD:
+- Affected gateway/lambda/app/server race aggregate passed.
+- Final Lambda races and partial-ARN/Runtime API contract tests passed.
+- Scoped gateway/Lambda/app/server/CLI/example vet passed.
+- Plans' tagged authorizer races/vet passed, including actual gateway binary,
+  shipped-route fixture, real JWT validation and 15 auth/binding/privacy cases.
+- Oversized result blocking, child-output inheritance and endpoint mapping
+  regressions found during review are corrected and covered.
 
-Verified on SSD, 2026-10-06:
-- go test -race -count=1 -timeout=15m ./...: all packages passed.
-- go vet -tags sdksmoke,integration ./...: passed.
-- Python fixture contracts: 5 passed.
-- SDK race: both isolated JS lifecycle/custom/restart/error scenarios, Python
-  auth/client and SES scenarios passed. The sole old forced-email-verification
-  assertion was corrected; its Python SDK subtest then passed with race.
-- Native Linux amd64 release CLI: lifecycle, real Node SRP/email handlers, SES
-  capture, pending challenge/refresh restart, SIGTERM and child cleanup passed,
-  including the final clean-commit binary.
-- Four platform builds, local checksums and uploaded asset hashes passed.
-- Full scoped review findings resolved; local Markdown links/diff checks passed.
-
-Other release targets were cross-built. Live RustFS and actual consuming-app
-handlers were not exercised. Applications own scenarios and handler policy.
-docs/COGNITO.md, CUSTOM-TRIGGERS.md and SDK guide document supported contracts.
-
-Cleanup complete: task .venv, node_modules/npm cache, bytecode, native probe
-resources/scripts, release outputs and merged task branch removed.
-No owned processes remain. Receipts /tmp/eventbus-issue1-*.log, release metadata
-and failed managed test runs expire under the existing 24-hour policy.
-Separate follow-up: direct SQS sending and low-priority SES management/rendering.
+Before publishing v0.3.0: actual Plans aws-lambda-go binary + frozen Python SDK
+proof, clean four-platform EventBus/gateway builds, SHA256SUMS and Plans pin.
+No dependencies added; API management, async and warm runtimes are separate scope.
+No developer identities or application state reset; tests own their fixtures.
+Native proof binary is temporarily retained for acceptance; /tmp receipts expire
+under the existing 24-hour policy. Final useful implementation is canonical SSD.

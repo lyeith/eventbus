@@ -11,6 +11,7 @@ type config struct {
 	accountID       string
 	s3Endpoint      string
 	consumersFile   string
+	lambdaFunctions string
 	workDir         string
 	issuerBase      string
 	jwksBase        string
@@ -31,6 +32,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	region := flags.String("region", "us-east-1", "AWS region")
 	accountID := flags.String("account-id", "000000000000", "AWS account ID")
 	s3Endpoint := flags.String("s3-endpoint", "http://localhost:9000", "S3 endpoint for Firehose flush (RustFS)")
+	lambdaFunctions := flags.String("lambda-functions", "", "Application-owned Lambda functions YAML (Go/provided, Python, Node or command handlers)")
 	consumersFile := flags.String("consumers", "", "Path to consumers.yaml (enables Lambda pollers)")
 	workDir := flags.String("work-dir", "", "Application root for consumer and trigger handlers (auto-detected if empty)")
 	// Cognito dev service flags. The `iss` claim emitted in tokens is
@@ -59,6 +61,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		accountID:       *accountID,
 		s3Endpoint:      *s3Endpoint,
 		consumersFile:   *consumersFile,
+		lambdaFunctions: *lambdaFunctions,
 		workDir:         *workDir,
 		issuerBase:      *issuerBase,
 		jwksBase:        *jwksBase,

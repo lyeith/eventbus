@@ -1,40 +1,34 @@
 # EventBus state
 
-- Public repository: https://github.com/lyeith/eventbus; MIT, David Wong, 2026.
-- Canonical source: /home/spite/Projects/eventbus on SSD, branch main.
-- Issue #1 is completed and closed; implementation commit 1df3ee8.
-- Published release: https://github.com/lyeith/eventbus/releases/tag/v0.2.0
-- Tag v0.2.0 points to 1df3ee8; all five uploaded sizes/hashes were verified.
-- No task-owned runtime, environment, dependency cache or build artifact remains.
+Canonical source: /home/spite/Projects/eventbus on SSD; branch main.
+Public repository: https://github.com/lyeith/eventbus; MIT, David Wong, 2026.
+Current work: extract the generic API gateway and support multi-language authorizers.
 
-EventBus is a standalone AWS emulator and agent development harness that
-supplements LocalStack. Applications own scenarios, assertions and handlers.
+The AWS service CLI now accepts --lambda-functions and --work-dir. Registered
+Go/custom runtime binaries use Lambda Runtime API; Python and Node use standard
+handler events/context. Invoke supports RequestResponse and DryRun, raw JSON,
+function errors and bounded Tail logs. Environment is explicitly declared.
+Each invocation is cold; process groups stop/join on completion, timeout or close.
 
-Cognito separates Username/email/sub and supports the required lifecycle,
-listing, temporary/permanent password, admin password/refresh and SRP flows.
-Custom authentication executes configured application-owned Node handlers,
-persists challenge history/private parameters and preserves enrolled real TOTP.
-Signed access/ID/refresh grants bind account revisions; disable, administrative
-reset and global sign-out invalidate old grants and pending challenges.
+cmd/gateway builds eventbus-gateway, independently of the AWS listener.
+It implements REST REQUEST-authorizer events, Lambda Invoke HTTP, strict IAM
+Allow/Deny evaluation, TTL/identity caching, HTTP proxy mappings and configurable
+header removal. It owns neither application policy nor an identity datastore.
+Applications own route definitions, authorizers and private integration context.
+Frontend static/Vite proxy, streaming and upgrade closure remain supported.
 
-SQLite migration preserves identity, lifecycle, signing keys and legacy grants.
-Legacy bcrypt-only users gain SRP by plaintext seeding or password setup;
-do not reset developer identity data. Node is required only for configured triggers.
-Ownership: cognito consumes TriggerInvoker; cognitotrigger owns execution and
-child cleanup; app constructs, injects and joins the runner before closing stores.
+Verified: affected gateway/lambda/app/server race tests; final Lambda fixes and
+contract races; scoped vet. Tests execute real Go/custom, Python and Node.
+Plans' separate authorizer passed native gateway HTTP proof with shipped routes,
+real JWT verification, private v1/v2 bindings and credential/privacy boundaries.
+Native aws-lambda-go SDK proof and clean release builds are next before v0.3.0.
 
-Verified 2026-10-06: full Go race suite, tagged vet, Python contracts, all SDK
-scenarios, real Node email-MFA/SES capture, two isolated runs, restart/error/
-process cleanup and native CLI lifecycle/custom/pending-restart/SIGTERM.
-Release binaries were rebuilt from a clean commit with exact Git provenance.
-Linux amd64 executed; macOS/other Linux targets were cross-built.
-Live RustFS and actual consuming-app handlers were not exercised.
+Existing Cognito lifecycle/SRP/custom Node triggers and SES sending capture remain
+supported. SQLite preserves identities/signing keys; do not reset developer data.
+No application stack has been reset or restarted in these tests.
 
-Temporary .venv, SDK node_modules, npm cache, release builds, probe data/scripts,
-bytecode and the merged task branch were removed. No developer stack was reset.
-Receipts /tmp/eventbus-issue1-*.log and release metadata follow existing 24-hour
-retention; failed managed test runs use that policy too.
-See docs/COGNITO.md, CUSTOM-TRIGGERS.md and tests/sdk/README.md for contracts/setup.
-
-Next work is separate: direct SQS SendMessage for a concrete consumer and
-low-priority SES management/rich rendering from docs/BACKLOG.md.
+Docs: GATEWAY.md, LAMBDA.md, ARCHITECTURE.md and AGENT-HARNESS.md.
+API Gateway management APIs and Lambda async/warm runtime behavior are outside
+this requested scope. Direct SQS sending and SES management remain follow-ups.
+Temporary fixture children/stores are test-owned and removed. Test receipts use
+existing /tmp 24-hour retention; native proof binary is held until final acceptance.

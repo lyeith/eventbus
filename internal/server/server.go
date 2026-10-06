@@ -44,6 +44,7 @@ type Services struct {
 	Secrets        ActionHandler
 	Cognito        CognitoHandler
 	SES            SESHandler
+	Lambda         http.Handler
 	CognitoURLs    *CognitoURLs
 	QueryBodyLimit int64
 }
@@ -65,6 +66,17 @@ func New(services Services) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/2015-03-31/functions/") {
+		if s.services.Lambda == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Amzn-ErrorType", "ResourceNotFoundException")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"Lambda function is not configured"}`))
+		} else {
+			s.services.Lambda.ServeHTTP(w, r)
+		}
+		return
+	}
 	if s.services.SES != nil && strings.HasPrefix(r.URL.Path, "/v2/email/") {
 		s.services.SES.ServeHTTP(w, r)
 		return

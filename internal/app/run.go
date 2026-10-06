@@ -13,6 +13,7 @@ import (
 	"github.com/lyeith/eventbus/internal/cognito"
 	"github.com/lyeith/eventbus/internal/consumer"
 	"github.com/lyeith/eventbus/internal/firehose"
+	lambdaservice "github.com/lyeith/eventbus/internal/lambda"
 	"github.com/lyeith/eventbus/internal/messaging"
 	"github.com/lyeith/eventbus/internal/secrets"
 	"github.com/lyeith/eventbus/internal/server"
@@ -79,6 +80,15 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if projectRoot == "" {
 		projectRoot = consumer.FindProjectRoot(".")
 	}
+	var functions http.Handler
+	if cfg.lambdaFunctions != "" {
+		runner, configureErr := lambdaservice.New(cfg.lambdaFunctions, projectRoot)
+		functions, err = runner, configureErr
+		if err != nil {
+			return fmt.Errorf("failed to configure Lambda functions: %w", err)
+		}
+		owned.functions = runner
+	}
 	triggers, err := loadCognitoTriggers(cfg.cognitoTriggers, projectRoot)
 	if err != nil {
 		return fmt.Errorf("failed to configure Cognito triggers: %w", err)
@@ -94,6 +104,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	}
 	router := server.New(server.Services{
 		Messaging:      messaging.NewHandler(broker),
+		Lambda:         functions,
 		Firehose:       firehose.NewHandler(firehoseManager),
 		SSM:            ssm.NewHandler(ssmStore),
 		Secrets:        secrets.NewHandler(secretsStore),

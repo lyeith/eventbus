@@ -4,11 +4,14 @@ EventBus owns the emulator and generic agent harness. Applications own their
 scenarios, assertions, SDK endpoints, provisioning and consumer programs.
 
 ```text
-main.go                  CLI entrypoint; go build . remains supported
+main.go                  AWS service CLI; go build . remains supported
+cmd/gateway/             Separate reusable request gateway CLI
 internal/
   app/                   Flags, construction, listener and resource lifetime
   server/                AWS protocol selection, routing and /health
   awsprotocol/           Shared JSON/XML envelopes and request IDs
+  gateway/               REST REQUEST events, Invoke client, policy evaluation and HTTP proxy mappings
+  lambda/                App-owned multi-language execution, Invoke/Runtime API and child lifetime
   cognito/               SQLite identities, lifecycle, SRP/auth, JWT/JWKS and seeds
   cognitotrigger/        Application-owned Node trigger execution and child lifetime
   messaging/             One SNS/SQS broker, filtering and HTTP adapters
@@ -36,6 +39,11 @@ examples/                Application-owned fixture format examples
 - `cognito` declares its TriggerInvoker port and owns challenge state and decisions.
   `cognitotrigger` executes configured app handlers; it imports no Cognito package.
   `app` injects and joins the runner before releasing stores/capture.
+- `gateway` consumes authorizers only through AWS Lambda Invoke HTTP. It knows no
+  application policy, identity, private route format or database. Apps configure
+  opaque context mappings and credential removal.
+- `lambda` owns execution and runtime protocol; application handlers own policy.
+  `app` injects it into the service dispatcher and closes it after HTTP drain.
 - `awsprotocol` holds reusable wire helpers, without service state. SES and
   Cognito retain their distinct decoders, size limits and error envelopes.
 
@@ -46,6 +54,8 @@ private. Application acceptance behavior belongs in the consuming application.
 
 | Change | Test owner |
 | --- | --- |
+| REQUEST events, policy evaluation, integration mapping, cache, streaming/upgrade proxy lifetime | `internal/gateway` tests |
+| Lambda Invoke, Runtime API, language handlers and child cleanup | `internal/lambda` tests |
 | Store, validation, capture, filtering or operation behavior | Colocated service tests; real SQLite for Cognito |
 | Node custom trigger configuration, execution, deadlines and child cleanup | `internal/cognitotrigger` tests |
 | Consumer configuration, process execution or settlement | `internal/consumer` tests |

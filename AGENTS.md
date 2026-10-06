@@ -22,6 +22,11 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
   TriggerInvoker port receives an application-owned runner from `internal/app`.
 - `internal/cognitotrigger` owns Node execution, deadlines and child cleanup;
   it imports no Cognito service. Apps own handler policy and dependencies.
+- `internal/gateway` owns generic REQUEST-authorizer and HTTP proxy contracts;
+  applications own authorizers and all private integration mappings. It imports
+  no consuming application package or store.
+- `internal/lambda` owns Invoke, language execution and child lifetime. App
+  handlers are external fixtures; keep their logs separate from function results.
 - `internal/ses` owns fixtures, capture, MIME and both sending adapters.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.

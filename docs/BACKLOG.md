@@ -23,3 +23,9 @@ Direct SQS SendMessage is separate from the Cognito work in
 [issue #1](https://github.com/lyeith/eventbus/issues/1). Add it for a concrete
 consumer with real SDK receive/delete/visibility/retry/DLQ checks; batch/FIFO and
 Node queue consumers need their own demonstrated requirements.
+
+## Separate gateway and Lambda work
+
+Request gateway contracts are covered in GATEWAY.md. API Gateway management/deployment
+APIs, other authorizer types and HTTP API v2 are separate features. Lambda
+asynchronous invocation, warm runtime reuse and provisioning APIs are also separate.
