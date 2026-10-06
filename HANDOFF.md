@@ -39,7 +39,10 @@ synchronous snapshots capped at 64 MiB serialized requests plus metadata/topic.
 
 Gateway/Lambda v0.3.0 is already public and adopted by Plans. Generic gateway
 knows no Trust policy/store; Go/Python/Node use synchronous Lambda Invoke.
-Messaging release v0.4.0 clean builds, native CLI proof and publication are next.
+Public v0.4.0 targets clean b60caa1; four-platform builds and all GitHub
+executable/SHA256SUMS digests verified. Native CLI live SMS capture, restart
+append and graceful shutdown passed. Plans service pin is v0.4.0; its normal
+public acquisition/checksum and 16 artifact tests pass. Gateway pin stays v0.3.0.
 No developer application stack has been restarted or its state reset.
-Temporary staging/model copies are removed; native probe script is task-owned
-and will be removed after acceptance. /tmp test receipts use existing 24-hour TTL.
+Temporary staging/models, native probe script and release build directory are
+removed. Normal artifact cache remains; /tmp test receipts use existing 24-hour TTL.
