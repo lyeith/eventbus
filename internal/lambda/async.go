@@ -219,9 +219,14 @@ func (service *Service) asyncWorker() {
 		if task == nil {
 			return
 		}
-		result, err := service.invokeOwned(service.asyncContext, task.entry, task.input, true)
+		input := task.input
+		input.attempt = task.record.Attempts
+		result, err := service.invokeOwned(service.asyncContext, task.entry, input, true)
 		service.mu.Lock()
 		task.ownershipErr = errors.Join(task.ownershipErr, result.ownershipErr)
+		if result.ownershipErr != nil && service.asyncOwnershipErr == nil {
+			service.asyncOwnershipErr = result.ownershipErr
+		}
 		switch {
 		case service.asyncAborted || errors.Is(err, context.Canceled):
 			service.finishAsyncLocked(task, "canceled", "ServiceShutdown")
@@ -246,6 +251,8 @@ func (service *Service) asyncWorker() {
 // backing AWS listeners remain usable by accepted handlers. It joins all async
 // work and workers; Close later owns synchronous cleanup and sink closure.
 // A deadline cancels accepted async work only and retains a non-nil result.
+// Completed async ownership uncertainty remains a drain error across retries;
+// synchronous execution uncertainty belongs only to final Close.
 func (service *Service) DrainAsync(ctx context.Context) error {
 	if service == nil {
 		return nil
@@ -276,7 +283,7 @@ func (service *Service) DrainAsync(ctx context.Context) error {
 func (service *Service) asyncDrainError() error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	return errors.Join(service.asyncAbortErr, service.asyncEvidenceErr)
+	return errors.Join(service.asyncAbortErr, service.asyncEvidenceErr, service.asyncOwnershipErr)
 }
 
 // The caller owns mu. Synchronous invocations are intentionally independent;

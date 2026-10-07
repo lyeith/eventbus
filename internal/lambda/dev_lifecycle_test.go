@@ -408,6 +408,24 @@ func TestDevActivityPrivateCleanupUncertaintySurvivesAsyncRetrySuccess(t *testin
 		t.Fatalf("native retry/result contract changed: %#v", record)
 	}
 	assertActivityFinished(t, observer, "lambda_async", ownershipErr)
+	// Private joined uncertainty does not become native async evidence failure:
+	// another Event is still accepted and follows ordinary retry policy.
+	next, err := service.Admit(context.Background(), InvokeInput{FunctionName: "event", Payload: []byte(`{"id":"after-uncertainty"}`)})
+	if err != nil {
+		t.Fatalf("private ownership uncertainty changed native admission: %v", err)
+	}
+	if record := waitAsyncState(t, service, next.RequestID, "succeeded"); record.Attempts != 1 {
+		t.Fatalf("private ownership uncertainty changed later native retries: %#v", record)
+	}
+	if err := service.DrainAsync(context.Background()); !errors.Is(err, ownershipErr) {
+		t.Fatalf("successful retry erased async join uncertainty: %v", err)
+	}
+	if err := service.DrainAsync(context.Background()); !errors.Is(err, ownershipErr) {
+		t.Fatalf("repeated drain erased async join uncertainty: %v", err)
+	}
+	if err := service.Close(context.Background()); !errors.Is(err, ownershipErr) {
+		t.Fatalf("strict owner close hid joined uncertainty: %v", err)
+	}
 	for _, pid := range pids {
 		if processAlive(pid) {
 			t.Fatalf("fault injection left child %d running", pid)
@@ -438,6 +456,13 @@ func TestDevActivityTimeoutDistinguishesPrivateCleanupUncertainty(t *testing.T) 
 					t.Fatalf("private uncertainty changed native timeout: %#v %v", output, err)
 				}
 				assertActivityFinished(t, observer, "lambda_invoke", ownershipErr)
+				if err := service.DrainAsync(context.Background()); err != nil {
+					t.Fatalf("synchronous uncertainty poisoned independent async drain: %v", err)
+				}
+				closeErr := service.Close(context.Background())
+				if uncertain && !errors.Is(closeErr, ownershipErr) || !uncertain && closeErr != nil {
+					t.Fatalf("strict close ownership result: %v; want %v", closeErr, ownershipErr)
+				}
 				if processAlive(pid) {
 					t.Fatalf("fault injection left child %d running", pid)
 				}

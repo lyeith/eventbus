@@ -22,7 +22,7 @@ const runtimePrefix = "/2018-06-01/runtime/"
 func runProvided(ctx context.Context, entry executableFunction, input invocation, cleanup func(*exec.Cmd) error) (result invocationResult) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return failure("Runtime.InternalError", "Cannot start Lambda Runtime API")
+		return notStartedFailure("Runtime.InternalError", "Cannot start Lambda Runtime API")
 	}
 	runtimeCtx, stopRuntime := context.WithCancel(ctx)
 	runtime := &runtimeInvocation{ctx: runtimeCtx, input: input, arn: functionARN(entry, input), result: make(chan invocationResult, 1)}
@@ -40,13 +40,14 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	}()
 	command, err := newCommand(ctx, entry, input, entry.command[1:], listener.Addr().String())
 	if err != nil {
-		return failure("Runtime.InternalError", "Cannot own function process group")
+		return notStartedFailure("Runtime.InternalError", "Cannot own function process group")
 	}
-	logs := &tailOutput{limit: maxLogs}
-	command.Stdout, command.Stderr = logs, logs
+	logs := newInvocationLogs(input.diagnostics, false)
+	command.Stdout, command.Stderr = logs.stdoutWriter(), logs.stderrWriter()
 	if err := command.Start(); err != nil {
-		result := failure("Runtime.InvalidEntrypoint", "Cannot start configured function")
-		result.logs = logs.Bytes()
+		result := notStartedFailure("Runtime.InvalidEntrypoint", "Cannot start configured function")
+		result.logs, result.diagnostics = logs.merged.Bytes(), logs.diagnostics()
+		result.diagnostics.processError = err.Error()
 		return result
 	}
 	processDone := make(chan error, 1)
@@ -74,7 +75,10 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	if cleanupErr != nil {
 		result = failure("Runtime.InternalError", "Cannot stop function process group")
 	}
-	result.logs = logs.Bytes()
+	result.logs, result.diagnostics = logs.merged.Bytes(), logs.diagnostics()
+	if waitErr != nil {
+		result.diagnostics.processError = waitErr.Error()
+	}
 	result.ownershipErr = cleanupErr
 	if errors.Is(waitErr, exec.ErrWaitDelay) {
 		// The native Runtime API response wins over process exit, but a forced

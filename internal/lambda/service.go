@@ -63,6 +63,14 @@ type Service struct {
 	asyncWorkers                                       sync.WaitGroup
 	asyncCapture                                       *devcapture.Sink
 	asyncEvidenceErr                                   error
+	asyncOwnershipErr                                  error
+	diagnosticCapture                                  *devcapture.Sink
+	diagnosticPath                                     string
+	diagnosticEvidenceErr                              error
+	diagnosticMu                                       sync.Mutex
+	diagnosticClosed                                   bool
+	diagnosticCloseErr                                 error
+	invocationEvidenceErr                              error
 	asyncClosed, asyncAborted                          bool
 	asyncAbortErr                                      error
 	asyncDrainDone                                     chan struct{}
@@ -163,7 +171,13 @@ func NewService(config *Config, workDir string) (*Service, error) {
 		}
 		service.functions[name] = entry
 	}
+	if err := service.configureDiagnostics(config.DevDiagnostics, config.DevAsync, root); err != nil {
+		return nil, err
+	}
 	if err := service.configureAsync(config.DevAsync, root); err != nil {
+		if service.diagnosticCapture != nil {
+			err = errors.Join(err, service.diagnosticCapture.Close())
+		}
 		return nil, err
 	}
 	return service, nil
@@ -346,12 +360,18 @@ type invocation struct {
 	payload                                              []byte
 	requestID, name, functionARN, clientContext, traceID string
 	deadline                                             time.Time
+	attempt                                              int
+	onAdmission                                          func(InvocationMetadata) error
+	diagnostics                                          bool
 }
 
 type invocationResult struct {
 	payload       []byte
 	functionError bool
 	logs          []byte
+	state         InvocationState
+	admitted      bool
+	diagnostics   invocationDiagnostics
 	// Private ownership uncertainty cannot be supplied by a handler or projected
 	// onto native responses. It only makes a developer lifecycle lease dirty.
 	ownershipErr error
@@ -359,7 +379,7 @@ type invocationResult struct {
 
 func failure(kind, message string) invocationResult {
 	payload, _ := json.Marshal(map[string]any{"errorType": kind, "errorMessage": message})
-	return invocationResult{payload: payload, functionError: true}
+	return invocationResult{payload: payload, functionError: true, state: InvocationFailed}
 }
 
 func (service *Service) invoke(parent context.Context, entry executableFunction, input invocation) (invocationResult, error) {
@@ -387,25 +407,73 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	service.active[id] = invocationOwner{cancel: cancel, asynchronous: asynchronous}
 	service.inflight.Add(1)
 	service.mu.Unlock()
+	started := time.Now()
+	normalCompletion, runnerEntered, diagnosticCompletion := false, false, false
+	input.diagnostics = service.diagnosticCapture != nil
 	defer func() {
-		service.mu.Lock()
-		delete(service.active, id)
-		service.inflight.Done()
-		if release != nil {
-			release(result.ownershipErr)
+		// Even an observer/runner panic or Goexit must retire this admitted
+		// lifetime with dirty evidence. Never infer success from zero values.
+		defer func() {
+			if !diagnosticCompletion {
+				result.ownershipErr = errors.Join(result.ownershipErr, errors.New("Lambda invocation diagnostic completion was interrupted"))
+			}
+			service.mu.Lock()
+			if result.ownershipErr != nil && service.invocationEvidenceErr == nil {
+				service.invocationEvidenceErr = result.ownershipErr
+			}
+			delete(service.active, id)
+			service.inflight.Done()
+			if release != nil {
+				release(result.ownershipErr)
+			}
+			service.mu.Unlock()
+		}()
+		result.admitted = true
+		if !normalCompletion {
+			result.state = InvocationNotStarted
+			if runnerEntered {
+				result.state = InvocationFailed
+			}
+			result.ownershipErr = errors.Join(result.ownershipErr, errors.New("Lambda invocation exited without normal joined completion"))
 		}
-		service.mu.Unlock()
+		if result.state == "" {
+			result.state = InvocationSucceeded
+			if result.functionError || err != nil {
+				result.state = InvocationFailed
+			}
+		}
+		contextError := ""
+		if ctx.Err() != nil {
+			contextError = "canceled"
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				contextError = "deadline_exceeded"
+			}
+		}
+		result.ownershipErr = errors.Join(result.ownershipErr, service.captureDiagnostics(entry, input, result, asynchronous, started, contextError))
+		diagnosticCompletion = true
 	}()
+	if input.onAdmission != nil {
+		if err := input.onAdmission(invocationMetadata(entry, input)); err != nil {
+			normalCompletion = true
+			return invocationResult{state: InvocationNotStarted, ownershipErr: err}, err
+		}
+	}
+	runnerEntered = true
 	if entry.runtime == "provided" {
 		result = runProvided(ctx, entry, input, service.processCleanup)
 	} else {
 		result = runCommand(ctx, entry, input, service.processCleanup)
 	}
 	if ctx.Err() != nil {
-		logs, ownershipErr := result.logs, result.ownershipErr
+		logs, ownershipErr, diagnostics := result.logs, result.ownershipErr, result.diagnostics
 		result = failure("Sandbox.Timedout", fmt.Sprintf("Task timed out after %.2f seconds", entry.timeout.Seconds()))
-		result.logs, result.ownershipErr = logs, ownershipErr
+		result.logs, result.ownershipErr, result.diagnostics = logs, ownershipErr, diagnostics
+		result.state = InvocationCanceled
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result.state = InvocationTimedOut
+		}
 	}
+	normalCompletion = true
 	return result, nil
 }
 
@@ -413,6 +481,8 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 // Events. A deadline aborts queued/running Events, records cancellation, and
 // joins all process cleanup before returning the deadline error. A later Close
 // retains that error: canceled accepted work is never called a healthy drain.
+// Joined private ownership/capture uncertainty also remains a strict close error,
+// independent of ordinary native handler failures and retry decisions.
 func (service *Service) Close(ctx context.Context) error {
 	if service == nil {
 		return nil
@@ -436,8 +506,17 @@ func (service *Service) Close(ctx context.Context) error {
 			service.inflight.Wait()
 			service.asyncCancel()
 			captureErr := service.asyncCapture.Close()
+			if service.diagnosticCapture != nil {
+				// Serialize terminal health with completed closure. No invocation
+				// can still append after inflight joined, and Lambda.mu stays free.
+				service.diagnosticMu.Lock()
+				service.diagnosticCloseErr = service.diagnosticCapture.Close()
+				service.diagnosticClosed = true
+				captureErr = errors.Join(captureErr, service.diagnosticCloseErr)
+				service.diagnosticMu.Unlock()
+			}
 			service.mu.Lock()
-			service.closeErr = errors.Join(service.closeErr, service.asyncAbortErr, captureErr)
+			service.closeErr = errors.Join(service.closeErr, service.asyncAbortErr, service.invocationEvidenceErr, captureErr)
 			close(service.done)
 			service.mu.Unlock()
 		}()

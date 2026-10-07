@@ -306,6 +306,11 @@ exports.mixed = async (event, context, callback) => { callback(null,{callbackWin
 	if !strings.Contains(response.Body.String(), "Function.ResponseSizeTooLarge") {
 		t.Fatalf("Node size: %s", response.Body.String())
 	}
+	// Overflow deliberately closes the bounded result channel and joins its
+	// reader. It is an ordinary native size failure, never join uncertainty.
+	if err := service.Close(context.Background()); err != nil || service.DevEvidence() != nil {
+		t.Fatalf("joined oversized response dirtied owner closure: %v %v", err, service.DevEvidence())
+	}
 }
 
 func TestNodePendingPromiseTimesOut(t *testing.T) {

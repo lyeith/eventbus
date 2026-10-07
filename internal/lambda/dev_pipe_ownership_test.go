@@ -5,6 +5,7 @@ package lambda
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -157,6 +158,12 @@ export async function handler() {
 					t.Fatalf("private pipe uncertainty changed native retry policy: %#v", record)
 				}
 				assertActivityFinished(t, observer, "lambda_async", exec.ErrWaitDelay)
+				if err := service.DrainAsync(context.Background()); !errors.Is(err, exec.ErrWaitDelay) {
+					t.Fatalf("async pipe uncertainty was lost during drain: %v", err)
+				}
+			}
+			if err := service.Close(context.Background()); !errors.Is(err, exec.ErrWaitDelay) {
+				t.Fatalf("strict owner close hid pipe uncertainty: %v", err)
 			}
 		})
 	}
@@ -190,6 +197,9 @@ export async function handler() {
 		t.Fatalf("result-channel deadline changed native failure precedence: %#v %v", output, err)
 	}
 	assertActivityFinished(t, observer, "lambda_invoke", os.ErrDeadlineExceeded)
+	if err := service.Close(context.Background()); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("strict owner close hid result-channel uncertainty: %v", err)
+	}
 }
 
 func TestDevPipeOwnershipProvidedResponsePrecedesWaitDelay(t *testing.T) {
@@ -204,4 +214,7 @@ func TestDevPipeOwnershipProvidedResponsePrecedesWaitDelay(t *testing.T) {
 		t.Fatalf("private pipe uncertainty changed native Runtime API response: %#v %v", output, err)
 	}
 	assertActivityFinished(t, observer, "lambda_invoke", exec.ErrWaitDelay)
+	if err := service.Close(context.Background()); !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("strict owner close hid provided pipe uncertainty: %v", err)
+	}
 }

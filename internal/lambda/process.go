@@ -33,12 +33,14 @@ type tailOutput struct {
 	mu     sync.Mutex
 	buffer []byte
 	limit  int
+	total  int64
 }
 
 func (output *tailOutput) Write(data []byte) (int, error) {
 	output.mu.Lock()
 	defer output.mu.Unlock()
 	size := len(data)
+	output.total += int64(size)
 	if size >= output.limit {
 		output.buffer = append(output.buffer[:0], data[size-output.limit:]...)
 	} else {
@@ -55,6 +57,59 @@ func (output *tailOutput) Bytes() []byte {
 	output.mu.Lock()
 	defer output.mu.Unlock()
 	return append([]byte(nil), output.buffer...)
+}
+
+func (output *tailOutput) snapshot() ([]byte, int64) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return append([]byte(nil), output.buffer...), output.total
+}
+
+// Stream separation is opt-in; the original merged native tail stays intact.
+// Command stdout is its response channel and is deliberately never diagnosed.
+type invocationLogs struct {
+	merged, stdout, stderr *tailOutput
+}
+
+func newInvocationLogs(enabled, stdoutIsResponse bool) *invocationLogs {
+	logs := &invocationLogs{merged: &tailOutput{limit: maxLogs}}
+	if enabled {
+		logs.stderr = &tailOutput{limit: maxLogs}
+		if !stdoutIsResponse {
+			logs.stdout = &tailOutput{limit: maxLogs}
+		}
+	}
+	return logs
+}
+
+func (logs *invocationLogs) stdoutWriter() io.Writer {
+	if logs.stdout == nil {
+		return logs.merged
+	}
+	return io.MultiWriter(logs.merged, logs.stdout)
+}
+func (logs *invocationLogs) stderrWriter() io.Writer {
+	if logs.stderr == nil {
+		return logs.merged
+	}
+	return io.MultiWriter(logs.merged, logs.stderr)
+}
+func (logs *invocationLogs) diagnostics() invocationDiagnostics {
+	var result invocationDiagnostics
+	_, result.tailBytes = logs.merged.snapshot()
+	if logs.stdout != nil {
+		result.stdout, result.stdoutBytes = logs.stdout.snapshot()
+	}
+	if logs.stderr != nil {
+		result.stderr, result.stderrBytes = logs.stderr.snapshot()
+	}
+	return result
+}
+
+func notStartedFailure(kind, message string) invocationResult {
+	result := failure(kind, message)
+	result.state = InvocationNotStarted
+	return result
 }
 
 func environment(entry executableFunction, input invocation, runtimeAPI string) []string {
@@ -142,36 +197,54 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 	}
 	command, err := newCommand(ctx, entry, input, arguments, "")
 	if err != nil {
-		return failure("Runtime.InternalError", "Cannot own function process group")
+		return notStartedFailure("Runtime.InternalError", "Cannot own function process group")
 	}
 	command.Stdin = bytes.NewReader(input.payload)
-	logs := &tailOutput{limit: maxLogs}
+	logs := newInvocationLogs(input.diagnostics, entry.runtime == "command")
 	resultOutput := localexec.NewBoundedOutput(maxPayload)
-	command.Stderr = logs
+	command.Stderr = logs.stderrWriter()
 	command.Stdout = resultOutput
 	var reader, writer *os.File
 	var readDone chan struct{}
 	var reply []byte
 	var readErr error
+	var readerMu sync.Mutex
+	var readerClosed bool
+	var readerCloseErr error
+	// The caller owns readerMu. Completion publishes any deliberate bounded
+	// reader close atomically with readDone, before the owner sets a deadline.
+	closeReaderLocked := func() error {
+		if !readerClosed {
+			readerCloseErr = reader.Close()
+			readerClosed = true
+		}
+		return readerCloseErr
+	}
 	if wrapped {
 		var err error
 		reader, writer, err = os.Pipe()
 		if err != nil {
-			return failure("Runtime.InternalError", "Cannot create handler result channel")
+			return notStartedFailure("Runtime.InternalError", "Cannot create handler result channel")
 		}
-		defer reader.Close()
+		defer func() {
+			readerMu.Lock()
+			_ = closeReaderLocked()
+			readerMu.Unlock()
+		}()
 		defer writer.Close()
 		command.ExtraFiles = []*os.File{writer}
-		command.Stdout = logs
+		command.Stdout = logs.stdoutWriter()
 		readDone = make(chan struct{})
 		go func() {
 			reply, readErr = io.ReadAll(io.LimitReader(reader, maxWrapperResult+1))
+			readerMu.Lock()
 			if len(reply) > maxWrapperResult {
 				// A wrapper writing a very large result must not block forever
 				// after this reader reaches its limit. Closing wakes fd3's writer.
-				_ = reader.Close()
+				_ = closeReaderLocked()
 			}
 			close(readDone)
+			readerMu.Unlock()
 		}()
 	}
 	startErr := command.Start()
@@ -183,8 +256,14 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 		if readDone != nil {
 			<-readDone
 		}
-		result := failure("Runtime.InvalidEntrypoint", "Cannot start configured function")
-		result.logs = logs.Bytes()
+		result := notStartedFailure("Runtime.InvalidEntrypoint", "Cannot start configured function")
+		result.logs, result.diagnostics = logs.merged.Bytes(), logs.diagnostics()
+		result.diagnostics.processError = startErr.Error()
+		if reader != nil {
+			readerMu.Lock()
+			result.ownershipErr = closeReaderLocked()
+			readerMu.Unlock()
+		}
 		return result
 	}
 	waitErr := command.Wait()
@@ -198,12 +277,21 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 	if reader != nil {
 		// Grandchildren could retain fd3. Group termination happens before
 		// joining the result reader; closing it also bounds the failure path.
-		if err := reader.SetReadDeadline(time.Now().Add(time.Second)); err != nil && !errors.Is(err, os.ErrClosed) {
-			ownershipErr = errors.Join(ownershipErr, err)
+		readerMu.Lock()
+		select {
+		case <-readDone:
+			// A completed bounded read may already own a deliberate fd close.
+		default:
+			if err := reader.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				ownershipErr = errors.Join(ownershipErr, err)
+			}
 		}
+		readerMu.Unlock()
 		<-readDone
-		_ = reader.Close()
-		if readErr != nil && !errors.Is(readErr, os.ErrClosed) {
+		readerMu.Lock()
+		ownershipErr = errors.Join(ownershipErr, closeReaderLocked())
+		readerMu.Unlock()
+		if readErr != nil {
 			ownershipErr = errors.Join(ownershipErr, readErr)
 		}
 	}
@@ -229,7 +317,10 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 			result.payload = payload
 		}
 	}
-	result.logs = logs.Bytes()
+	result.logs, result.diagnostics = logs.merged.Bytes(), logs.diagnostics()
+	if waitErr != nil {
+		result.diagnostics.processError = waitErr.Error()
+	}
 	result.ownershipErr = ownershipErr
 	return result
 }

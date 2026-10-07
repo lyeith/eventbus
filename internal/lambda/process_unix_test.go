@@ -37,7 +37,7 @@ export async function handler(event) {
 }
 `)
 			marker := filepath.Join(directory, "childpid")
-			service := newTestService(t, map[string]Function{"child": {Runtime: "node", Handler: "children.mjs.handler", Environment: map[string]string{"PID_FILE": marker}, Timeout: 5 * time.Second}}, directory)
+			service := newActivityService(t, map[string]Function{"child": {Runtime: "node", Handler: "children.mjs.handler", Environment: map[string]string{"PID_FILE": marker}, Timeout: 5 * time.Second}}, directory, nil, nil, nil)
 			done := make(chan struct{})
 			if hang {
 				ctx, cancel := context.WithCancel(context.Background())
@@ -75,6 +75,10 @@ export async function handler(event) {
 			if processAlive(pid) {
 				_ = syscall.Kill(pid, syscall.SIGKILL)
 				t.Fatal("handler descendant remained running")
+			}
+			closeErr := service.Close(context.Background())
+			if !hang && !errors.Is(closeErr, exec.ErrWaitDelay) || hang && closeErr != nil {
+				t.Fatalf("joined owner close: %v; inherited unawaited pipes=%t", closeErr, !hang)
 			}
 		})
 	}

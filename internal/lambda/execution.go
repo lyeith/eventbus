@@ -122,27 +122,43 @@ func executedVersion(name string) string {
 // Execute returns only after runtime listeners and owned child processes have
 // joined. It lets coordinators sequence service events without a second runner.
 func (service *Service) Execute(ctx context.Context, input InvokeInput) (InvokeOutput, error) {
-	if err := ctx.Err(); err != nil {
+	outcome, err := service.execute(ctx, input, nil)
+	if err != nil {
 		return InvokeOutput{}, err
+	}
+	return outcome.Output, nil
+}
+
+func (service *Service) execute(ctx context.Context, input InvokeInput, onAdmission func(InvocationMetadata) error) (InvocationOutcome, error) {
+	outcome := InvocationOutcome{State: InvocationNotStarted}
+	if err := ctx.Err(); err != nil {
+		return outcome, err
 	}
 	entry, name, err := service.resolveTarget(input.FunctionName, input.Qualifier)
 	if err != nil {
-		return InvokeOutput{}, err
+		return outcome, err
 	}
 	if err := validateExecution(input, maxPayload); err != nil {
-		return InvokeOutput{}, err
+		return outcome, err
 	}
 	input.Payload = append([]byte(nil), input.Payload...)
-	requestID := uuid.NewString()
-	result, err := service.invoke(ctx, entry, prepareInvocation(entry, name, input, requestID))
+	invocation := prepareInvocation(entry, name, input, uuid.NewString())
+	invocation.onAdmission = onAdmission
+	result, err := service.invoke(ctx, entry, invocation)
+	if result.admitted {
+		outcome.Metadata = invocationMetadata(entry, invocation)
+		outcome.Output = InvokeOutput{Payload: result.payload, FunctionError: result.functionError, RequestID: invocation.requestID, ExecutedVersion: executedVersion(name)}
+		outcome.State = result.state
+		outcome.OwnershipErr = result.ownershipErr
+	}
 	if err != nil {
 		if errors.Is(err, errClosed) {
-			return InvokeOutput{}, invocationError(http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
+			err = invocationError(http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
 		}
-		return InvokeOutput{}, err
+		return outcome, err
 	}
 	if err := ctx.Err(); err != nil {
-		return InvokeOutput{}, err
+		return outcome, err
 	}
-	return InvokeOutput{Payload: result.payload, FunctionError: result.functionError, RequestID: requestID, ExecutedVersion: executedVersion(name)}, nil
+	return outcome, nil
 }
