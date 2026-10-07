@@ -1,51 +1,47 @@
 # Handoff
 
-Gateway ticket #12 is implemented, closed and published as latest v0.5.1:
-https://github.com/lyeith/eventbus/releases/tag/v0.5.1
-Release source/tag: 8998f424c853af4b6c8ca9eeec2a6d4c426d8e02.
-Plans pins and running stacks are unchanged. Prior #2–#11 scopes shipped in
-v0.5.0; its pinned HANDOFF and service guides retain detailed verification/capability limits.
+Tickets #13–#15 are implemented and reviewed; preparing v0.6.0.
+Canonical checkout: SSD /home/spite/Projects/eventbus, main.
+Latest public release remains v0.5.1 until publication verification finishes.
+No developer stack, Plans pin or identity database changed.
 
-Cause: gateway hard-coded GET /health returned before canonical validation,
-route matching and REQUEST authorization, shadowing application health routes.
-Config.DevHealthPath / YAML dev_health_path now selects the absolute listener
-readiness path, default /health. gateway/dev_health.go owns its validation and
-response. Gateway routing calls that dev adapter after canonical path validation;
-native authorizer/integration event builders and API mappings are unchanged.
+#13: SNS uses its LambdaDelivery port, app adapts the registered Lambda Admit
+operation, and native Records preserve message/topic/subscription/time/attributes.
+Filtering precedes lookup; eligible unavailable targets and admission pressure
+produce explicit delivery failure/DLQ evidence. Admitted execution/retries belong
+solely to Lambda. SNS admission request IDs correlate terminal Lambda evidence.
 
-GET/ANY literal and non-greedy parameter-route collisions fail startup after
-applying base_path. Greedy routes (including prefixed greedy routes) and $default
-reserve only the selected readiness GET. Queries do not affect matching; other
-methods/trailing slashes follow routes. A private name is an unauthenticated
-endpoint on the same listener, not a separate management listener.
-Select dev_health_path: /.eventbus/ready to keep application /health protected
-and preserve its original AWS_PROXY 1.0/2.0 path. Parameter routes like /{id}
-that overlap default readiness must choose a deeper path. No dependencies added.
+#14: eventsource owns native Create/Get/Delete and one serial poller per mapping.
+Explicit batch size one, zero batching window, whole-batch success only. Unknown
+selected settings/default ten fail explicitly. Target timeout cannot exceed queue
+visibility. Broker queue handles retain instance ownership; visibility/FIFO/redrive
+stay native. Successful Execute completion settles only a current receipt. Shared
+sqsevent types/messaging projection also serve existing dev recipe consumers.
+Deletion/shutdown cancel and join actual work before runtime/resources close.
+First Close context governs one published terminal outcome for every closer.
 
-Verification, full logs retained under /tmp through existing finite SSD GC:
-- go test -race -count=1 ./internal/gateway -run '^TestDevHealth': passed 1.128s;
-  default/query/method/canonical/closed behavior, YAML/ownership/idempotency,
-  mapping/collision validation and 3 authorizer × 2 integration × explicit/default
-  protected-health scenarios; refused requests never invoke integration.
-- go test -race -count=1 -timeout 5m ./internal/gateway ./cmd/gateway: passed
-  40.747s / 1.057s, including real Go/Python/Node Lambda handlers, both proxy
-  formats, configured readiness/protected /health, HTTP/upgraded/drain lifetime.
-- go vet ./internal/gateway ./cmd/gateway: passed.
-- Read-only review found no implementation/acceptance/ownership gaps. Corrected
-  guide startup curl to use its configured readiness path. Diffcheck passed.
-Logs: eventbus-issue-12-{focused,gateway-race,gateway-vet}.log.
-Tests own state/listeners and join children; no live stack/database reset.
+#15: explicit literal trailing-slash templates and full-before-greedy precedence;
+original paths remain unchanged in authorizer and integration events. Native
+request contracts and dev readiness validation retain distinct owners. Real
+unchanged Express/Swagger works through registered Node Lambdas in both formats.
+The public ingress readiness guard is an application-owned fixture, not deployment.
 
-Release verification:
-- build-release.sh built eight CGO-free service/gateway artifacts for Linux/macOS
-  amd64/arm64; all embed clean v0.5.1 source and correct target architecture.
-- Packaged Linux amd64 and macOS arm64 passed service health/native SQLite write
-  and gateway CLI readiness, protected /health, original native 1.0/2.0 paths,
-  collision refusal and graceful shutdown. Other targets were not executed.
-- Downloaded all GitHub assets, verified SHA256SUMS and exact manifest match before
-  publishing; latest/non-draft/nine assets/tag source/closed ticket verified.
-Logs on SSD: eventbus-v0.5.1-{build,artifact-smoke,macos-artifact-smoke}.log
-and eventbus-v0.5.1-publication.json, under existing finite retention.
-Owned release/download/laptop artifact directories and smoke state/processes
-are removed; durable source/assets remain in Git/GitHub.
-Next: consuming-app acceptance. No deployment or new dependency.
+Verification logs under SSD /tmp, governed by existing finite retention:
+- eventbus-delivery-final-core-race.log: app/server/consumer/messaging/lambda/
+  gateway/CLI all pass; includes real Swagger and startup/shutdown proofs.
+- eventbus-delivery-final-sdk-race.log: six actual SDK scenarios pass (28.889s),
+  including SNS/SQS mappings, Lambda Event, Secrets rotation and Scheduler.
+- eventbus-mappings-final-core-race.log: final mappings pass (1.062s).
+- eventbus-mappings-final-sdk-race.log: final actual mapping proof PASS (11.909s);
+  ssd-dev finalization hit transient EAGAIN after the successful child exit. Exact
+  run b6139df94ec046ecb90dcbc6615b8c64 inspected inactive/quiescent; owned cleanup
+  is pending release finishing. No rerun is needed to reinterpret the test result.
+- eventbus-eventsource-agent-concurrent-close-race.log: full suite x50 (2.612s).
+- eventbus-delivery-final-vet.log and eventbus-delivery-sdk-fixtures.log pass.
+- npm ci passed with exact approved test-only Express/Swagger locks.
+Read-only final ownership review found no remaining issues.
+
+Next: publish both service/gateway for Linux/macOS amd64/arm64 + SHA256SUMS;
+verify native Linux/macOS artifacts and downloaded manifest before making release
+latest, clean staging and record actual source/tag/publication.
+Other targets will be cross-built, not executed. Service guides state all limits.

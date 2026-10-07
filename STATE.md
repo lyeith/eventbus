@@ -2,39 +2,42 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD, main.
 Public MIT repository: https://github.com/lyeith/eventbus.
-Latest public release: v0.5.1 (2026-10-07), service and gateway for Linux/macOS
-amd64/arm64 plus SHA256SUMS. Release source/tag: 8998f424c853af4b6c8ca9eeec2a6d4c426d8e02.
-All nine GitHub assets verified; downloaded binaries match checksums and embed
-clean v0.5.1 source/target metadata. Plans pins and live stacks are unchanged.
+Latest public release is v0.5.1; v0.6.0 is prepared for publication.
+Plans pins and developer stacks remain untouched.
 
-#12 is implemented, verified, published and closed:
-- dev_health_path is an explicit development control, default /health.
-- dev_health.go owns readiness validation/response; native events remain untouched.
-- Canonical requests reserve only GET at the selected absolute listener path,
-  independent of base_path; closed gateways report 503.
-- Startup refuses collisions with GET/ANY literal/non-greedy parameter routes.
-  Greedy routes and $default intentionally reserve the selected readiness GET.
-- Protected application /health reaches its real REQUEST authorizer/integration;
-  missing/invalid credentials fail before integration. AWS_PROXY 1.0/2.0 retain
-  original application paths, without a harness prefix.
+Tickets #13–#15 are implemented and verified on main:
+- SNS Lambda subscriptions resolve registered local aliases, apply filters and
+  admit native Records through the existing bounded async runtime. SNS evidence
+  correlates admission identity; terminal execution belongs to Lambda evidence.
+- Native SQS Create/Get/DeleteEventSourceMapping supports explicit BatchSize=1.
+  eventsource owns mappings/pollers; SQS owns current leases/FIFO/redrive;
+  Lambda owns completion and children. Failure/timeout never acknowledges.
+- Queue handles bind the original owned instance. Deletion/recreation cannot
+  consume a replacement queue. Delete/Close cancel and join pending work.
+- One first-context Close owner publishes the shared terminal result after join.
+- Explicit trailing-slash gateway routes retain original event paths. Full route
+  matches precede greedy/default, preserving authorization boundaries.
 
-Verified: focused race regressions, full gateway/CLI race suites (40.747s/1.057s),
-real Go/Python/Node handlers and scoped vet. Read-only ownership review passed.
-Guides document collision rules, same-listener unauthenticated readiness and agent
-configuration. No developer stack/database was changed; tests own their resources.
+Ownership: app adapts typed ports with shared redacted Execute/Admit mechanics;
+server only dispatches. sqsevent owns wire types; messaging projects SQS receive
+snapshots for both native mappings and dev recipe consumers. Dev recipe retry
+policy remains separate. Expired-receipt settlement is atomic in SQS core.
 
-All earlier #2–#11 scopes and ownership findings shipped in v0.5.0. See service
-guides for exact capabilities and limits. Native AWS behavior stays in service
-core; local recipes, clocks, evidence and compatibility profiles have dev owners.
-Approved dependencies remain gojq v0.12.19/timefmt-go v0.1.8 and test-only JS
-Scheduler SDK 3.1146.0. No new dependency for readiness.
+Verified: affected package race suites and tagged real Swagger integrations;
+real SNS/SQS/Lambda/Secrets/Scheduler SDKs; production startup/alias delivery,
+completion acknowledgment, shutdown with a child and capture-order barriers;
+50 repeated mapping race runs/concurrent closers; scoped tagged vet and frozen
+SDK fixture checks. See HANDOFF for complete log names and publication status.
+Read-only ownership review has no remaining bounded findings.
 
-Packaged Linux amd64 and macOS arm64 passed service health/native SQLite plus
-gateway readiness, credential refusals, original paths in both proxy formats,
-collision refusal and shutdown. Other targets were cross-built, not executed.
-Owned release/download/laptop staging and smoke state/processes are cleaned.
-Evidence uses existing finite SSD /tmp retention.
+Approved test-only Express 5.2.1 and swagger-ui-express 5.0.1 are pinned in the
+existing npm lane. No emulator dependency added. Ordinary tests need no SDK deps.
 
-Next: consuming-app acceptance. SES management remains low priority. Gateway
-management, full Scheduler APIs, production IAM/KMS/provider
-delivery and durable async/schedule recovery remain outside the agreed subset.
+Next: publish v0.6.0 from clean source, verify packaged Linux amd64/macOS arm64
+and downloaded release checksums, remove owned artifact/fixture staging, then
+record actual publication. Other architectures are cross-built only.
+Native mappings are single-record/in-memory/local-only; broader batching,
+List/Update/filter/concurrency/partial responses remain unsupported and explicit.
+SNS production admission retry infrastructure and durable async recovery remain
+outside scope. Public ingress owns readiness blocking; no live AWS slash-parity
+or consuming application acceptance is claimed. SES management stays low priority.
