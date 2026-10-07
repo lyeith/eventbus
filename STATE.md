@@ -2,7 +2,8 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD, main.
 Public MIT repository: https://github.com/lyeith/eventbus.
-Latest public binaries: v0.6.0; #16/#17 are accepted and not yet released.
+Latest public binaries: v0.7.0; #16/#17 are implemented, verified and closed.
+Release source: a4bed486162edd892e5ba28d78c81fbbcd23f3e8 (immutable v0.7.0 tag).
 Plans pins, developer stacks and identity databases remain untouched.
 
 #16: native SQS BatchSize 1–10/default 10; ScalingConfig ceiling 2–1000.
@@ -33,7 +34,12 @@ timeout/shutdown, sentinel preservation and a resumed second suite.
 Scoped tagged vet passes. Read-only combined ownership review has no open finding.
 No new dependency. Full logs use existing finite SSD /tmp retention.
 
-Next: build v0.7.0 from clean tagged source, verify packaged Linux amd64/macOS
-arm64 behavior, publish eight EventBus/gateway binaries with verified checksums,
-then remove owned release staging. SES management and durable async restart
-recovery remain outside these tickets.
+Published: https://github.com/lyeith/eventbus/releases/tag/v0.7.0.
+Eight CGO-free EventBus/gateway binaries plus SHA256SUMS are public/latest.
+All target metadata and downloaded checksums match the clean tagged source.
+Packaged Linux amd64/macOS arm64 native batch+retained-owner smoke passed;
+the other six targets were cross-built/inspected, not executed.
+Owned children/fixtures joined and release/download/laptop staging, smoke script
+and newly generated task bytecode were removed. SDK caches remain reusable.
+No open GitHub issues at final check. SES management and durable async restart
+recovery remain separate backlog work.
