@@ -1,9 +1,10 @@
 # Handoff
 
-Gateway ticket #12 is implemented on SSD main; preparing v0.5.1 publication.
-Latest published release is v0.5.0 until upload verification completes. Plans pins
-and running stacks are unchanged. Prior #2–#11 scopes shipped in v0.5.0; its
-pinned HANDOFF and service guides retain detailed verification/capability limits.
+Gateway ticket #12 is implemented, closed and published as latest v0.5.1:
+https://github.com/lyeith/eventbus/releases/tag/v0.5.1
+Release source/tag: 8998f424c853af4b6c8ca9eeec2a6d4c426d8e02.
+Plans pins and running stacks are unchanged. Prior #2–#11 scopes shipped in
+v0.5.0; its pinned HANDOFF and service guides retain detailed verification/capability limits.
 
 Cause: gateway hard-coded GET /health returned before canonical validation,
 route matching and REQUEST authorization, shadowing application health routes.
@@ -35,6 +36,16 @@ Verification, full logs retained under /tmp through existing finite SSD GC:
 Logs: eventbus-issue-12-{focused,gateway-race,gateway-vet}.log.
 Tests own state/listeners and join children; no live stack/database reset.
 
-Next: build all eight v0.5.1 service/gateway assets with build-release.sh, smoke
-packaged gateway readiness/routing, verify source/architecture/checksums and
-uploaded assets, then publish, remove owned scratch and record release state.
+Release verification:
+- build-release.sh built eight CGO-free service/gateway artifacts for Linux/macOS
+  amd64/arm64; all embed clean v0.5.1 source and correct target architecture.
+- Packaged Linux amd64 and macOS arm64 passed service health/native SQLite write
+  and gateway CLI readiness, protected /health, original native 1.0/2.0 paths,
+  collision refusal and graceful shutdown. Other targets were not executed.
+- Downloaded all GitHub assets, verified SHA256SUMS and exact manifest match before
+  publishing; latest/non-draft/nine assets/tag source/closed ticket verified.
+Logs on SSD: eventbus-v0.5.1-{build,artifact-smoke,macos-artifact-smoke}.log
+and eventbus-v0.5.1-publication.json, under existing finite retention.
+Owned release/download/laptop artifact directories and smoke state/processes
+are removed; durable source/assets remain in Git/GitHub.
+Next: consuming-app acceptance. No deployment or new dependency.

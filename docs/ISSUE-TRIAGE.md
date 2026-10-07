@@ -37,7 +37,7 @@ owned by gateway `dev_health.go`. `dev_health_path` keeps readiness separate fro
 application authorization/integration semantics, defaults to `/health`, validates
 concrete route collisions and lets protected application `/health` retain its
 original native event paths. Greedy routes and `$default` reserve only the chosen
-readiness GET endpoint. This fix follows v0.5.0; native gateway management parity
+readiness GET endpoint. Shipped in v0.5.1; native gateway management parity
 is outside scope. [Gateway guide](GATEWAY.md) states the recipe and collision rules.
 
 ## Core versus harness code

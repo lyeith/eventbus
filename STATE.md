@@ -2,12 +2,12 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD, main.
 Public MIT repository: https://github.com/lyeith/eventbus.
-Latest public release: v0.5.0 (2026-10-07), service and gateway for Linux/macOS
-amd64/arm64 plus SHA256SUMS. Plans pins and live stacks are unchanged.
-Preparing v0.5.1 to ship gateway readiness ticket #12 using the existing release
-script and asset set; no deployment or new dependencies.
+Latest public release: v0.5.1 (2026-10-07), service and gateway for Linux/macOS
+amd64/arm64 plus SHA256SUMS. Release source/tag: 8998f424c853af4b6c8ca9eeec2a6d4c426d8e02.
+All nine GitHub assets verified; downloaded binaries match checksums and embed
+clean v0.5.1 source/target metadata. Plans pins and live stacks are unchanged.
 
-#12 is implemented and verified:
+#12 is implemented, verified, published and closed:
 - dev_health_path is an explicit development control, default /health.
 - dev_health.go owns readiness validation/response; native events remain untouched.
 - Canonical requests reserve only GET at the selected absolute listener path,
@@ -29,7 +29,12 @@ core; local recipes, clocks, evidence and compatibility profiles have dev owners
 Approved dependencies remain gojq v0.12.19/timefmt-go v0.1.8 and test-only JS
 Scheduler SDK 3.1146.0. No new dependency for readiness.
 
-Next: build/smoke/checksum v0.5.1, verify uploaded GitHub assets, publish and clean
-owned release scratch. Consuming-app acceptance follows. SES management remains
-low priority; gateway management, full Scheduler APIs, production IAM/KMS/provider
+Packaged Linux amd64 and macOS arm64 passed service health/native SQLite plus
+gateway readiness, credential refusals, original paths in both proxy formats,
+collision refusal and shutdown. Other targets were cross-built, not executed.
+Owned release/download/laptop staging and smoke state/processes are cleaned.
+Evidence uses existing finite SSD /tmp retention.
+
+Next: consuming-app acceptance. SES management remains low priority. Gateway
+management, full Scheduler APIs, production IAM/KMS/provider
 delivery and durable async/schedule recovery remain outside the agreed subset.
