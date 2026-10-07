@@ -1,8 +1,9 @@
 # Handoff
 
 Completed all ten triaged ticket scopes #2–#11 plus ownership-review findings on
-SSD main, after cleanup baseline 063e6966. The changes are in concern-scoped commits; no new
-binary release or Plans pin update is part of this work.
+SSD main, after cleanup baseline 063e6966. Source is committed/pushed through
+c005666. User now requested publication: prepare v0.5.0 service/gateway binaries
+with the existing build script. Plans pins and live stacks remain unchanged.
 
 Owners: Cognito persists metadata/schema/permissions/token policy and workflows;
 Secrets owns immutable versions/stages/rotation; Lambda owns execution/Event queue;
@@ -54,6 +55,7 @@ Canonical frozen SDK environments remain reusable. Failed managed allocations
 are quiescent/unpinned and expire through SSD GC; no receipts were rewritten.
 STATE.md and service guides record current truth and explicit unsupported limits.
 
-Next: separately requested release/consumer acceptance; low-priority SES
+Next: verify native release binaries and checksums, publish v0.5.0 and clean
+owned release scratch; then consuming-app acceptance. Low-priority SES
 management. Do not imply all management APIs, production IAM/KMS or durable
 async/schedule recovery are present. Preserve developer identity SQLite data.

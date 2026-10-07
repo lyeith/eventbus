@@ -2,8 +2,9 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD, main.
 Public MIT repository: https://github.com/lyeith/eventbus.
-Published service v0.4.0 (b60caa1), gateway v0.3.0; Plans pins unchanged.
-The guide describes current main. No new binary release or live stack change.
+Preparing v0.5.0 service and gateway binaries from the verified main source.
+Published release is v0.4.0 until upload/verification completes. Plans pins and
+live stacks are unchanged; this task publishes binaries without deploying them.
 
 All ten agreed ticket scopes #2–#11 and ownership-review findings are complete:
 - Cognito native regional metadata/readback, client token lifetimes, schema,
@@ -36,7 +37,8 @@ stopped/deleted. Canonical frozen SDK environments are reusable; bytecode scratc
 removed. /tmp evidence and quiescent failed allocations use existing finite GC.
 Developer SQLite/live stack state was preserved.
 
-Next: a separately requested binary release and consuming-app acceptance. SES
+Next: build/checksum/smoke the eight release binaries, publish v0.5.0, verify
+GitHub assets, remove owned artifact scratch and record publication. SES
 management remains low priority. API Gateway management, full Scheduler APIs,
 production IAM/KMS/provider delivery and durable queue/schedule recovery remain
 outside the agreed subset. Reprovision in-memory resources after restart.
