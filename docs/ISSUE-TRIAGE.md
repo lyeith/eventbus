@@ -64,6 +64,28 @@ unchanged. [Messaging](MESSAGING.md#native-mapping-receipt-settlement) states th
 contract. Native SDK verification is accepted, awaiting publication;
 [HANDOFF](../HANDOFF.md) records verification.
 
+## Native delivery evidence and private diagnostics
+
+[#21](https://github.com/lyeith/eventbus/issues/21) adds optional correlated SQS
+delivery evidence: `eventsource` owns actual invocation lineage and post-join
+terminal records, messaging owns receipt classification, and app binds the
+observed native runner. [#22](https://github.com/lyeith/eventbus/issues/22) adds
+Lambda-owned private attempt diagnostics. These harness sinks preserve native
+events, wire results, retry policy and redacted async metadata. Runtime success
+does not prove business success; uncertainty never becomes a completion attestation.
+See [SQS evidence](EVENT-SOURCES.md#correlated-delivery-evidence) and
+[private diagnostics](LAMBDA.md#private-invocation-diagnostics). Native SDK
+acceptance passed, awaiting publication; [HANDOFF](../HANDOFF.md) records final
+verification.
+
+## Raw SES configuration-set selection: native core
+
+[#23](https://github.com/lyeith/eventbus/issues/23) belongs to SES selection and
+validation: header-only `SendRawEmail`, API-parameter precedence and effective
+normalized capture, preserving submitted MIME bytes and existing typed errors.
+[SES](SES.md#raw-configuration-set-selection) states the contract. Final protocol
+proof passed; publication is pending; [HANDOFF](../HANDOFF.md) records acceptance.
+
 ## Retained-suite recovery: development harness
 
 [#17](https://github.com/lyeith/eventbus/issues/17) established the opt-in,

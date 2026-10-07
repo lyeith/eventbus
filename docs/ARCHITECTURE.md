@@ -75,6 +75,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   current deletion or proven original-lease settlement, never stale HTTP success.
   Mapping workers enforce configured batch/concurrency limits and join as one owner.
   Messaging applies the Lambda event byte budget before leasing queue records.
+  Optional `dev_delivery.go` correlates observed native Lambda identity with
+  queue-owned receipt classifications; it cannot infer a join or business success.
 - `sqsevent` owns shared SQS Lambda wire types. Messaging owns projection from
   immutable receive snapshots. Both native mappings and dev consumers use it.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message
@@ -87,6 +89,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   opaque context mappings and credential removal.
 - `lambda` owns execution and runtime protocol; application handlers own policy.
   `app` injects it into the service dispatcher and closes it after background Event drain and HTTP drain.
+  `dev_diagnostics.go` owns opt-in private attempt logs after actual cleanup;
+  native results/retries and redacted async metadata keep their existing contracts.
 - `secrets` owns a narrow RotationInvoker port and its step/state policy;
   `scheduler` owns a narrow TargetInvoker port and admission retry/time policy.
   `app/service_invocations.go` shares redacted Execute/Admit mechanics with SNS
@@ -142,10 +146,10 @@ owners. Do not merge these policies into a generic runner or wire decoder.
 | Durable JSONL concurrency/restart/write/sync/close failure | `internal/devcapture` tests; service HTTP tests cover acceptance and schema |
 | OS cancellation, descendants, retained pipes and output bounds | `internal/localexec` tests; runner tests cover invocation/settlement lifetime |
 | REQUEST formats, policy/simple decisions, Lambda/HTTP proxy, cache and upgrade lifetime | `internal/gateway` tests |
-| Lambda Invoke, Runtime API, language handlers and child cleanup | `internal/lambda` tests |
+| Lambda Invoke, Runtime API, language handlers, child cleanup and private diagnostics | `internal/lambda` tests; actual native SDK evidence lane in `tests/sdk` |
 | Store, validation, capture, filtering or operation behavior | Colocated service tests; real SQLite for Cognito |
 | Node custom trigger configuration, execution, deadlines and child cleanup | `internal/cognitotrigger` tests |
-| SQS mapping validation, polling, acknowledgment and join barriers | `internal/eventsource` tests; real Python SDK in `tests/sdk` |
+| SQS mapping validation, polling, acknowledgment, correlated evidence and join barriers | `internal/eventsource` tests; queue-owned classifications in messaging; real Python SDK in `tests/sdk` |
 | Consumer configuration, process execution or settlement | `internal/consumer` tests |
 | Target/path selection, health or protocol fallback | `internal/server` tests with composed service handlers |
 | Scheduler state/timing/idempotency/target admission | `internal/scheduler` tests; real JS SDK in `tests/sdk` |

@@ -49,6 +49,16 @@ batch-five records, FIFO, stale/expired leases and joined teardown.
 defines the native contract. Publication is pending;
 [HANDOFF](../../HANDOFF.md) records verification.
 
+`TestNativeEvidencePythonSDKSmoke` is accepted for #21/#22, awaiting publication.
+An actual HTTP producer and native handlers prove exact message/request lineage,
+joined terminals after manual deletion/blocked child work, visibility retries,
+timeout, a second suite on the same mapping and foreign-message sentinels.
+SNS cases retain exact private caught-error diagnostics while runtime success
+coexists with failed business state; unhandled failure, retry, truncation and
+normal completion are covered. [SQS evidence](../../docs/EVENT-SOURCES.md#correlated-delivery-evidence)
+and [private diagnostics](../../docs/LAMBDA.md#private-invocation-diagnostics)
+state the contracts; [HANDOFF](../../HANDOFF.md) records final verification.
+
 Python messaging covers direct SQS sending, binary attributes/checksums, typed
 errors, SNS raw fanout and locally captured mobile-push intents. Ordinary Go SDK
 contract tests additionally cover all SQS/SNS operation families and dispatch.
@@ -57,6 +67,10 @@ Python covers boto3 admin operations, password/refresh with PyJWT/JWKS, client
 secrets and pool/client management. SES covers all nine v1/v2 sending operations,
 current optional fields, exact binary capture and ordered bulk results using
 [the pinned official sending models](aws_models/README.md).
+The #23 SES header protocol proof passed: native SDK header-only raw sending,
+typed missing-set errors, API precedence, MIME casing/folding, absent selection
+and exact submitted bytes. [SES selection](../../docs/SES.md#raw-configuration-set-selection)
+states the contract; [HANDOFF](../../HANDOFF.md) records final acceptance.
 
 Native Cognito provisioning proofs start with an empty eu-west-1 store, use
 Python/Node Describe readback, client lifetimes/schema/permissions and live

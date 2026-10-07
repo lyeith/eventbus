@@ -71,7 +71,8 @@ application side effect. [Messaging](MESSAGING.md) states filtering/retry limits
 
 For SQS, create a native mapping through the Lambda SDK with `BatchSize` from
 1–10 (default 10) and optional `ScalingConfig={"MaximumConcurrency": 2}`. [Mappings](EVENT-SOURCES.md) shows provisioning and limits.
-The handler must complete successfully before its current receipt is deleted.
+Mapping ACK waits for successful execution and actual child join; handler-issued
+native deletes remain effective independently.
 Queue visibility, FIFO and redrive settings govern retries. Delete the mapping
 before deleting its queue. Mappings and registered targets belong to one owner;
 provision them for each run.
@@ -114,8 +115,14 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   The separate gateway uses `dev_health_path` (default `/health`); select a private
   path when the application owns `/health`. See [Gateway readiness](GATEWAY.md#development-readiness).
   Assert SDK responses, queue/DLQ outcomes and application state.
-- Read operational logs on stderr. Add `--debug` to see captured handler
-  diagnostics and batch settlement. Consumer stdout is the JSON result.
+- Read operational logs on stderr. `--debug` adds dev-recipe consumer diagnostics
+  and batch settlement; consumer stdout is the JSON result.
+- Opt into `--sqs-delivery-log` with `--lambda-functions` for [native message-to-invocation
+  and joined receipt evidence](EVENT-SOURCES.md#correlated-delivery-evidence).
+  Match exact producer message IDs and the mapping before asserting completion.
+- Select recipe `dev_diagnostics.log_path` for [private native handler diagnostics](LAMBDA.md#private-invocation-diagnostics).
+  Correlate actual request IDs/attempts; runtime success and logs never replace
+  application business assertions. Keep these potentially sensitive files private.
 - Read Cognito notification JSONL from `--cognito-log`; native signup, recovery
   and invitation flows expose local codes/passwords there. Use schema and resource
   IDs to correlate requests; [Cognito](COGNITO.md) documents the evidence fields.

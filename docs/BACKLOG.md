@@ -46,6 +46,24 @@ passed, including mixed batch-five settlement, FIFO, durable SQLite effects and
 real queue recreation. Publication is pending; [HANDOFF](../HANDOFF.md) records
 verification.
 
+## SDK accepted, awaiting publication: native delivery evidence and diagnostics
+
+[#21](https://github.com/lyeith/eventbus/issues/21) adds [correlated SQS delivery](EVENT-SOURCES.md#correlated-delivery-evidence);
+[#22](https://github.com/lyeith/eventbus/issues/22) retains [private Lambda diagnostics](LAMBDA.md#private-invocation-diagnostics).
+The actual SDK normal/race and tagged vet lane passed: HTTP producer/native
+consumer lineage, manual deletion followed by blocked child work, same-mapping
+second suite, retries/timeouts, sentinels and caught business failures with
+successful runtime terminals. Publication and final verification
+are recorded in [HANDOFF](../HANDOFF.md).
+
+## Accepted, awaiting publication: raw SES configuration-set header
+
+[#23](https://github.com/lyeith/eventbus/issues/23) fixes native header-only
+`SendRawEmail` selection/validation, API precedence and truthful effective
+capture while preserving original MIME submission. See [SES](SES.md#raw-configuration-set-selection).
+Focused protocol, full SES race/vet and unchanged SDK proofs passed; publication is pending; [HANDOFF](../HANDOFF.md)
+records acceptance.
+
 ## Low priority: remaining SES APIs
 
 SES sending is capture-only. Implement the non-sending APIs after the nine

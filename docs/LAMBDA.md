@@ -81,7 +81,8 @@ Register aliases/versions explicitly as `name:alias` or `name:version`;
 `X-Amz-Function-Error: Unhandled`, and JSON `errorType`/`errorMessage`;
 an authorizer's exact `Unauthorized` message is preserved. Results are limited
 to 6 MiB. `LogType: Tail` returns the last 4 KiB of captured logs as base64 in
-`X-Amz-Log-Result`; logs are otherwise retained only during execution.
+`X-Amz-Log-Result`; without the opt-in [private diagnostic sink](#private-invocation-diagnostics),
+logs are otherwise retained only during execution.
 
 `Event` acceptance does not report handler completion or return its result,
 function error or log tail. Accepted events outlive caller cancellation.
@@ -108,7 +109,8 @@ running work and events waiting to retry. A full queue returns HTTP 429
 `TooManyRequestsException` before acceptance. Function and runtime failures,
 including timeouts, receive two retries after one and two minutes; a successful
 execution settles once. Queued events older than six hours fail without execution.
-Use the terminal record to distinguish business completion from HTTP 202.
+Use the terminal record to distinguish runtime completion from HTTP 202.
+Application business success requires a separate assertion.
 
 The explicit development adapter controls local resources and capture:
 
@@ -141,6 +143,61 @@ Admission requires a successful evidence append. An initial capture failure
 returns HTTP 500 `ServiceException` before accepting the event. A later failure
 preserves accepted execution, blocks subsequent Event admission, emits redacted
 failure metadata to stderr and makes drain/close return an error.
+
+## Private invocation diagnostics
+
+To retain actual native handler logs, add this separate development option to
+the function recipe passed through `--lambda-functions`:
+
+```yaml
+dev_diagnostics:
+  log_path: .local/lambda-private.jsonl
+```
+
+The path resolves against `--work-dir`. There is no default diagnostic sink;
+`-`, final symlinks and aliases of async/SQS/SNS/SES/Cognito capture files are
+refused. The owned regular file must have permissions `0600` and belong to the
+current user; missing parents are created with `0700`. Use trusted parent paths.
+Handler logs can contain credentials: keep this file private, separate from
+redacted captures, broker logs and public manifests.
+
+Each admitted execution attempt emits `eventbus.lambda.invocation-diagnostic.v1`
+after runner, child, pipe and Runtime API cleanup. Records identify `request_id`,
+`function_name`, `function_arn`, `runtime`, `invocation_type`, `attempt`,
+`started_at`, `completed_at`, `state`, `function_error` and `ownership_confirmed`.
+Synchronous attempts use `RequestResponse` and attempt 1; an async event keeps
+one request ID across its numbered retry attempts. States are `succeeded`,
+`failed`, `timed_out`, `canceled` and `not_started`.
+
+`stdout` and `stderr` retain separate 64 KiB tails; `tail` retains the merged
+4 KiB native log tail. On function failure, `function_diagnostic` retains up to
+64 KiB. Each output object has `data`, `encoding` (`utf8` or `base64`), total
+`bytes` and `truncated`; empty `data` may be omitted. Command stdout is its result
+channel: `stdout_is_response: true` replaces captured `stdout`. Optional
+`process_error` and `ownership_error` details are each bounded to 8 KiB with
+`detail_truncated`; `context_error` identifies cancellation/deadline expiry.
+
+Correlate the native request ID from SQS delivery or SNS `DeliveryAdmission`
+with diagnostics, for example:
+
+```sh
+jq -c --arg request "$request_id" \
+  'select(.schema_version == "eventbus.lambda.invocation-diagnostic.v1" and .request_id == $request) | {request_id, function_arn, attempt, state, function_error, ownership_confirmed, stderr, function_diagnostic}' \
+  .local/lambda-private.jsonl
+```
+
+A caught/logged business exception can coexist with `state: succeeded` and
+`function_error: false`. Logs and runtime completion do not attest business
+success. Require `ownership_confirmed: true` for joined ownership; unawaited
+side work or forcibly closed retained pipes cannot supply that proof. Trusted
+handlers must await side work and remain in the owned process group.
+Diagnostic append/ownership failure is sticky development evidence failure,
+reported by `DevEvidence` and retained-owner checks. Final `Close` returns retained
+invocation ownership/capture uncertainty after all owned work joins. `DrainAsync`
+also retains async attempt ownership uncertainty, without attributing synchronous
+failures to that drain; native async admission/retry evidence remains separate.
+Native Invoke outputs, Event admission, retry decisions and existing redacted
+async records remain unchanged.
 
 ## Embedded execution and shutdown
 

@@ -105,6 +105,66 @@ published after cleanup joins and returned consistently to every concurrent call
   means one worker. Managed cloud scaling and function/account reserved concurrency
   are not emulated.
 
+## Correlated delivery evidence
+
+Opt into private native SQS delivery JSONL in normal or retained-owner mode:
+
+```sh
+./eventbus --port 14100 --lambda-functions functions.yaml --work-dir "$PWD" \
+  --sqs-delivery-log "$PWD/.local/sqs-delivery.jsonl"
+```
+
+`--sqs-delivery-log` defaults to off and requires `--lambda-functions`; omitting
+that flag is refused before stores, capture files or listeners open. The sink owns
+a regular file with permissions `0600`; existing files must belong to the current
+user with those permissions. `-` and final symlinks are refused. Use trusted parent
+directories and a path separate from [private Lambda diagnostics](LAMBDA.md#private-invocation-diagnostics).
+Native events, handlers, retry and settlement rules stay unchanged.
+
+Records use `schema_version: eventbus.sqs.delivery.v1`:
+
+| Fields | Meaning |
+| --- | --- |
+| `delivery_id`, `mapping_uuid`, `event_source_arn`, `function_arn`, `time` | Delivery attempt, original source and configured target |
+| `request_id`, `invoked_function_arn` | Actual Lambda identity when admitted; not a generated correlation substitute |
+| `state`, `invocation_state`, `joined` | Delivery result, native execution result and confirmed runner/child cleanup |
+| `messages[]` | `message_id`, `receive_count`; terminal `settlement` plus optional `acknowledge_attempted` and `evidence_error` |
+
+An `admitted` record precedes child launch and has `joined: false`. Its terminal
+follows runner/cleanup and receipt processing. Terminal `state` is `succeeded`,
+`failed`, `timed_out`, `canceled`, `not_started`, `ack_failed` or `uncertain`;
+`invocation_state` uses the first five execution states. Required evidence excludes
+bodies, attributes, receipt handles, credentials, logs and arbitrary error text.
+
+| Receipt `settlement` | Meaning for the original receipt |
+| --- | --- |
+| `mapping_settled` | Actual mapping ACK settled the current, unexpired receipt |
+| `native_settled` | A native caller previously deleted it while current and unexpired; caller identity/business success is not proved |
+| `unacknowledged` | Original lease is still current and valid |
+| `stale_or_expired` | Issued lease is no longer current, including supersession, purge or redrive |
+| `unknown` | No retained receipt evidence, including expired history |
+| `queue_unavailable` | Original queue was removed, replaced or belongs to another owner |
+
+Match the producer's native message IDs (or its owned enqueue journal), mapping
+UUID and expected target. For example, set `mapping_uuid` and `message_id` from
+that suite's SDK responses, then inspect its lineage:
+
+```sh
+jq -c --arg mapping "$mapping_uuid" --arg message "$message_id" \
+  'select(.schema_version == "eventbus.sqs.delivery.v1" and .mapping_uuid == $mapping and any(.messages[]; .message_id == $message)) | {delivery_id, request_id, invoked_function_arn, state, invocation_state, joined, messages}' \
+  .local/sqs-delivery.jsonl
+```
+
+Require successful, `joined: true` terminal evidence and settled receipts for
+the expected message IDs, then assert application business state separately.
+Queue counts, global `LastProcessingResult`, admission and PID absence cannot
+replace that proof. Failed or timed-out handlers can still have `native_settled`
+receipts. Capture/ownership failure is sticky: fresh mapping polling stops,
+`EvidenceErr`/close reports uncertainty
+and retained-owner safe proof fails. Missing or `uncertain` evidence is never success.
+Trusted handlers must await side work and keep it in the owned process group;
+retained diagnostic pipes or failed cleanup cannot certify a join.
+
 ## Agent verification
 
 Use an owned queue/function, assert handler side effects, then assert queue

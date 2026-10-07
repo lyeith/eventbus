@@ -1,36 +1,40 @@
 # EventBus state
 
 Canonical source: SSD /home/spite/Projects/eventbus, main.
-Public MIT: https://github.com/lyeith/eventbus.
-Latest public binaries: v0.7.0. No Plans or developer stack state changed.
+Public MIT: https://github.com/lyeith/eventbus. Latest public binaries: v0.7.0.
+Plans, application stacks and developer databases are untouched.
 
-#18 committed/pushed 973e5f1: full retained application owners and exact declared
-RequestResponse cleanup. Native SQS retry custody, Scheduler, Cognito/Lambda
-children, Firehose delivery and gateway root leases join before held attestation.
-Resources survive resume; cleanup requires explicit re-quiesce. Native auth and
-payloads stay unchanged. Foreign namespace cleanup selectors are refused.
-Trusted handlers await side work/stay in owned OS groups; escaped descendants
-remain outside joined ownership. Legacy consumers/rotation/move tasks are refused
-in this exclusive profile. Failed shutdown retains dirty evidence/stores.
+Accepted implementation for v0.8.0:
+- #18 973e5f1: retained native owners, exact declared cleanup, same-resource
+  resume, gateway root leases and strict shutdown.
+- #19 9b8f56f: exact current/older mapping-create URIs, unchanged SDK proofs.
+- #20 a6b48d5: actual original-receipt settlement, stale/replaced-lease safety.
+- Shared capture072a180, queue outcomes4de060a and eventsource91e2678.
+- #21/#22 Lambda83a9b6c and app/native SDK b8c4628: actual invocation/message
+  lineage, post-join SQS terminals and bounded opt-in private diagnostics.
+  Native outputs, Event admission and retry policy remain unchanged.
+- #23 SES5480973: MIME raw configuration-set selection/validation with verified
+  API-field precedence and exact original submitted capture bytes.
 
-#19 committed/pushed 9b8f56f: accept both exact native create mapping URIs.
-Unchanged current and approved isolated boto3/botocore 1.39.4 proofs passed.
+--sqs-delivery-log requires --lambda-functions; private Lambda diagnostics use
+recipe dev_diagnostics.log_path. Captures require owned0600 regular files and
+diagnostics cannot alias other captures. Runtime success is not business success.
+Strict Close retains ownership uncertainty; DrainAsync retains async uncertainty
+separately. Trusted handlers await side work in owned OS groups; escaped/
+unawaited pipe holders cannot attest healthy joins. No process-reaper expansion.
 
-#20 accepted: canonical queue-owned original-receipt settlement permits mapping
-ACK after actual handler deletion; stale HTTP success is insufficient. Native
-responses and strict local DeleteMessage remain unchanged. Core, app, eventsource
-race/vet and real boto3 normal/race acceptance passed, including native 60-second
-queue recreation, FIFO, mixed batch-five, durable effects and joined teardown.
+Owner race/vet and independent review accepted. Final selected13 SDK race
+PASS208.846s including current/older SDK, retained full stack and real60s queue
+recreation; app23.067s, gateway45.455s/cmd1.043s and tagged vet PASS.
+SES14focused cases/full race11.274s/vet and actual boto3 sending race1.747s PASS.
+No runtime dependencies/frozen locks changed. Approved isolated older-SDK env
+removed after proof (28MiB). Task-generated SDK bytecode removed; caches preserved.
+Unavailable consuming production Identity business handler is not claimed verified.
+Completed fixtures/listeners/children joined; logs use finite SSD /tmp retention.
 
-#18 production app full race passed19.587s; full Python/JavaScript/RustFS stack
-race passed23.832s. Unavailable consuming Identity business handler is not claimed
-verified. Complete logs use finite SSD /tmp retention; all test fixtures joined.
-Combined affected-owner regression is running before the #20 commit.
-
-New #21/#22 are on the plate: correlated SQS joined-delivery evidence and opt-in
-private native invocation diagnostics. Owners are designing typed dev seams;
-no native API expansion or new dependencies are needed. Publish v0.8.0 after
-these fixes and final acceptance under existing authorization.
-Owned legacy env /tmp/eventbus-legacy-sdk.UAIkso remains for final SDK verification;
-portable /tmp/eventbus-v0.8.0-native-smoke.py remains for packaged Linux/macOS proof.
-No release staging/tag exists yet. Reusable frozen caches are retained.
+Next authorized work: commit/push docs, clean v0.8.0 tag, build eight binaries and
+SHA256SUMS. Physical Linuxamd64/macOSarm64 smoke; inspect all cross-build metadata,
+draft/upload/download/check/publish assets, close18-23 and clean task staging.
+Release staging: /tmp/eventbus-v0.8.0-release.w467OX (task-owned notes).
+Portable567line /tmp/eventbus-v0.8.0-native-smoke.py on SSD/laptop held for binary
+proofs, then remove. No tag or published release exists yet.

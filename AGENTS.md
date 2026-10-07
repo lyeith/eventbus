@@ -50,6 +50,10 @@ before configuring endpoints or cleaning fixtures.
   no consuming application package or store.
 - `internal/lambda` owns Invoke, language execution and child lifetime. App
   handlers are external fixtures; keep their logs separate from function results.
+- Optional [SQS delivery evidence](docs/EVENT-SOURCES.md#correlated-delivery-evidence)
+  and [private Lambda diagnostics](docs/LAMBDA.md#private-invocation-diagnostics)
+  use actual native request IDs and joined lifetimes. Keep diagnostics private;
+  runtime success is not business success and uncertainty never attests completion.
 - Shared mechanics have one owner: `devcapture` for durable JSONL sinks,
   `localexec` for process groups/descendants and capped output, `awsprotocol`
   for wire mechanics.

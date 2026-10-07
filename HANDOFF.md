@@ -1,46 +1,49 @@
 # Handoff
 
-Canonical SSD checkout: /home/spite/Projects/eventbus, main.
-Latest public release: v0.7.0. No Plans pins/stacks/databases changed.
-#19 committed/pushed9b8f56f; #18 committed/pushed973e5f1. #20 accepted, committing.
+Canonical SSD /home/spite/Projects/eventbus, main; latest public v0.7.0.
+Plans/application state untouched. Finish/commit/push/publish authorized.
 
-#18 ownership is typed and optional: devquiescence fences/generations/remote
-leases; services own native work, SQS custody, reversible drains and actual child
-joins; app composes exact cleanup/namespace policy; gateway leases ingress before
-body/auth/Invoke and reconciles ACK without replay. Cleanup revokes held safety
-until explicit re-quiesce. Original resources persist through Resume.
+Accepted source: #19 9b8f56f, #18 973e5f1, #20 a6b48d5,
+capture072a180, receipt outcomes4de060a, eventsource91e2678,
+Lambda83a9b6c, app/native SDK b8c4628 and #23 SES5480973.
+Docs are ready for commit; no runtime dependencies/frozen locks changed.
 
-#20 adds sqs_receipts.go as the canonical receipt owner. Existing issued history
-has a settlement bit set only by current/unexpired deletion. Mapping ACK uses the
-original bound queue and succeeds on current or proven previous settlement;
-stale HTTP no-op, expiry, purge/redrive, replacement and cancellation do not prove
-settlement. App delegates; eventsource retains joined whole-batch execution.
+#21 evidence uses actual Lambda/request/mapping/message lineage and six
+queue-owned receipt outcomes; terminal follows runner/children and receipt work.
+Capture uncertainty is sticky/bounded and stops source intake. App composes
+typed ports, shared redaction, private/public path alias refusals and retained health.
+#22 diagnostics retain bounded private stream/tail/failure details per joined
+attempt. One native engine serves ordinary/observed execution. Strict Close and
+async-only DrainAsync retain uncertainty; native outputs/admission/retries unchanged.
+Completed bounded result readers skip deadline setup; pending/read/close/pipe
+faults remain strict. Independent final review accepted.
+#23 SES raw header fallback validates effective configuration set, with explicit
+API-field precedence verified in AWS's Introducing Sending Metrics blog.
+Original submitted request/base64/headers remain unchanged, including errors.
+Runtime success is not business success. Trusted handlers await side work within
+owned OS groups; escaped/unawaited pipe holders cannot certify healthy completion.
 
-Verification (complete logs under finite SSD /tmp retention):
-- #18 all affected owner race/vet suites and combined read-only review PASS.
-- eventbus-retained-full-stack-app-race-20261008.log: app PASS19.587s.
-- eventbus-retained-stack-sdk-race-final-20261008.log: SDK/RustFS PASS23.832s.
-- #19 eventbus-sqs-uri-{core-race,core-vet,sdk-race,sdk-vet}.log: PASS unchanged
-  current and isolated approved boto3/botocore1.39.4 batch/retry/teardown proofs.
-- #20 eventbus-sqs-manual-receipt-*-20261008.log: MQ focused/full race + vet PASS.
-- eventbus-sqs-ack-eventsource-{race,vet}.log: PASS.
-- eventbus-sqs-manual-settlement-app-{race,vet}-20261008.log: production SDK PASS.
-- eventbus-sqs-manual-ack-sdk-normal-fixed-20261008.log: PASS79.177s.
-- eventbus-sqs-manual-ack-sdk-race-20261008.log: PASS80.299s; tagged vet PASS.
-  Fixture correction preserved real60s QueueDeletedRecently contract; failed
-  initial fixture log retained. All fixture children/listeners/data were joined.
-- eventbus-pre-evidence-combined-race-20261008.log: final combined run in flight.
-SDK verifies generic authenticated cleanup; unavailable production Identity
-business handler is not claimed verified. Trusted process-group boundary applies.
+Saved complete PASS logs under finite SSD /tmp retention:
+- eventbus-pre-evidence-combined-race-20261008.log: all14owners.
+- eventbus-issue22-devcapture-{race,vet}.log.
+- eventbus-sqs-receipt-evidence-messaging-{race,vet}-20261008.log.
+- eventbus-sqs-delivery-core-{test,race,vet}.log.
+- eventbus-lambda-private-owner-final-fixed-race-20261008.txt (34.824s)
+  and eventbus-lambda-private-owner-final-vet-20261008.txt.
+- eventbus-final-combined-sdk-race-20261008.log (13 selected,208.846s).
+- eventbus-final-app-gateway-race-20261008.log (23.067s/45.455s/1.043s).
+- eventbus-final-combined-vet-20261008.log.
+- eventbus-ses-raw-config-{focused,race,sdk,vet}.log (14cases,11.274s/1.747s).
+Prior #18 full native SDK/RustFS race23.832s, #19 current/legacy and #20 actual
+manual-receipt normal79.177s/race80.299s passed; final combined includes all.
+Unavailable consuming production Identity business handler is not claimed verified.
+All completed fixtures/children/listeners joined; isolated legacy env removed28MiB.
+Task-generated SDK bytecode removed; reusable .venv/node_modules/tool caches kept.
 
-#21/#22 newly open; bounded owners are designing SQS source/invocation/join lineage
-and opt-in private bounded logs at the native Lambda runner, preserving redacted
-public capture and AWS responses. No source edits granted yet. Parent coordinates
-app adapters/config and native SDK acceptance; one serial Go test/build lane.
-
-Finish evidence/diagnostics, final regressions, commit/push then clean-source
-v0.8.0 build/publication (eight binaries + SHA256SUMS). Packaged native Linux/macOS
-proof and downloaded checksums precede publish. No release staging/tag yet.
-Retain legacy env /tmp/eventbus-legacy-sdk.UAIkso only for final SDK, then remove;
-portable smoke /tmp/eventbus-v0.8.0-native-smoke.py only for packaged proof.
-Keep reusable frozen caches and unrelated user resources.
+Root owns sole Go/build lane; no test or agent edit is in flight.
+Next docs commit/push, clean v0.8.0 tag, build8binaries+SHA256SUMS from tagged source.
+Task staging /tmp/eventbus-v0.8.0-release.w467OX contains notes only.
+Portable567line /tmp/eventbus-v0.8.0-native-smoke.py on SSD/laptop: run physical
+Linuxamd64/macOSarm64 proof, other targets cross-build/inspect; no physical run yet.
+Draft/upload/download/check assets before publication, close18-23, update state
+and clean staging/script copies. Logs retained under existing finite policies.

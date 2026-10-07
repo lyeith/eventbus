@@ -52,6 +52,22 @@ failures without message IDs. Match results to request entries by array index.
 V1 email views use `index`; v2 successful views use `entry_index`.
 A capture shows API acceptance, not delivery.
 
+## Raw configuration-set selection
+
+For v1 `SendRawEmail`, the MIME `X-SES-CONFIGURATION-SET` header can select a
+seeded configuration set; header names are case-insensitive and ordinary MIME
+folding is parsed. See [AWS's SES-specific headers](https://docs.aws.amazon.com/ses/latest/dg/event-publishing-send-email.html#event-publishing-send-email-headers).
+An explicit API `ConfigurationSetName` takes precedence when both selectors are
+present, following [AWS's documented precedence](https://aws.amazon.com/blogs/messaging-and-targeting/introducing-sending-metrics/).
+Existing API-selected validation is preserved. A nonexistent header-selected set
+returns [`ConfigurationSetDoesNotExist`, HTTP 400](https://docs.aws.amazon.com/ses/latest/APIReference/API_SendRawEmail.html#API_SendRawEmail_Errors).
+Without either selector, no configuration set is selected.
+
+Inspect `emails[].configuration_set` for the effective selection. The original
+request remains unchanged: `request.RawMessage.Data` retains the submitted MIME
+bytes as base64, including its headers. This is original submission evidence,
+without a post-send representation or actual delivery.
+
 ## Fixtures and limits
 
 Pass `--ses-config <path>` using [ses.yaml](../examples/ses.yaml).
