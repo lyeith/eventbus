@@ -147,6 +147,9 @@ def handler(event, context):
 				cfg := gateway.Config{Stage: "$default", DevHealthPath: "/.eventbus/ready", Authorizers: map[string]gateway.AuthorizerConfig{"auth": {Type: "REQUEST", InvokeURL: aws.URL + "/2015-03-31/functions/" + runtime + "-auth/invocations", TTL: &zero, PayloadFormatVersion: "2.0", IdentitySources: []string{"$request.header.Authorization"}, Timeout: 5 * time.Second}}, Routes: []gateway.RouteConfig{
 					{Path: "/private/{id}", Method: "POST", Authorizer: "auth", Integration: integration}, {Path: "/public/{id}", Method: "POST", Integration: integration},
 					{Path: "/health", Method: "GET", Authorizer: "auth", Integration: integration},
+					{Path: "/docs", Method: "GET", Integration: integration},
+					{Path: "/docs/", Method: "GET", Integration: integration},
+					{Path: "/docs/{proxy+}", Method: "GET", Integration: integration},
 				}}
 				edge, err := gateway.New(cfg, gateway.Options{Logger: zerolog.Nop()})
 				if err != nil {
@@ -246,6 +249,28 @@ def handler(event, context):
 						if event["version"] != version || event[pathKey] != "/health" {
 							t.Fatalf("real runtime health path changed: %v", event)
 						}
+					}
+				}
+				for _, path := range []string{"/docs", "/docs/", "/docs/assets/nested.js"} {
+					response, err := client.Get(frontend.URL + path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, _ := io.ReadAll(response.Body)
+					response.Body.Close()
+					if response.StatusCode != 200 {
+						t.Fatalf("native docs path %s: %d %s", path, response.StatusCode, data)
+					}
+					var event map[string]any
+					if err := json.Unmarshal(data, &event); err != nil {
+						t.Fatal(err)
+					}
+					pathKey := "path"
+					if version == "2.0" {
+						pathKey = "rawPath"
+					}
+					if event[pathKey] != path {
+						t.Fatalf("real %s runtime rewrote docs path: %v", runtime, event)
 					}
 				}
 				binary, _ := http.NewRequest("POST", frontend.URL+"/public/42?binary=1", bytes.NewReader([]byte{0, 255, 1}))

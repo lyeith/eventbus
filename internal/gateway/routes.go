@@ -18,14 +18,15 @@ type pathTemplate struct {
 
 func parseTemplate(raw string) (pathTemplate, error) {
 	result := pathTemplate{original: raw}
-	if raw == "" || !strings.HasPrefix(raw, "/") || strings.ContainsAny(raw, "\\%?#") || path.Clean(raw) != raw {
-		return result, fmt.Errorf("route path must be a canonical absolute template")
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.ContainsAny(raw, "\\%?#") || !canonicalSegments(raw) {
+		return result, fmt.Errorf("route path must be an absolute template with canonical segments")
 	}
 	if raw == "/" {
 		return result, nil
 	}
 	names := make(map[string]bool)
-	for i, part := range strings.Split(raw[1:], "/") {
+	parts := strings.Split(raw[1:], "/")
+	for i, part := range parts {
 		item := segment{literal: part}
 		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
 			item.name = part[1 : len(part)-1]
@@ -34,7 +35,7 @@ func parseTemplate(raw string) (pathTemplate, error) {
 				item.greedy = true
 				item.name = strings.TrimSuffix(item.name, "+")
 			}
-			if !identifier.MatchString(item.name) || names[item.name] || (item.greedy && i != len(strings.Split(raw[1:], "/"))-1) {
+			if !identifier.MatchString(item.name) || names[item.name] || (item.greedy && i != len(parts)-1) {
 				return result, fmt.Errorf("invalid route path parameter")
 			}
 			names[item.name] = true
@@ -71,10 +72,10 @@ func (template pathTemplate) match(requestPath string) (map[string]string, bool)
 			parameters[item.name] = value
 			return parameters, true
 		}
-		if parts[i] == "" {
-			return nil, false
-		}
 		if item.name != "" {
+			if parts[i] == "" {
+				return nil, false
+			}
 			parameters[item.name] = parts[i]
 		} else if item.literal != parts[i] {
 			return nil, false
@@ -82,10 +83,19 @@ func (template pathTemplate) match(requestPath string) (map[string]string, bool)
 	}
 	return parameters, len(parts) == len(template.segments)
 }
+func (template pathTemplate) isGreedy() bool {
+	return len(template.segments) > 0 && template.segments[len(template.segments)-1].greedy
+}
+
 func moreSpecific(left, right pathTemplate) bool {
+	// AWS selects full method/path matches before any greedy match. Literal
+	// prefixes only decide specificity within those two route classes.
+	if left.isGreedy() != right.isGreedy() {
+		return !left.isGreedy()
+	}
 	for i := 0; i < len(left.segments) && i < len(right.segments); i++ {
 		rank := func(item segment) int {
-			if item.literal != "" {
+			if item.name == "" {
 				return 3
 			}
 			if item.greedy {
@@ -100,12 +110,19 @@ func moreSpecific(left, right pathTemplate) bool {
 	}
 	return len(left.segments) > len(right.segments)
 }
+
+// A single trailing slash is a literal empty terminal segment. Interior empty
+// segments, dot segments and a second root slash remain ambiguous and invalid.
+func canonicalSegments(raw string) bool {
+	cleaned := path.Clean(raw)
+	return raw == cleaned || (cleaned != "/" && raw == cleaned+"/")
+}
+
 func canonicalRequestPath(requestURL *url.URL) bool {
 	if requestURL == nil || requestURL.Path == "" || !strings.HasPrefix(requestURL.Path, "/") || strings.ContainsAny(requestURL.Path, "\\\x00\r\n") {
 		return false
 	}
-	cleaned := path.Clean(requestURL.Path)
-	if requestURL.Path != cleaned && requestURL.Path != cleaned+"/" {
+	if !canonicalSegments(requestURL.Path) {
 		return false
 	}
 	if requestURL.RawPath != "" {

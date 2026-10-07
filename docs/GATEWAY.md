@@ -46,6 +46,19 @@ routes:
 Call `/local/api/...`. `base_path` is an optional local API mapping; matching
 strips it. Format 1.0 preserves the original path; 2.0 rawPath omits the mapping.
 Exact routes, named parameters and terminal greedy parameters are supported.
+
+Trailing slashes match literally: `/docs` and `/docs/` are distinct routes with
+independent authorization and integrations. For Swagger UI, configure public
+GET routes `/docs`, `/docs/` and `/docs/{proxy+}` to the same Lambda. The slash is
+retained in native events under the API mapping rules above; incoming paths are
+not cleaned or redirected. A greedy parameter still requires a nonempty child
+path, so `/docs/{proxy+}` alone does not match `/docs/`. Dot segments and empty
+interior segments remain invalid, and greedy parameters must be terminal.
+Full method/path matches precede greedy matches, then `$default`; static segments
+precede named parameters within each class. The [AWS route reference](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html)
+defines this precedence but does not specify trailing-slash equivalence. Literal
+slash matching is covered locally; a live AWS parity result is not claimed.
+
 A native `$default` route is expressed as `route_key: $default`, `method: ANY`
 and `path: /{proxy+}`. The `$default` stage is supported independently.
 
@@ -61,7 +74,8 @@ The Invoke URL resolves registered function names/ARNs and aliases.
 application owns `/health`. It is an absolute listener path, independent of
 `base_path`. GET there returns `{"status":"healthy","service":"eventbus-gateway"}`
 without calling an authorizer or integration. This is an unauthenticated harness
-endpoint on the same listener. Queries do not change readiness matching; other
+endpoint on the same listener. Applications own public ingress rules and must
+block the selected management path there. Queries do not change readiness matching; other
 methods and trailing slashes follow application routing. Closed gateways return
 503, and all requests pass canonical path validation before readiness matching.
 
@@ -125,7 +139,14 @@ API Gateway management/deployment APIs, VTL, TOKEN/IAM/Cognito authorizers,
 usage plans and WebSocket API management remain outside this request scope.
 SIGTERM drains HTTP and closes upgraded connections. Tests use real registered
 Go, Python and Node handlers, both payload formats and independent combinations;
-application acceptance tests still own actual policy decisions and frameworks.
+application acceptance tests still own actual policy decisions and configuration.
+
+After installing the [frozen JavaScript test dependencies](../tests/sdk/README.md),
+run `go test -race -tags sdksmoke ./internal/gateway -run '^TestNativeGatewayUnchangedExpressSwagger$'`
+for unchanged Express/Swagger redirect, HTML and asset behavior through Node
+Lambda integrations in both formats. The proof also exercises an application-owned
+public ingress guard; gateway route authorization does not protect its private
+readiness reservation.
 
 AWS: [HTTP authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-lambda-authorizer.html),
 [REST authorizer output](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-lambda-authorizer-output.html),

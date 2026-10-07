@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 )
 
 // validateDevHealth owns the harness readiness reservation. Its path is on the
@@ -15,7 +16,7 @@ func (cfg *Config) validateDevHealth() error {
 	}
 	template, err := parseTemplate(cfg.DevHealthPath)
 	endpoint := &url.URL{Path: cfg.DevHealthPath}
-	if err != nil || endpoint.EscapedPath() != cfg.DevHealthPath {
+	if err != nil || path.Clean(cfg.DevHealthPath) != cfg.DevHealthPath || endpoint.EscapedPath() != cfg.DevHealthPath {
 		return fmt.Errorf("dev_health_path must be a canonical absolute literal path")
 	}
 	for _, item := range template.segments {
@@ -32,13 +33,9 @@ func (cfg *Config) validateDevHealth() error {
 			continue
 		}
 		application, _ := parseTemplate(route.Path) // Native route validation runs first.
-		greedy := false
-		for _, item := range application.segments {
-			greedy = greedy || item.greedy
-		}
 		// Catch-all routes retain the intentional readiness exception, including
 		// the historical /health default. Concrete route collisions fail startup.
-		if _, matches := application.match(routingPath); matches && !greedy {
+		if _, matches := application.match(routingPath); matches && !application.isGreedy() {
 			return fmt.Errorf("dev_health_path %q conflicts with application route %q; select another readiness path", cfg.DevHealthPath, route.RouteKey)
 		}
 	}
