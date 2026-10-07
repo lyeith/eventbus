@@ -15,6 +15,7 @@ import (
 // fields retain AWS semantics; file loading belongs to dev_config.go.
 type Config struct {
 	Functions map[string]Function `yaml:"functions"`
+	DevAsync  *DevAsyncConfig     `yaml:"dev_async,omitempty"`
 }
 
 // Function declares one local function. Command is an argv vector, never a
@@ -35,6 +36,9 @@ var exportedName = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 func (config *Config) Validate() error {
 	if config == nil || len(config.Functions) == 0 {
 		return errors.New("Lambda configuration requires functions")
+	}
+	if err := validateDevAsync(config.DevAsync); err != nil {
+		return err
 	}
 	for name, function := range config.Functions {
 		if !functionName.MatchString(name) {

@@ -206,7 +206,7 @@ func TestInvokeValidationAndDryRun(t *testing.T) {
 	}{
 		{"absent", `{}`, nil, 404, "ResourceNotFoundException"},
 		{"echo", `bad JSON`, nil, 400, "InvalidRequestContentException"},
-		{"echo", `{}`, map[string]string{"X-Amz-Invocation-Type": "Event"}, 400, "InvalidParameterValueException"},
+		{"echo", `{}`, map[string]string{"X-Amz-Invocation-Type": "Invalid"}, 400, "InvalidParameterValueException"},
 		{"echo", `{}`, map[string]string{"X-Amz-Log-Type": "wrong"}, 400, "InvalidParameterValueException"},
 		{"echo", `{}`, map[string]string{"X-Amz-Client-Context": "invalid"}, 400, "InvalidParameterValueException"},
 		{"echo:missing", `{}`, nil, 404, "ResourceNotFoundException"},

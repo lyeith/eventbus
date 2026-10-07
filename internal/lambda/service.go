@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lyeith/eventbus/internal/devcapture"
 )
 
 const (
@@ -37,13 +38,33 @@ type executableFunction struct {
 // Service owns all admitted invocations until their process groups and
 // Runtime API listeners have stopped. Registry entries are immutable.
 type Service struct {
-	functions map[string]executableFunction
-	mu        sync.Mutex
-	closed    bool
-	next      uint64
-	active    map[uint64]context.CancelFunc
-	inflight  sync.WaitGroup
-	done      chan struct{}
+	functions                                          map[string]executableFunction
+	mu                                                 sync.Mutex
+	closed                                             bool
+	aborted                                            bool
+	next                                               uint64
+	active                                             map[uint64]invocationOwner
+	inflight                                           sync.WaitGroup
+	done                                               chan struct{}
+	closeErr                                           error
+	asyncQueue                                         []*asyncTask
+	asyncTasks                                         map[string]*asyncTask
+	asyncHistory                                       []AsyncRecord
+	asyncOutstanding, asyncCapacity, asyncHistoryLimit int
+	asyncRetryDelays                                   [2]time.Duration
+	asyncWake                                          chan struct{}
+	asyncContext                                       context.Context
+	asyncCancel                                        context.CancelFunc
+	asyncWorkers                                       sync.WaitGroup
+	asyncCapture                                       *devcapture.Sink
+	asyncEvidenceErr                                   error
+	asyncClosed, asyncAborted                          bool
+	asyncAbortErr                                      error
+	asyncDrainDone                                     chan struct{}
+}
+type invocationOwner struct {
+	cancel       context.CancelFunc
+	asynchronous bool
 }
 
 func New(filename, workDir string) (*Service, error) {
@@ -70,7 +91,7 @@ func NewService(config *Config, workDir string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	service := &Service{functions: make(map[string]executableFunction), active: make(map[uint64]context.CancelFunc), done: make(chan struct{})}
+	service := &Service{functions: make(map[string]executableFunction), active: make(map[uint64]invocationOwner), done: make(chan struct{})}
 	for name, function := range config.Functions {
 		directory := root
 		if function.WorkDir != "" {
@@ -137,6 +158,9 @@ func NewService(config *Config, workDir string) (*Service, error) {
 		}
 		service.functions[name] = entry
 	}
+	if err := service.configureAsync(config.DevAsync, root); err != nil {
+		return nil, err
+	}
 	return service, nil
 }
 
@@ -156,26 +180,21 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		invokeError(writer, http.StatusMethodNotAllowed, "InvalidRequestContentException", "Lambda Invoke requires POST")
 		return
 	}
-	name := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, invokePrefix), invokeSuffix)
-	name, err := resolveName(name, request.URL.Query().Get("Qualifier"))
+	requestedFunction := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, invokePrefix), invokeSuffix)
+	entry, name, err := service.resolveTarget(requestedFunction, request.URL.Query().Get("Qualifier"))
 	if err != nil {
-		invokeError(writer, http.StatusBadRequest, "InvalidParameterValueException", err.Error())
-		return
-	}
-	entry, configured := service.functions[name]
-	if !configured && strings.HasSuffix(name, ":$LATEST") {
-		entry, configured = service.functions[strings.TrimSuffix(name, ":$LATEST")]
-	}
-	if !configured {
-		invokeError(writer, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		var invokeErr *InvokeError
+		if errors.As(err, &invokeErr) {
+			invokeError(writer, invokeErr.Status, invokeErr.Code, invokeErr.Message)
+		}
 		return
 	}
 	invocationType := request.Header.Get("X-Amz-Invocation-Type")
 	if invocationType == "" {
 		invocationType = "RequestResponse"
 	}
-	if invocationType != "RequestResponse" && invocationType != "DryRun" {
-		invokeError(writer, http.StatusBadRequest, "InvalidParameterValueException", "Only RequestResponse and DryRun invocations are supported")
+	if invocationType != "RequestResponse" && invocationType != "DryRun" && invocationType != "Event" {
+		invokeError(writer, http.StatusBadRequest, "InvalidParameterValueException", "InvocationType must be RequestResponse, Event or DryRun")
 		return
 	}
 	logType := request.Header.Get("X-Amz-Log-Type")
@@ -183,13 +202,17 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		invokeError(writer, http.StatusBadRequest, "InvalidParameterValueException", "LogType must be None or Tail")
 		return
 	}
-	payload, err := io.ReadAll(io.LimitReader(request.Body, maxPayload+1))
+	payloadLimit := maxPayload
+	if invocationType == "Event" {
+		payloadLimit = maxEventPayload
+	}
+	payload, err := io.ReadAll(io.LimitReader(request.Body, int64(payloadLimit+1)))
 	if err != nil {
 		invokeError(writer, http.StatusBadRequest, "InvalidRequestContentException", "Cannot read invocation payload")
 		return
 	}
-	if len(payload) > maxPayload {
-		invokeError(writer, http.StatusRequestEntityTooLarge, "RequestTooLargeException", "Request must be smaller than 6291456 bytes")
+	if len(payload) > payloadLimit {
+		invokeError(writer, http.StatusRequestEntityTooLarge, "RequestTooLargeException", fmt.Sprintf("Request exceeds the %d byte limit", payloadLimit))
 		return
 	}
 	clientContext := ""
@@ -207,6 +230,24 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 	if !json.Valid(payload) {
 		invokeError(writer, http.StatusBadRequest, "InvalidRequestContentException", "Invocation payload must be JSON")
+		return
+	}
+	if invocationType == "Event" {
+		requestedName := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, invokePrefix), invokeSuffix)
+		_, err := service.Admit(request.Context(), InvokeInput{FunctionName: requestedName, Qualifier: request.URL.Query().Get("Qualifier"), Payload: payload, TraceID: request.Header.Get("X-Amzn-Trace-Id")})
+		if err != nil {
+			var admissionErr *InvokeError
+			if errors.As(err, &admissionErr) {
+				if admissionErr.Status == http.StatusTooManyRequests {
+					writer.Header().Set("Retry-After", "1")
+				}
+				invokeError(writer, admissionErr.Status, admissionErr.Code, admissionErr.Message)
+			} else if request.Context().Err() == nil {
+				invokeError(writer, http.StatusInternalServerError, "ServiceException", "Cannot admit invocation")
+			}
+			return
+		}
+		writer.WriteHeader(http.StatusAccepted)
 		return
 	}
 	invocation := invocation{payload: payload, requestID: uuid.NewString(), name: name, clientContext: clientContext, traceID: request.Header.Get("X-Amzn-Trace-Id")}
@@ -303,17 +344,20 @@ func failure(kind, message string) invocationResult {
 }
 
 func (service *Service) invoke(parent context.Context, entry executableFunction, input invocation) (invocationResult, error) {
+	return service.invokeOwned(parent, entry, input, false)
+}
+func (service *Service) invokeOwned(parent context.Context, entry executableFunction, input invocation, asynchronous bool) (invocationResult, error) {
 	ctx, cancel := context.WithTimeout(parent, entry.timeout)
 	defer cancel()
 	input.deadline, _ = ctx.Deadline()
 	service.mu.Lock()
-	if service.closed {
+	if service.closed && !asynchronous || service.aborted || asynchronous && service.asyncAborted {
 		service.mu.Unlock()
 		return invocationResult{}, errClosed
 	}
 	service.next++
 	id := service.next
-	service.active[id] = cancel
+	service.active[id] = invocationOwner{cancel: cancel, asynchronous: asynchronous}
 	service.inflight.Add(1)
 	service.mu.Unlock()
 	defer func() {
@@ -336,8 +380,10 @@ func (service *Service) invoke(parent context.Context, entry executableFunction,
 	return result, nil
 }
 
-// Close stops admission, cancels invocations, and waits for their cleanup. The
-// context bounds the wait; cleanup remains owned even after the caller leaves.
+// Close stops admission, cancels synchronous invocations, and drains accepted
+// Events. A deadline aborts queued/running Events, records cancellation, and
+// joins all process cleanup before returning the deadline error. A later Close
+// retains that error: canceled accepted work is never called a healthy drain.
 func (service *Service) Close(ctx context.Context) error {
 	if service == nil {
 		return nil
@@ -346,18 +392,55 @@ func (service *Service) Close(ctx context.Context) error {
 	first := !service.closed
 	if first {
 		service.closed = true
-		for _, cancel := range service.active {
-			cancel()
+		service.asyncClosed = true
+		for _, owner := range service.active {
+			if !owner.asynchronous {
+				owner.cancel()
+			}
 		}
+		service.wakeAsyncLocked()
 	}
 	service.mu.Unlock()
 	if first {
-		go func() { service.inflight.Wait(); close(service.done) }()
+		go func() {
+			<-service.asyncDrainDone
+			service.inflight.Wait()
+			service.asyncCancel()
+			captureErr := service.asyncCapture.Close()
+			service.mu.Lock()
+			service.closeErr = errors.Join(service.closeErr, service.asyncAbortErr, captureErr)
+			close(service.done)
+			service.mu.Unlock()
+		}()
 	}
 	select {
 	case <-service.done:
-		return nil
+		service.mu.Lock()
+		err := service.closeErr
+		service.mu.Unlock()
+		return err
 	case <-ctx.Done():
-		return ctx.Err()
+		service.mu.Lock()
+		select {
+		case <-service.done:
+			err := service.closeErr
+			service.mu.Unlock()
+			return err
+		default:
+		}
+		if !service.aborted {
+			service.aborted = true
+			service.closeErr = errors.Join(service.closeErr, ctx.Err())
+			service.abortAsyncLocked(ctx.Err())
+			for _, owner := range service.active {
+				owner.cancel()
+			}
+		}
+		service.mu.Unlock()
+		<-service.done
+		service.mu.Lock()
+		err := service.closeErr
+		service.mu.Unlock()
+		return err
 	}
 }
