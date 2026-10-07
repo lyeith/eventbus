@@ -17,6 +17,8 @@ type snsPlannedDelivery struct {
 	body         string
 	queue        *Queue
 	firehose     FirehoseDelivery
+	lambda       LambdaDelivery
+	lambdaEvent  []byte
 	attributes   map[string]MessageAttribute
 	failure      error
 }
@@ -46,7 +48,7 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 	deliveries := make([]SNSCaptureDelivery, 0, len(subscriptions))
 	deliveredAttributes := snsDeliveryAttributes(input.Attributes)
 	for _, subscription := range subscriptions {
-		delivery := SNSCaptureDelivery{Protocol: subscription.Protocol, Endpoint: subscription.Endpoint, Status: "captured", MessageID: result.MessageID}
+		delivery := SNSCaptureDelivery{Protocol: subscription.Protocol, Endpoint: subscription.Endpoint, SubscriptionARN: subscription.ARN, Status: "captured", MessageID: result.MessageID}
 		if subscription.Pending || subscription.Paused && !replayed {
 			delivery.Status = "pending_confirmation"
 			if subscription.Paused {
@@ -101,6 +103,19 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 				delivery.Status = "scheduled"
 			}
 			plans = append(plans, plan)
+		case "lambda":
+			plan.lambda = b.lambdaDelivery()
+			if plan.lambda == nil {
+				plan.failure = snsInternal("Local Lambda delivery is not configured")
+			} else if err := plan.lambda.ValidateLambdaTarget(context.Background(), subscription.Endpoint); err != nil {
+				plan.failure = snsNotFound("Local Lambda function or qualifier is unavailable")
+			} else {
+				plan.lambdaEvent, plan.failure = b.buildSNSLambdaEvent(subscription, body)
+				if plan.failure == nil {
+					delivery.Status = "scheduled"
+				}
+			}
+			plans = append(plans, plan)
 		case "sms":
 			_, plan.failure = smsDeliveryMessage(message, "")
 			if plan.failure == nil {
@@ -133,7 +148,7 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 }
 
 func (b *Broker) snsSendDeliveries(input SNSPublishInput, result SNSPublishResult, plans []snsPlannedDelivery, dedupID string, replayed bool) error {
-	// A single publication has one bounded admission budget across Firehose
+	// A single publication has one bounded admission budget across destination
 	// subscriptions; expensive queries cannot extend it once per subscriber.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -146,7 +161,15 @@ func (b *Broker) snsSendDeliveries(input SNSPublishInput, result SNSPublishResul
 				queueDedup = "replay-" + uuid.NewString()
 			}
 		}
-		if err == nil && plan.firehose != nil {
+		if err == nil && plan.lambda != nil {
+			var requestID string
+			requestID, err = plan.lambda.AdmitSNSLambda(ctx, plan.subscription.Endpoint, plan.lambdaEvent)
+			if err == nil {
+				if captureErr := b.captureSNSLambdaAdmission(input, result, plan.subscription, requestID); captureErr != nil {
+					return snsInternal("Publication accepted, but Lambda admission outcome capture failed")
+				}
+			}
+		} else if err == nil && plan.firehose != nil {
 			_, err = plan.firehose.PutFirehoseRecord(ctx, plan.subscription.Endpoint, []byte(plan.body))
 		} else if err == nil {
 			_, err = b.SendQueueMessage(plan.queue, QueueMessageInput{Body: plan.body, Attributes: plan.attributes, MessageGroupID: input.MessageGroupID, MessageDeduplicationID: queueDedup, SenderID: b.accountID})
@@ -154,7 +177,7 @@ func (b *Broker) snsSendDeliveries(input SNSPublishInput, result SNSPublishResul
 		if err == nil {
 			continue
 		}
-		failure := SNSCaptureRecord{Operation: "DeliveryFailure", RequestID: input.RequestID, MessageID: result.MessageID, TargetARN: input.TopicARN, Deliveries: []SNSCaptureDelivery{{Protocol: plan.subscription.Protocol, Endpoint: plan.subscription.Endpoint, Status: "dropped", Error: err.Error()}}}
+		failure := SNSCaptureRecord{Operation: "DeliveryFailure", RequestID: input.RequestID, MessageID: result.MessageID, TargetARN: input.TopicARN, Deliveries: []SNSCaptureDelivery{{Protocol: plan.subscription.Protocol, Endpoint: plan.subscription.Endpoint, SubscriptionARN: plan.subscription.ARN, MessageID: result.MessageID, Status: "dropped", Error: err.Error()}}}
 		if redrive := plan.subscription.Attributes["RedrivePolicy"]; redrive != "" {
 			var policy struct {
 				DeadLetterTargetARN string `json:"deadLetterTargetArn"`

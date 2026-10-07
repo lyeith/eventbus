@@ -9,7 +9,8 @@ import (
 )
 
 // SNSCaptureRecord is the agent-readable local intent for a send or sandbox OTP.
-// Binary attribute values use JSON's base64 encoding. No external delivery occurs.
+// Binary attribute values use JSON's base64 encoding. Local admission and
+// destination execution are separate evidence; no external delivery occurs.
 type SNSCaptureRecord struct {
 	SchemaVersion          string                      `json:"schema_version"`
 	CapturedAt             time.Time                   `json:"captured_at"`
@@ -30,11 +31,13 @@ type SNSCaptureRecord struct {
 }
 
 type SNSCaptureDelivery struct {
-	Protocol  string `json:"protocol"`
-	Endpoint  string `json:"endpoint"`
-	Status    string `json:"status"`
-	MessageID string `json:"message_id,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Protocol            string `json:"protocol"`
+	Endpoint            string `json:"endpoint"`
+	Status              string `json:"status"`
+	MessageID           string `json:"message_id,omitempty"`
+	Error               string `json:"error,omitempty"`
+	SubscriptionARN     string `json:"subscription_arn,omitempty"`
+	InvocationRequestID string `json:"invocation_request_id,omitempty"`
 }
 
 // SNSCapture owns the SNS record schema and delegates durable append/close to

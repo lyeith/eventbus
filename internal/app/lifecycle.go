@@ -32,6 +32,7 @@ type eventBusLifecycle struct {
 	ses           io.Closer
 	sns           io.Closer
 	notifications io.Closer
+	mappings      contextCloser
 	scheduler     contextCloser
 	rotation      backgroundDrainer
 	triggers      contextCloser
@@ -95,6 +96,11 @@ func (owned *eventBusLifecycle) quiesce(ctx context.Context) error {
 	}
 	if err := ctx.Err(); err != nil {
 		failures = append(failures, fmt.Errorf("resource cleanup not started: %w", err))
+	}
+	if owned.mappings != nil {
+		if err := owned.mappings.Close(ctx); err != nil {
+			failures = append(failures, fmt.Errorf("join SQS event-source mappings; resources retained: %w", err))
+		}
 	}
 	if owned.scheduler != nil {
 		if err := owned.scheduler.Close(ctx); err != nil {

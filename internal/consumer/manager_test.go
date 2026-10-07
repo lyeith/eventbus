@@ -19,15 +19,14 @@ func TestBuildLambdaEvent(t *testing.T) {
 
 	event := buildLambdaEvent(messages)
 
-	records, ok := event["Records"].([]map[string]interface{})
-	require.True(t, ok)
+	records := event.Records
 	require.Len(t, records, 2)
 
-	assert.Equal(t, "msg-1", records[0]["messageId"])
-	assert.Equal(t, `{"Message":"hello"}`, records[0]["body"])
-	assert.Equal(t, "rh-1", records[0]["receiptHandle"])
+	assert.Equal(t, "msg-1", records[0].MessageID)
+	assert.Equal(t, `{"Message":"hello"}`, records[0].Body)
+	assert.Equal(t, "rh-1", records[0].ReceiptHandle)
 
-	assert.Equal(t, "msg-2", records[1]["messageId"])
+	assert.Equal(t, "msg-2", records[1].MessageID)
 }
 
 func TestBuildLambdaEventSingleMessage(t *testing.T) {
@@ -36,13 +35,13 @@ func TestBuildLambdaEventSingleMessage(t *testing.T) {
 	}
 
 	event := buildLambdaEvent(messages)
-	records := event["Records"].([]map[string]interface{})
+	records := event.Records
 	assert.Len(t, records, 1)
 }
 
 func TestBuildLambdaEventEmpty(t *testing.T) {
 	event := buildLambdaEvent(nil)
-	records := event["Records"].([]map[string]interface{})
+	records := event.Records
 	assert.Empty(t, records)
 }
 
@@ -163,20 +162,20 @@ func TestBuildLambdaEventPreservesDirectSendMetadata(t *testing.T) {
 	messages := broker.ReceiveMessages(queue, 1, 0)
 	require.Len(t, messages, 1)
 	event := buildLambdaEvent(messages, queue)
-	record := event["Records"].([]map[string]interface{})[0]
-	assert.Equal(t, "aws:sqs", record["eventSource"])
-	assert.Equal(t, queue.ARN, record["eventSourceARN"])
-	assert.Equal(t, "eu-west-1", record["awsRegion"])
-	assert.Equal(t, "5d41402abc4b2a76b9719d911017c592", record["md5OfBody"])
-	attributes := record["attributes"].(map[string]string)
+	record := event.Records[0]
+	assert.Equal(t, "aws:sqs", record.EventSource)
+	assert.Equal(t, queue.ARN, record.EventSourceARN)
+	assert.Equal(t, "eu-west-1", record.AWSRegion)
+	assert.Equal(t, "5d41402abc4b2a76b9719d911017c592", record.MD5OfBody)
+	attributes := record.Attributes
 	assert.Equal(t, "1", attributes["ApproximateReceiveCount"])
 	assert.Equal(t, "caller", attributes["SenderId"])
 	assert.Equal(t, "fair-group", attributes["MessageGroupId"])
 	assert.Equal(t, "Root=1-12345678-123456789012345678901234", attributes["AWSTraceHeader"])
 	assert.NotEmpty(t, attributes["SentTimestamp"])
 	assert.NotEmpty(t, attributes["ApproximateFirstReceiveTimestamp"])
-	custom := record["messageAttributes"].(map[string]interface{})
-	assert.Equal(t, "AAH/", custom["payload"].(map[string]interface{})["binaryValue"])
-	assert.Equal(t, "alice", custom["name"].(map[string]interface{})["stringValue"])
-	assert.Equal(t, []string{}, custom["name"].(map[string]interface{})["stringListValues"])
+	custom := record.MessageAttributes
+	assert.Equal(t, []byte{0, 1, 255}, custom["payload"].BinaryValue)
+	assert.Equal(t, "alice", *custom["name"].StringValue)
+	assert.Equal(t, []string{}, custom["name"].StringListValues)
 }

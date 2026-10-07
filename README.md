@@ -33,6 +33,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Cognito contracts](docs/COGNITO.md): lifecycle, SRP, custom triggers and persistence.
 - [API gateway](docs/GATEWAY.md): REST/HTTP REQUEST authorizers and HTTP/Lambda proxy integrations.
 - [Lambda execution](docs/LAMBDA.md): application-owned Go, Python and Node handlers.
+- [SQS Lambda mappings](docs/EVENT-SOURCES.md): native provisioning and completion-based acknowledgment.
 - [Scheduler](docs/SCHEDULER.md): one-time schedules targeting local Lambda events.
 - [Firehose](docs/FIREHOSE.md): SNS delivery, Go jq partitioning, GZIP and S3 retries.
 - [Secrets](docs/SECRETS.md) and [SSM](docs/SSM.md): values, versions and supported configuration.
@@ -48,12 +49,13 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 | Area | Local behavior |
 | --- | --- |
 | Cognito | Pools, clients and user lifecycle; password/admin/refresh/SRP auth, application-owned Node custom challenges, TOTP, native configuration/schema/client token policy, verification/recovery capture, signed JWT/JWKS and revocation. [Operation coverage](docs/COGNITO.md). |
-| SNS | All 42 operations: topics/subscriptions, filters, batch/FIFO publishing, SMS and mobile push. SQS/Firehose delivery is local; external delivery is captured. [Contracts](docs/MESSAGING.md). |
+| SNS | All 42 operations: topics/subscriptions, filters, batch/FIFO publishing, SMS and mobile push. SQS/Firehose delivery and registered Lambda execution are local; external delivery is captured. [Contracts](docs/MESSAGING.md). |
 | SQS | All 23 operations, including direct/batch sending, attributes/checksums, visibility, FIFO, policies/tags and DLQ redrive. [Contracts](docs/MESSAGING.md). |
 | API gateway | Separate `eventbus-gateway` executable; REST/HTTP API REQUEST authorizers, IAM/simple responses, HTTP_PROXY and AWS_PROXY 1.0/2.0. [Contracts](docs/GATEWAY.md). |
 | Lambda | Synchronous/async Invoke with bounded execution and evidence for application-owned Go/custom runtimes, Python, Node and command handlers. [Execution](docs/LAMBDA.md). |
 | Scheduler | Create/Get/Delete one-time schedules, local Lambda admission, named fixture groups and cancellation. |
-| Consumers | Go binaries or Python handlers receive Lambda-style SQS events, with timeouts, partial batch retry and dead-letter queues. |
+| SQS Lambda mappings | Native Create/Get/Delete mappings, explicit batch size one, registered function/alias execution, FIFO ordering and native visibility/DLQ policy. [Contracts](docs/EVENT-SOURCES.md). |
+| Dev consumers | Recipe-driven Go/Python handlers receive SQS events with harness timeouts, partial batch retry and dead-letter policy. |
 | SES | All six v1 and three v2 sending operations, captured as JSONL without delivery. Management APIs are backlogged. |
 | Firehose | SNS/record/batch ingestion, Go jq partitions, GZIP, error prefixes and retained S3 delivery retries. |
 | SSM | Four Standard parameter operations, versions, hierarchy pagination and local SecureString protection. |
@@ -66,8 +68,8 @@ its current scope.
 
 Cognito identities and signing keys persist in SQLite. SES, SNS and Cognito notification JSONL files append across
 restarts; templates and other prerequisites load from YAML. Topics, queues,
-messages, Firehose buffers, SSM, secrets and schedules are in memory and need reprovisioning
-after restart. Shutdown stops scheduling and drains accepted rotation/Lambda work while the AWS
+messages, Firehose buffers, SSM, secrets, schedules and mappings are in memory and need reprovisioning
+after restart. Shutdown cancels and joins SQS mappings, stops scheduling and drains accepted rotation/Lambda work while the AWS
 listener remains available, then drains HTTP, flushes Firehose and closes stores
 and captures. Deadline failures are reported rather than claimed successful.
 

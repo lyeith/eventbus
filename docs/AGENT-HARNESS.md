@@ -52,7 +52,22 @@ An SDK endpoint override changes where real SDK requests go. Use the
 application's existing SDK and configuration; EventBus does not install client
 libraries or configure the application's credentials.
 
-## Run event consumers
+## Native event delivery
+
+Register application functions with `--lambda-functions <recipe>`. Subscribe
+SNS topics with `Protocol="lambda"` and the registered local function/alias ARN.
+Publish acceptance and `DeliveryAdmission` evidence do not prove execution;
+correlate the invocation request ID with Lambda completion evidence and the
+application side effect. [Messaging](MESSAGING.md) states filtering/retry limits.
+
+For SQS, create a native mapping through the Lambda SDK with explicit
+`BatchSize=1`. [Mappings](EVENT-SOURCES.md) shows provisioning and limits.
+The handler must complete successfully before its current receipt is deleted.
+Queue visibility, FIFO and redrive settings govern retries. Delete the mapping
+before deleting its queue. Mappings and registered targets belong to one owner;
+provision them for each run.
+
+## Dev recipe consumers
 
 Pass `--consumers /path/to/app/consumers.yaml --work-dir /path/to/app`.
 A minimal Go consumer configuration is:
@@ -102,7 +117,8 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   schema, subscription tokens, sandbox OTPs and external delivery intents.
   Assert the message ID and per-delivery status; capture proves local intent,
   not delivery to a real recipient.
-- Stop the owned process with Ctrl-C or SIGTERM. Scheduling/consumers stop first;
+- Stop the owned process with Ctrl-C or SIGTERM. Native SQS mappings cancel/join,
+  scheduling/dev consumers stop first;
   accepted rotation and Lambda Event work drain with the AWS listener available.
   HTTP drains before stores/captures close. A deadline abort is a failed shutdown.
 

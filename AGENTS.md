@@ -26,9 +26,16 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
   `internal/app` constructs and closes resources; `internal/server` only routes
   through consumer-owned interfaces. Service packages own stores and operations.
 - `internal/messaging` owns the shared registry and separate SQS/SNS engines;
-  adapters use typed operations, SNS fanout uses SendQueueMessage and external
+  adapters use typed operations, SNS fanout uses SendQueueMessage, LambdaDelivery
+  and FirehoseDelivery ports; external
   delivery uses versioned JSONL capture. Keep registry/entity locks independent.
-- `internal/consumer` owns process execution and settlement through its QueueBroker port. Keep queue state private.
+- `internal/eventsource` owns native SQS mappings through queue and function ports;
+  only completed execution permits current-receipt acknowledgment. SQS owns leases,
+  FIFO and redrive; Lambda owns execution. Close mappings before the runtime.
+- `internal/consumer` owns dev recipes, process execution and recipe settlement
+  through QueueBroker. It does not implement native event-source mappings.
+- `internal/sqsevent` owns SQS Lambda wire types; messaging projects receive
+  snapshots for both consumer paths. Keep queue state private.
 - `internal/cognito` owns lifecycle, SRP and persisted challenge decisions; its
   TriggerInvoker port receives an application-owned runner from `internal/app`.
 - `internal/cognitotrigger` owns Node execution, deadlines and child cleanup;

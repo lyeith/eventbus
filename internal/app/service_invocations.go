@@ -24,8 +24,8 @@ type lambdaAdmission interface {
 }
 
 var errLambdaTargetUnavailable = errors.New("Lambda target is unavailable")
-var errRotationInvocation = errors.New("Rotation function invocation failed")
-var errRotationExecution = errors.New("Rotation function execution failed")
+var errLambdaInvocation = errors.New("Lambda function invocation failed")
+var errLambdaExecution = errors.New("Lambda function execution failed")
 
 func validateLambdaTarget(ctx context.Context, runtime lambdaTargetValidator, arn string) error {
 	if err := ctx.Err(); err != nil {
@@ -56,13 +56,24 @@ func (invoker rotationLambdaInvoker) InvokeRotation(ctx context.Context, arn str
 		return err
 	}
 	if invoker.runtime == nil {
-		return errRotationInvocation
+		return errLambdaInvocation
 	}
 	payload, err := json.Marshal(event)
 	if err != nil {
-		return errRotationInvocation
+		return errLambdaInvocation
 	}
-	result, err := invoker.runtime.Execute(ctx, lambdaservice.InvokeInput{FunctionName: arn, Payload: payload})
+	return executeLambdaTarget(ctx, invoker.runtime, arn, payload)
+}
+
+// Completion and error redaction have one owner across synchronous callers.
+func executeLambdaTarget(ctx context.Context, runtime lambdaExecution, arn string, payload []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if runtime == nil {
+		return errLambdaInvocation
+	}
+	result, err := runtime.Execute(ctx, lambdaservice.InvokeInput{FunctionName: arn, Payload: payload})
 	if err != nil {
 		// Canonical context errors carry no function data. All other errors and
 		// handler payloads are redacted at this service boundary.
@@ -72,7 +83,7 @@ func (invoker rotationLambdaInvoker) InvokeRotation(ctx context.Context, arn str
 		if errors.Is(err, context.DeadlineExceeded) {
 			return context.DeadlineExceeded
 		}
-		return errRotationInvocation
+		return errLambdaInvocation
 	}
 	if result.FunctionError {
 		var failure struct {
@@ -81,7 +92,7 @@ func (invoker rotationLambdaInvoker) InvokeRotation(ctx context.Context, arn str
 		if json.Unmarshal(result.Payload, &failure) == nil && (failure.ErrorType == "Sandbox.Timedout" || failure.ErrorType == "TimeoutError") {
 			return context.DeadlineExceeded
 		}
-		return errRotationExecution
+		return errLambdaExecution
 	}
 	return nil
 }
@@ -104,15 +115,21 @@ func (failure *lambdaAdmissionFailure) Retryable() bool { return failure.retryab
 func (failure *lambdaAdmissionFailure) Unwrap() error   { return failure.contextError }
 
 func (invoker schedulerLambdaInvoker) AdmitTarget(ctx context.Context, arn string, payload []byte) error {
+	_, err := admitLambdaTarget(ctx, invoker.runtime, arn, payload)
+	return err
+}
+
+// Admission preserves request identity; service owners decide what acceptance means.
+func admitLambdaTarget(ctx context.Context, runtime lambdaAdmission, arn string, payload []byte) (lambdaservice.Admission, error) {
 	if err := ctx.Err(); err != nil {
-		return &lambdaAdmissionFailure{contextError: err}
+		return lambdaservice.Admission{}, &lambdaAdmissionFailure{contextError: err}
 	}
-	if invoker.runtime == nil {
-		return &lambdaAdmissionFailure{}
+	if runtime == nil {
+		return lambdaservice.Admission{}, &lambdaAdmissionFailure{}
 	}
-	_, err := invoker.runtime.Admit(ctx, lambdaservice.InvokeInput{FunctionName: arn, Payload: payload})
+	admission, err := runtime.Admit(ctx, lambdaservice.InvokeInput{FunctionName: arn, Payload: payload})
 	if err == nil {
-		return nil
+		return admission, nil
 	}
 	failure := &lambdaAdmissionFailure{}
 	if errors.Is(err, context.Canceled) {
@@ -125,5 +142,5 @@ func (invoker schedulerLambdaInvoker) AdmitTarget(ctx context.Context, arn strin
 	if errors.As(err, &native) {
 		failure.retryable = native.Status == http.StatusTooManyRequests || native.Status >= 500 && native.Status <= 599
 	}
-	return failure
+	return lambdaservice.Admission{}, failure
 }

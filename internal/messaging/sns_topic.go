@@ -292,7 +292,9 @@ func (b *Broker) validateSNSSubscriptionEndpoint(protocol, endpoint string) erro
 	switch protocol {
 	case "firehose":
 		return b.validateFirehoseEndpoint(endpoint)
-	case "sqs", "lambda":
+	case "lambda":
+		return b.validateLambdaEndpoint(endpoint)
+	case "sqs":
 		parts := strings.SplitN(endpoint, ":", 6)
 		expected := protocol
 		if len(parts) != 6 || parts[0] != "arn" || parts[2] != expected || parts[3] == "" || parts[4] == "" || parts[5] == "" {

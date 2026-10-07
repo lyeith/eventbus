@@ -455,14 +455,11 @@ func (s *Handler) deleteSQSReceipt(q *Queue, handle string) *sqsError {
 	s.broker.redriveExpiredSQS(q, now)
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	pruneQueueLocked(q, now)
+	pruneQueueLocked(q, time.Now())
 	if q.deleted {
 		return newSQSError("QueueDoesNotExist", "The specified queue does not exist")
 	}
-	if _, current := q.inFlight[handle]; current {
-		delete(q.inFlight, handle)
-		invalidateReceiveAttemptsLocked(q, handle)
-		notifyQueueLocked(q)
+	if deleteCurrentSQSReceiptLocked(q, handle) {
 		return nil
 	}
 	if _, issued := q.receipts[handle]; issued {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/lyeith/eventbus/internal/cognito"
 	"github.com/lyeith/eventbus/internal/consumer"
+	"github.com/lyeith/eventbus/internal/eventsource"
 	"github.com/lyeith/eventbus/internal/firehose"
 	lambdaservice "github.com/lyeith/eventbus/internal/lambda"
 	"github.com/lyeith/eventbus/internal/messaging"
@@ -102,6 +103,16 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		owned.functions = runner
 		functionHandler = runner
 	}
+	var mappingFunctions eventsource.FunctionInvoker
+	if functions != nil {
+		broker.SetLambdaDelivery(snsLambdaInvoker{runtime: functions})
+		mappingFunctions = eventSourceLambdaInvoker{runtime: functions}
+	}
+	mappings, err := eventsource.New(eventsource.Options{Region: cfg.region, AccountID: cfg.accountID}, sqsMappingSource{broker: broker}, mappingFunctions)
+	if err != nil {
+		return fmt.Errorf("failed to configure Lambda event-source mappings: %w", err)
+	}
+	owned.mappings = mappings
 	triggers, err := loadCognitoTriggers(cfg.cognitoTriggers, projectRoot)
 	if err != nil {
 		return fmt.Errorf("failed to configure Cognito triggers: %w", err)
@@ -154,6 +165,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	router := server.New(server.Services{
 		Messaging:      messaging.NewHandler(broker),
 		Lambda:         functionHandler,
+		EventSources:   eventsource.NewHandler(mappings),
 		Scheduler:      scheduler.NewHandler(schedules),
 		Firehose:       firehose.NewHandler(firehoseManager),
 		SSM:            ssm.NewHandler(ssmStore),

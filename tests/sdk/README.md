@@ -10,7 +10,8 @@ EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -tags sdksm
 ```
 
 Python dependencies come from `uv.lock`. JavaScript uses the exact Cognito IDP,
-SESv2 and Scheduler SDK v3 version `3.1146.0`, including the transitive npm lockfile.
+SESv2 and Scheduler SDK v3 version `3.1146.0`, including the transitive npm lockfile. The tagged gateway framework proof also
+pins test-only Express `5.2.1` and swagger-ui-express `5.0.1`.
 `EVENTBUS_SMOKE_NODE` optionally selects an absolute Node executable; otherwise
 the lane finds `node` on PATH. CI uses Node 22.
 
@@ -31,6 +32,13 @@ JSONL evidence. Typed SDK errors must reject wrong proofs/answers, forged,
 replayed, cross-user, expired and disabled sessions, plus trigger failures.
 Closing and reopening the same listener address, store, capture and runner must
 preserve identity, refresh and a pending custom challenge.
+
+Python SNS Lambda verifies real asynchronous alias execution, native events,
+filtering, handler failures/timeouts, pressure, owner isolation and correlated evidence.
+SQS mapping proofs cover native Create/Get/Delete, FIFO, completion acknowledgment,
+visibility retry, DLQ counts and pending-child teardown. The tagged gateway proof
+uses unchanged Express/Swagger middleware behind real Node Lambda integrations
+for redirects, assets, original paths and protected/default-route boundaries.
 
 Python messaging covers direct SQS sending, binary attributes/checksums, typed
 errors, SNS raw fanout and locally captured mobile-push intents. Ordinary Go SDK

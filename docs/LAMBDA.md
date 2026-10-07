@@ -159,10 +159,14 @@ The typed local seam shares the HTTP runner and registered targets:
 decoded JSON `ClientContext` and `TraceID`. `InvokeError` exposes AWS `Code`,
 `Status` and `Message` for failures before execution/admission. Synchronous
 function failures are `InvokeOutput.FunctionError`; async failures are evidence.
-Secrets rotation owns its step sequence through `Execute`; Scheduler submits
-through `Admit`. Lambda owns runtime execution and retry of accepted events.
+Secrets rotation owns its step sequence through `Execute`; SQS mappings use
+`Execute` completion before acknowledging a receipt. Scheduler and SNS submit
+through `Admit`; its request ID proves acceptance, not handler completion. Lambda
+owns runtime execution and retry of accepted events. `DescribeTarget` exposes
+only immutable registered target identity and timeout for mapping validation.
+See [SNS delivery](MESSAGING.md) and [SQS mappings](EVENT-SOURCES.md).
 
-Hosts must stop/drain producers such as Scheduler and rotation first, then call
+Hosts must cancel/join SQS mappings and stop/drain Scheduler and rotation first, then call
 `DrainAsync` while their AWS listener and synchronous Lambda execution remain
 available. Accepted handlers can make SDK calls during this drain. Afterward,
 drain/stop HTTP and call `Close`. A drain deadline cancels and joins accepted

@@ -545,9 +545,22 @@ func invalidateReceiveAttemptsLocked(q *Queue, receipt string) {
 		}
 	}
 }
+
+// DeleteMessage settles only a current, unexpired receipt. Native HTTP and local
+// consumers share the same locked settlement; previously issued stale handles
+// may be accepted as HTTP no-ops, but cannot delete a later lease.
 func (b *Broker) DeleteMessage(q *Queue, receipt string) bool {
+	now := time.Now()
+	b.redriveExpiredSQS(q, now)
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	pruneQueueLocked(q, time.Now())
+	return deleteCurrentSQSReceiptLocked(q, receipt)
+}
+func deleteCurrentSQSReceiptLocked(q *Queue, receipt string) bool {
+	if q.deleted {
+		return false
+	}
 	if _, ok := q.inFlight[receipt]; !ok {
 		return false
 	}

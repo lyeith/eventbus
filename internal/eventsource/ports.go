@@ -1,0 +1,48 @@
+// Package eventsource owns Lambda SQS event-source mappings. Queue leases and
+// settlement belong to the queue source; function execution belongs to Lambda.
+package eventsource
+
+import (
+	"context"
+	"time"
+
+	"github.com/lyeith/eventbus/internal/sqsevent"
+)
+
+// QueueSource resolves only explicitly owned local sources. The returned handle
+// stays bound to that queue instance: deleting/recreating its ARN must not make
+// an existing mapping consume the replacement queue.
+type QueueSource interface {
+	ResolveQueue(context.Context, string) (Queue, error)
+}
+
+type QueueInfo struct {
+	ARN               string
+	VisibilityTimeout time.Duration
+}
+
+// Queue retains the broker's native visibility, FIFO and redrive behavior.
+// Receive is cancellation-aware, leases exactly one message and returns an owned
+// snapshot. Delete succeeds only for the current receipt. Neither method may
+// contact AWS. Receive must wait when empty rather than spin. Non-cancellation
+// receive errors permanently stop this bound source; adapters retain transient
+// waits locally.
+type Queue interface {
+	Info() QueueInfo
+	Receive(context.Context) (*Record, error)
+	Delete(context.Context, string) (bool, error)
+}
+
+// FunctionInvoker delegates to the registered Lambda runner. InvokeTarget must
+// join actual execution and child cleanup, returning an error on function
+// failure/timeout. Asynchronous admission does not satisfy this contract.
+type FunctionInvoker interface {
+	ValidateTarget(context.Context, string) (time.Duration, error)
+	InvokeTarget(context.Context, string, []byte) error
+}
+
+// Native SQS event records have one shared wire owner. Messaging projects queue
+// snapshots; both event-source mappings and development consumers use it.
+type Record = sqsevent.Record
+type MessageAttribute = sqsevent.MessageAttribute
+type SQSEvent = sqsevent.Event

@@ -27,6 +27,7 @@ type Broker struct {
 	sqs       *sqsBrokerState
 	capture   *SNSCapture
 	firehose  FirehoseDelivery
+	lambda    LambdaDelivery
 }
 
 func NewBroker(region, accountID string, port int) *Broker {

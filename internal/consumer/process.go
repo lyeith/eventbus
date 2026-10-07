@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lyeith/eventbus/internal/localexec"
+	"github.com/lyeith/eventbus/internal/sqsevent"
 	"github.com/rs/zerolog/log"
 )
 
@@ -29,12 +30,12 @@ var safeConsumerInheritedEnv = []string{
 }
 
 // invokeHandler dispatches to the appropriate handler based on consumer type.
-func (cm *ConsumerManager) invokeHandler(ctx context.Context, entry ConsumerEntry, event map[string]interface{}) error {
+func (cm *ConsumerManager) invokeHandler(ctx context.Context, entry ConsumerEntry, event sqsevent.Event) error {
 	_, err := cm.invokeHandlerResult(ctx, entry, event)
 	return err
 }
 
-func (cm *ConsumerManager) invokeHandlerResult(ctx context.Context, entry ConsumerEntry, event map[string]interface{}) (*handlerBatchResult, error) {
+func (cm *ConsumerManager) invokeHandlerResult(ctx context.Context, entry ConsumerEntry, event sqsevent.Event) (*handlerBatchResult, error) {
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
 		return nil, fmt.Errorf("marshal event: %w", err)

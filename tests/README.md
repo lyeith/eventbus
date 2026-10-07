@@ -14,7 +14,8 @@ go vet ./...
 
 [SDK verification](sdk/README.md) adds lifecycle, SRP/custom authentication,
 Node trigger execution, native Cognito provisioning, SES/SNS capture, direct SQS
-sending, Secrets rotation, Lambda Event, Scheduler and restart evidence. It requires Node >=20
+sending, SNS Lambda, SQS mappings, Secrets rotation, Lambda Event, Scheduler,
+real Express/Swagger gateway redirects and restart evidence. It requires Node >=20
 and frozen SDK dependencies, with no running application stack.
 
 Firehose's optional native S3 suite requires an explicitly owned loopback RustFS

@@ -17,7 +17,9 @@ internal/
   cognito/               SQLite identities, lifecycle, shared challenge state, SRP/auth and JWT/JWKS
   cognitotrigger/        Application-owned Node trigger execution and child lifetime
   messaging/             Shared registry; separate queue and topic engines/adapters
-  consumer/              Harness configuration, polling, settlement and processes
+  eventsource/           Native SQS mapping state, serial polling and completion-based ack
+  sqsevent/              Shared native SQS Lambda wire types
+  consumer/              Dev recipe configuration, polling, settlement and processes
   ses/                   Fixtures, sending, MIME, capture and v1/v2 adapters
   firehose/              Processing, partition buffers, GZIP and retained S3 delivery
   scheduler/             One-time schedule state, idempotency and Lambda admission
@@ -55,12 +57,18 @@ pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
 - SNS and SQS share the `messaging` registry but own separate state engines.
   `sqs_*` owns queues, typed operations and both JSON/Query adapters; `sns_*` owns
   topics, subscriptions, SMS/mobile state and Query adapters. SNS delivers to SQS
-  through `SendQueueMessage`; capture records and admission policy stay with SNS.
+  through `SendQueueMessage`; Lambda delivery uses its `LambdaDelivery` port.
+  Capture records, filtering and admission policy stay with SNS.
   SES/SNS/Cognito notification and Lambda evidence wrappers use `devcapture` for durable output mechanics.
   Publication, subscriptions and queue settlement
   need the same broker. Queue collections remain private to that owner.
+- `eventsource` declares queue/function ports and owns native Create/Get/Delete
+  mappings and poller lifetime. App binds the original broker queue instance and
+  adapts completion-based Lambda Execute; SQS alone owns visibility/FIFO/redrive.
+- `sqsevent` owns shared SQS Lambda wire types. Messaging owns projection from
+  immutable receive snapshots. Both native mappings and dev consumers use it.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message
-  types. It owns subprocess policy, batch responses, retries and dead letters.
+  types. It owns dev subprocess recipes, batch responses, retries and dead letters.
 - `cognito` declares its TriggerInvoker port and owns challenge state and decisions.
   `cognitotrigger` executes configured app handlers; it imports no Cognito package.
   `app` injects and joins the runner before releasing stores/capture.
@@ -71,7 +79,9 @@ pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
   `app` injects it into the service dispatcher and closes it after background Event drain and HTTP drain.
 - `secrets` owns a narrow RotationInvoker port and its step/state policy;
   `scheduler` owns a narrow TargetInvoker port and admission retry/time policy.
-  `app` adapts both to Lambda typed Execute/Admit. Services do not import Lambda.
+  `app/service_invocations.go` shares redacted Execute/Admit mechanics with SNS
+  and SQS mapping adapters. Service-specific delivery/retry policies stay in core;
+  services do not import Lambda.
 - SNS owns FirehoseDelivery; `app` injects Firehose. Filters/raw/envelopes belong
   to SNS, while extraction/buffering/retry/destination lifetime belong to Firehose.
 - `awsprotocol` holds reusable wire helpers, without service state. Callers own
@@ -98,6 +108,8 @@ private. Application acceptance behavior belongs in the consuming application.
 | Token issuance across password/SRP/custom/MFA/refresh | Cognito `auth.go` and `client_validity.go`; every flow uses persisted client policy |
 | Shared challenge continuation state | Cognito `challenge_state.go`; custom trigger decisions stay in `custom_auth.go` |
 | Password policy and credential revision | Cognito `password_policy.go` and store lifecycle; keep existing distinct error formatting |
+| SQS Lambda wire records and projection | `sqsevent` owns types; messaging owns snapshots, leases and settlement |
+| Synchronous completion and asynchronous admission adapters | `app`; narrow consumer ports retain service policy, Lambda owns children |
 | Fixture provisioning and local recipe loading | Named `dev_*.go` adapters; test-only store mutation helpers stay in `_test.go` |
 
 Similar-looking code does not always have the same contract. Diagnostic tails,
@@ -115,6 +127,7 @@ owners. Do not merge these policies into a generic runner or wire decoder.
 | Lambda Invoke, Runtime API, language handlers and child cleanup | `internal/lambda` tests |
 | Store, validation, capture, filtering or operation behavior | Colocated service tests; real SQLite for Cognito |
 | Node custom trigger configuration, execution, deadlines and child cleanup | `internal/cognitotrigger` tests |
+| SQS mapping validation, polling, acknowledgment and join barriers | `internal/eventsource` tests; real Python SDK in `tests/sdk` |
 | Consumer configuration, process execution or settlement | `internal/consumer` tests |
 | Target/path selection, health or protocol fallback | `internal/server` tests with composed service handlers |
 | Scheduler state/timing/idempotency/target admission | `internal/scheduler` tests; real JS SDK in `tests/sdk` |

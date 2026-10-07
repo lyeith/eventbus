@@ -44,6 +44,7 @@ type Services struct {
 	Secrets        ActionHandler
 	Cognito        CognitoHandler
 	SES            SESHandler
+	EventSources   http.Handler
 	Lambda         http.Handler
 	Scheduler      http.Handler
 	CognitoURLs    *CognitoURLs
@@ -67,6 +68,14 @@ func New(services Services) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/2015-03-31/event-source-mappings" || strings.HasPrefix(r.URL.Path, "/2015-03-31/event-source-mappings/") {
+		if s.services.EventSources == nil {
+			writeRESTError(w, http.StatusServiceUnavailable, "ServiceException", "Lambda event-source mappings are not configured")
+		} else {
+			s.services.EventSources.ServeHTTP(w, r)
+		}
+		return
+	}
 	if r.URL.Path == "/schedules" || strings.HasPrefix(r.URL.Path, "/schedules/") {
 		if s.services.Scheduler == nil {
 			writeRESTError(w, http.StatusServiceUnavailable, "InternalServerException", "Scheduler is not configured")

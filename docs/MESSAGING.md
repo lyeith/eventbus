@@ -50,8 +50,9 @@ deliver through the local Firehose port to the configured S3/RustFS endpoint,
 after filtering and raw/envelope selection; admission failures use the existing
 DeliveryFailure/DLQ policy, and accepted-record S3 retries belong to Firehose.
 See [Firehose configuration and SDK example](FIREHOSE.md) for processing,
-buffering, limits and shutdown behavior. HTTP/S, email, SMS, Lambda and
-mobile-push delivery requests are captured without contacting their endpoints.
+buffering, limits and shutdown behavior. Lambda subscriptions use the registered
+local asynchronous runtime described below. HTTP/S, email, SMS and mobile-push
+delivery requests are captured without contacting their endpoints.
 The SMS sandbox starts enabled;
 read the captured OTP and call VerifySMSSandboxPhoneNumber before sending.
 Origination numbers and opted-out numbers start empty; there is no provider
@@ -64,6 +65,59 @@ and AWS production timing/throughput quotas are outside the local harness.
 SNS notification envelopes are unsigned local fixtures; they omit AWS signature
 and signing-certificate fields. Operation coverage does not claim every
 production AWS behavior is reproduced.
+
+## SNS to registered Lambda
+
+Register application functions with `--lambda-functions functions.yaml` and
+`--work-dir /path/to/application`, then use the normal SNS SDK `Subscribe` call with
+`Protocol="lambda"` and a full ARN such as
+`arn:aws:lambda:us-east-1:000000000000:function:notifications:live`.
+The ARN must use EventBus's configured region/account and `arn:aws` partition.
+Aliases and numeric versions must be explicitly registered as `name:qualifier`;
+an unregistered alias never falls back to the base handler. Each EventBus owner
+uses its own registry and bounded queue; it never calls AWS Lambda or a remote
+fallback. See [Lambda registration and execution evidence](LAMBDA.md).
+
+Standard topics deliver one native `Records` entry per matching subscription,
+with `EventSource="aws:sns"`, `EventVersion="1.0"`, `EventSubscriptionArn` and
+`Sns` notification metadata. Message ID, topic, subject, original publish timestamp,
+body and attributes survive admission/retry. Number and String.Array attributes
+become `Type="String"` for Lambda; Binary values use base64. Attribute/body filters
+run before registry resolution, so a filtered unknown target causes no invocation
+or delivery failure. Protocol-specific JSON messages select `lambda` or `default`
+and omit message attributes, following SNS behavior. Notifications are unsigned;
+the unsubscribe URL points to the local EventBus listener.
+
+Lambda subscriptions reject raw delivery, HTTP delivery policies, Firehose roles,
+FIFO topics and replay options. Subscribe validates resource identity, without
+requiring an already registered function. An eligible publish to an unknown
+function/alias or an owner without a configured runtime records `DeliveryFailure`.
+Rejected bounded admission does the same. The existing SNS `RedrivePolicy` can
+place the notification envelope in a local SQS DLQ. Native Publish success means
+publication acceptance, including when an individual subscription fails delivery.
+
+`Publish` capture records a `scheduled` intent. Successful runtime admission adds
+`operation="DeliveryAdmission"`, `status="admitted"`, `subscription_arn` and
+`invocation_request_id`. Join that last field to `request_id` in
+`eventbus.lambda.async.v1` evidence and check its terminal state plus the handler's
+business side effect. Admission and capture do not claim completed execution.
+
+SNS makes one bounded local admission attempt; it does not reproduce production
+SNS's multi-hour admission retries. Once admitted, Lambda owns execution,
+deadlines and the two retries for function/runtime failure. Retries retain the
+same SNS message ID and invocation request ID and can duplicate application
+side effects. Eventual handler failure/timeout appears in Lambda execution
+evidence, rather than SNS's admission DLQ. Handlers must be idempotent.
+
+During shutdown, Lambda stops asynchronous admission and joins admitted work
+while the AWS listener remains usable by accepted handlers. A shutdown deadline
+cancels retries, joins child processes and reports cancellation. SNS introduces
+no extra worker or child owner. Messaging resources and admitted event payloads
+are in memory: restart requires reprovisioning, loses pending events and does
+not replay append-only evidence files. There is no durable or exactly-once
+execution guarantee. The contract follows the
+[AWS SNS Lambda event shape](https://docs.aws.amazon.com/lambda/latest/dg/with-sns.html)
+and [Lambda attribute conversion](https://docs.aws.amazon.com/sns/latest/dg/sns-message-attributes.html).
 
 ## Live notification capture
 
@@ -88,7 +142,8 @@ Match assertions by message ID, not file position or time.
 | Delivery status | Meaning |
 | --- | --- |
 | captured | External delivery intent recorded locally |
-| scheduled | SQS enqueue or Firehose record admission scheduled locally |
+| scheduled | SQS enqueue, Firehose record or Lambda admission scheduled locally |
+| admitted | Local Lambda accepted the event; completion belongs to Lambda evidence |
 | filtered | Subscription filter did not match |
 | pending_confirmation | Subscription is awaiting confirmation |
 | paused | Explicit replay end has paused live subscription delivery |
@@ -101,6 +156,8 @@ with the same message ID. If this later capture fails, the accepted Publish
 remains successful, stderr records the error, and subsequent sends fail at their
 initial capture. Assert SQS outcomes by receiving the queue message, and Firehose outcomes by
 reading/decompressing the resulting S3 object and inspecting retained delivery errors.
+Assert Lambda outcomes through the correlated terminal execution record and
+application side effect, rather than its scheduled/admitted intent.
 Replay records place original per-publication evidence in `details.publications`
 inside the top-level record, rather than appending those entries separately.
 SNS duplicates also produce capture evidence with `details.deduplicated=true`.
@@ -126,4 +183,6 @@ Service tests cover all operation families, validation, state transitions,
 filters, redrive, FIFO and capture failure. Server tests send real Go AWS SDK
 requests through the complete dispatcher and also exercise legacy SQS Query.
 The frozen Python SDK lane verifies direct send/receive/delete, binary checksums,
-SNS raw fanout, push capture and typed errors. See [SDK verification](../tests/sdk/README.md).
+SNS raw fanout, push capture and typed errors. A separate frozen boto3 SNS/Lambda
+proof executes real Python handlers for aliases, filtering, ownership, admission
+pressure/DLQ and function-failure/timeout retries. See [SDK verification](../tests/sdk/README.md).

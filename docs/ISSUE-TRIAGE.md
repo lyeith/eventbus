@@ -40,6 +40,18 @@ original native event paths. Greedy routes and `$default` reserve only the chose
 readiness GET endpoint. Shipped in v0.5.1; native gateway management parity
 is outside scope. [Gateway guide](GATEWAY.md) states the recipe and collision rules.
 
+## Delivery and route follow-ups
+
+| Ticket | Owner | Implemented bounded contract |
+| --- | --- | --- |
+| [#13](https://github.com/lyeith/eventbus/issues/13) SNS Lambda | `messaging` filtering/event/admission; `lambda` execution; `app` composes | Native Records, registered aliases, bounded async admission, correlated evidence and joined shutdown |
+| [#14](https://github.com/lyeith/eventbus/issues/14) SQS mappings | `eventsource` lifecycle; SQS lease/redrive; Lambda completion | Create/Get/Delete, explicit batch size one, bound queue identity, FIFO and completion-only current-receipt ack |
+| [#15](https://github.com/lyeith/eventbus/issues/15) Docs slash | `gateway` native route matching | Explicit literal trailing slash, full-match precedence and original event paths; application owns public ingress readiness guard |
+
+These are AWS core gaps. Registration, local capacity/evidence and dev recipe
+consumers remain named harness adapters. See [Messaging](MESSAGING.md),
+[Mappings](EVENT-SOURCES.md) and [Gateway](GATEWAY.md) for exact limits.
+
 ## Core versus harness code
 
 | Concern | Owner |

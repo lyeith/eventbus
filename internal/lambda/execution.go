@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -53,17 +54,29 @@ func (service *Service) resolveTarget(name, qualifier string) (executableFunctio
 	return entry, resolved, nil
 }
 
-func (service *Service) ValidateTarget(name, qualifier string) error {
-	_, _, err := service.resolveTarget(name, qualifier)
+// TargetInfo describes immutable registered execution settings, without exposing
+// commands, environment or mutable runtime state to service coordinators.
+type TargetInfo struct {
+	FunctionName string
+	Timeout      time.Duration
+}
+
+func (service *Service) DescribeTarget(name, qualifier string) (TargetInfo, error) {
+	entry, resolved, err := service.resolveTarget(name, qualifier)
 	if err != nil {
-		return err
+		return TargetInfo{}, err
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	if service.closed {
-		return invocationError(http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
+		return TargetInfo{}, invocationError(http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
 	}
-	return nil
+	return TargetInfo{FunctionName: resolved, Timeout: entry.timeout}, nil
+}
+
+func (service *Service) ValidateTarget(name, qualifier string) error {
+	_, err := service.DescribeTarget(name, qualifier)
+	return err
 }
 
 func validateExecution(input InvokeInput, limit int) error {
