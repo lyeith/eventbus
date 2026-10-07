@@ -28,6 +28,7 @@ type config struct {
 	accessTokenTTL           time.Duration
 	refreshTokenTTL          time.Duration
 	snsLog                   string
+	sqsDeliveryLog           string
 	sesLog                   string
 	sesConfig                string
 	debug                    bool
@@ -63,6 +64,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	accessTokenTTL := flags.Duration("access-token-ttl", time.Hour, "Legacy seeded-client access/ID token TTL (native app clients own token validity)")
 	refreshTokenTTL := flags.Duration("refresh-token-ttl", 24*time.Hour, "Legacy seeded-client refresh TTL (native app clients own token validity)")
 	snsLog := flags.String("sns-log", "-", "SNS JSON Lines capture path (external deliveries stay local)")
+	sqsDeliveryLog := flags.String("sqs-delivery-log", "", "Optional private JSON Lines evidence path for native SQS delivery and joined completion (requires --lambda-functions)")
 	sesLog := flags.String("ses-log", "-", "SES JSON Lines capture path ('-' for stdout; no email delivery)")
 	sesConfig := flags.String("ses-config", "", "Optional SES sending fixtures (templates, identities, configuration sets, received messages)")
 	debug := flags.Bool("debug", false, "Enable debug logging")
@@ -95,9 +97,13 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		accessTokenTTL:           *accessTokenTTL,
 		refreshTokenTTL:          *refreshTokenTTL,
 		snsLog:                   *snsLog,
+		sqsDeliveryLog:           *sqsDeliveryLog,
 		sesLog:                   *sesLog,
 		sesConfig:                *sesConfig,
 		debug:                    *debug,
+	}
+	if err := validateDevEvidenceConfig(cfg); err != nil {
+		return config{}, err
 	}
 	return cfg, validateRetainedConfig(cfg)
 }

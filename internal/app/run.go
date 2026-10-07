@@ -36,6 +36,9 @@ func Run() error {
 }
 
 func run(ctx context.Context, cfg config) (resultErr error) {
+	if err := validateDevEvidenceConfig(cfg); err != nil {
+		return err
+	}
 	if err := validateRetainedConfig(cfg); err != nil {
 		return err
 	}
@@ -103,12 +106,16 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	}
 	owned.notifications = notifications
 
+	var functions *lambdaservice.Service
+	var mappings *eventsource.Service
 	var retained *devquiescence.Coordinator
 	var retainedActivity devactivity.Activity
 	var retainedSource devactivity.Source
 	if cfg.retainedCallbackPort != 0 {
 		retained = devquiescence.NewWithOptions(devquiescence.Options{
-			Checks:     []func() error{snsCapture.Err, capture.Err, notifications.Err, firehoseManager.DevEvidence},
+			Checks: []func() error{snsCapture.Err, capture.Err, notifications.Err, firehoseManager.DevEvidence,
+				func() error { return devInvocationEvidence(functions, mappings) },
+			},
 			DrainHooks: []devquiescence.DrainHook{{Start: firehoseManager.DevBeginDrain, Resume: firehoseManager.DevResume}},
 		})
 		if err := retained.SetCallbackOrigin(fmt.Sprintf("http://127.0.0.1:%d", cfg.retainedCallbackPort)); err != nil {
@@ -126,7 +133,6 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if projectRoot == "" {
 		projectRoot = findProjectRoot(".")
 	}
-	var functions *lambdaservice.Service
 	var functionHandler http.Handler
 	if cfg.lambdaFunctions != "" {
 		runner, configureErr := loadRetainedFunctions(cfg.lambdaFunctions, projectRoot, retained)
@@ -142,11 +148,20 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		broker.SetLambdaDelivery(snsLambdaInvoker{runtime: functions})
 		mappingFunctions = eventSourceLambdaInvoker{runtime: functions}
 	}
-	mappings, err := eventsource.New(eventsource.Options{Region: cfg.region, AccountID: cfg.accountID, Dev: eventsource.DevOptions{Source: retainedSource, Activity: retainedActivity}}, sqsMappingSource{broker: broker}, mappingFunctions)
+	var deliveryCapture *eventsource.DevDeliveryCaptureConfig
+	if cfg.sqsDeliveryLog != "" {
+		deliveryCapture = &eventsource.DevDeliveryCaptureConfig{LogPath: cfg.sqsDeliveryLog}
+	}
+	mappings, err = eventsource.New(eventsource.Options{Region: cfg.region, AccountID: cfg.accountID, Dev: eventsource.DevOptions{Source: retainedSource, Activity: retainedActivity, DeliveryCapture: deliveryCapture}}, sqsMappingSource{broker: broker}, mappingFunctions)
 	if err != nil {
 		return fmt.Errorf("failed to configure Lambda event-source mappings: %w", err)
 	}
 	owned.mappings = mappings
+	if functions != nil {
+		if err := validateDevEvidencePaths(functions.DevDiagnosticsPath(), mappings.DeliveryLogPath(), cfg.snsLog, cfg.sesLog, cognitoLog); err != nil {
+			return fmt.Errorf("configure private evidence paths: %w", err)
+		}
+	}
 	triggers, err := loadCognitoTriggersWithActivity(cfg.cognitoTriggers, projectRoot, retainedActivity)
 	if err != nil {
 		return fmt.Errorf("failed to configure Cognito triggers: %w", err)

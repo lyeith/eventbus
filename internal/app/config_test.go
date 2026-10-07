@@ -23,13 +23,14 @@ func TestCLIConfigDefaultsAndOverrides(t *testing.T) {
 			require.Empty(t, c.jwksBase)
 			require.Empty(t, c.cognitoTriggers)
 			require.Empty(t, c.lambdaFunctions)
+			require.Empty(t, c.sqsDeliveryLog)
 			require.Equal(t, "/tmp/cognito-dev.db", c.cognitoDB)
 			require.Equal(t, time.Hour, c.accessTokenTTL)
 			require.Equal(t, 24*time.Hour, c.refreshTokenTTL)
 			require.Equal(t, "-", c.sesLog)
 			require.Equal(t, "-", c.snsLog)
 		}},
-		{"overrides", []string{"--port", "14100", "--region", "local-1", "--account-id", "123", "--s3-endpoint", "http://127.0.0.1:9001", "--consumers", "app/consumers.yaml", "--work-dir", "app", "--issuer-base", "http://issuer", "--jwks-base", "http://keys", "--cognito-pools", "pools.yaml", "--cognito-triggers", "auth/triggers.yaml", "--lambda-functions", "functions.yaml", "--cognito-db", "identities.db", "--access-token-ttl", "30m", "--refresh-token-ttl", "48h", "--sns-log", "notifications.jsonl", "--ses-log", "emails.jsonl", "--ses-config", "ses.yaml", "--debug"}, func(t *testing.T, c config) {
+		{"overrides", []string{"--port", "14100", "--region", "local-1", "--account-id", "123", "--s3-endpoint", "http://127.0.0.1:9001", "--consumers", "app/consumers.yaml", "--work-dir", "app", "--issuer-base", "http://issuer", "--jwks-base", "http://keys", "--cognito-pools", "pools.yaml", "--cognito-triggers", "auth/triggers.yaml", "--lambda-functions", "functions.yaml", "--cognito-db", "identities.db", "--access-token-ttl", "30m", "--refresh-token-ttl", "48h", "--sns-log", "notifications.jsonl", "--sqs-delivery-log", "deliveries.jsonl", "--ses-log", "emails.jsonl", "--ses-config", "ses.yaml", "--debug"}, func(t *testing.T, c config) {
 			require.Equal(t, 14100, c.port)
 			require.Equal(t, "local-1", c.region)
 			require.Equal(t, "123", c.accountID)
@@ -46,6 +47,7 @@ func TestCLIConfigDefaultsAndOverrides(t *testing.T) {
 			require.Equal(t, 48*time.Hour, c.refreshTokenTTL)
 			require.Equal(t, "emails.jsonl", c.sesLog)
 			require.Equal(t, "notifications.jsonl", c.snsLog)
+			require.Equal(t, "deliveries.jsonl", c.sqsDeliveryLog)
 			require.Equal(t, "ses.yaml", c.sesConfig)
 			require.True(t, c.debug)
 		}},
@@ -58,4 +60,11 @@ func TestCLIConfigDefaultsAndOverrides(t *testing.T) {
 			tc.check(t, c)
 		})
 	}
+}
+
+func TestCLIConfigDeliveryEvidenceRequiresNativeRuntime(t *testing.T) {
+	flags := flag.NewFlagSet("eventbus", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	_, err := readConfig(flags, []string{"--sqs-delivery-log", "deliveries.jsonl"})
+	require.ErrorContains(t, err, "sqs-delivery-log requires lambda-functions")
 }

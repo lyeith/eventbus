@@ -74,6 +74,12 @@ func executeLambdaTarget(ctx context.Context, runtime lambdaExecution, arn strin
 		return errLambdaInvocation
 	}
 	result, err := runtime.Execute(ctx, lambdaservice.InvokeInput{FunctionName: arn, Payload: payload})
+	return redactLambdaExecution(result, err)
+}
+
+// Every synchronous consumer shares the same native result classification and
+// redaction; developer evidence adapters never expose handler payloads/errors.
+func redactLambdaExecution(result lambdaservice.InvokeOutput, err error) error {
 	if err != nil {
 		// Canonical context errors carry no function data. All other errors and
 		// handler payloads are redacted at this service boundary.
