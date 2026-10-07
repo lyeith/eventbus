@@ -3,6 +3,7 @@ package eventsource
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lyeith/eventbus/internal/devcapture"
 )
 
 type Options struct {
@@ -70,21 +72,27 @@ type entry struct {
 	done                chan struct{}
 	retained            DevQueue
 	releaseRegistration func()
+	receiptEvidence     ReceiptEvidenceQueue
 }
 
 type Service struct {
-	mu              sync.Mutex
-	region, account string
-	queues          QueueSource
-	functions       FunctionInvoker
-	entries         map[string]*entry
-	dev             DevOptions
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
-	closing         bool
-	done            chan struct{}
-	closeErr        error
+	mu                  sync.Mutex
+	region, account     string
+	queues              QueueSource
+	functions           FunctionInvoker
+	entries             map[string]*entry
+	dev                 DevOptions
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	wg                  sync.WaitGroup
+	closing             bool
+	done                chan struct{}
+	closeErr            error
+	deliveryCapture     *devcapture.Sink
+	deliveryLogPath     string
+	deliveryEvidenceErr error
+	deliveryClosed      bool
+	observedFunctions   ObservedFunctionInvoker
 }
 
 var accountPattern = regexp.MustCompile(`^[0-9]{12}$`)
@@ -115,8 +123,22 @@ func New(options Options, queues QueueSource, functions FunctionInvoker) (*Servi
 	if options.Dev.Clock == nil {
 		options.Dev.Clock = time.Now
 	}
+	var observed ObservedFunctionInvoker
+	if options.Dev.DeliveryCapture != nil {
+		var ok bool
+		observed, ok = functions.(ObservedFunctionInvoker)
+		if !ok {
+			return nil, invalid("Delivery capture requires an observed native Lambda invoker")
+		}
+		config := *options.Dev.DeliveryCapture
+		options.Dev.DeliveryCapture = &config
+	}
+	capture, logPath, err := openDeliveryCapture(options.Dev.DeliveryCapture)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Service{region: options.Region, account: options.AccountID, queues: queues, functions: functions, entries: make(map[string]*entry), dev: options.Dev, ctx: ctx, cancel: cancel, done: make(chan struct{})}, nil
+	return &Service{region: options.Region, account: options.AccountID, queues: queues, functions: functions, entries: make(map[string]*entry), dev: options.Dev, ctx: ctx, cancel: cancel, done: make(chan struct{}), deliveryCapture: capture, deliveryLogPath: logPath, observedFunctions: observed}, nil
 }
 
 func (s *Service) functionARN(value string) (string, error) {
@@ -232,6 +254,14 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	mapping := Mapping{UUID: id, EventSourceMappingARN: "arn:aws:lambda:" + s.region + ":" + s.account + ":event-source-mapping:" + id, EventSourceARN: input.EventSourceARN, FunctionARN: arn, BatchSize: batchSize, ScalingConfig: scaling, FunctionResponseTypes: []string{}, State: state, StateTransitionReason: "USER_INITIATED", LastModified: float64(s.dev.Clock().UnixMilli()) / 1000, LastProcessingResult: "No records processed"}
 	workerCtx, cancel := context.WithCancel(s.ctx)
 	item := &entry{mapping: mapping, queue: queue, cancel: cancel, done: make(chan struct{})}
+	if state == "Enabled" && s.deliveryCapture != nil {
+		receipts, ok := queue.(ReceiptEvidenceQueue)
+		if !ok {
+			cancel()
+			return Mapping{}, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Canonical receipt evidence is unavailable"}
+		}
+		item.receiptEvidence = receipts
+	}
 	if state == "Enabled" && s.dev.Source != nil {
 		retained, ok := queue.(DevQueue)
 		if !ok {
@@ -374,6 +404,10 @@ func (s *Service) disableSource(item *entry, result string) {
 
 func (s *Service) poll(ctx context.Context, item *entry) {
 	for ctx.Err() == nil {
+		if s.deliveryCapture != nil && s.EvidenceErr() != nil {
+			s.disableSource(item, "Delivery evidence unavailable")
+			return // Never lease fresh messages against failed required evidence.
+		}
 		empty, keepPolling := s.pollBatch(ctx, item)
 		if !keepPolling {
 			return
@@ -388,8 +422,9 @@ func (s *Service) poll(ctx context.Context, item *entry) {
 
 func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPolling bool) {
 	records, complete, err := s.receive(ctx, item)
+	var evidenceErr error
 	if complete != nil {
-		defer complete(nil) // Business failure leaves native queue custody intact.
+		defer func() { complete(evidenceErr) }() // Ordinary business failure retains queue custody.
 	}
 	if ctx.Err() != nil {
 		return false, false
@@ -405,6 +440,10 @@ func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPollin
 	if len(records) > item.mapping.BatchSize || len(payload) > MaxBatchPayloadBytes {
 		s.disableSource(item, "Source batch exceeds the supported count or payload limit")
 		return false, false // Invalid adapter leases remain unacknowledged.
+	}
+	if err == nil && s.deliveryCapture != nil {
+		keepPolling, evidenceErr = s.deliverObserved(ctx, item, records, payload)
+		return false, keepPolling
 	}
 	if err == nil {
 		err = s.functions.InvokeTarget(ctx, item.mapping.FunctionARN, payload)
@@ -449,11 +488,16 @@ func (s *Service) Close(ctx context.Context) error {
 		go func() {
 			s.wg.Wait()
 			s.mu.Lock()
+			if s.deliveryCapture != nil {
+				s.deliveryEvidenceErr = errors.Join(s.deliveryEvidenceErr, s.deliveryCapture.Close())
+				s.deliveryClosed = true
+			}
+			s.closeErr = errors.Join(s.closeErr, s.deliveryEvidenceErr)
 			// Check after join: work completion and cancellation can both be
 			// ready before this goroutine resumes. Publishing the result before
 			// done prevents another Close caller from seeing a provisional nil.
 			if err := ctx.Err(); err != nil {
-				s.closeErr = fmt.Errorf("join event source mappings: %w", err)
+				s.closeErr = errors.Join(s.closeErr, fmt.Errorf("join event source mappings: %w", err))
 			}
 			close(s.done)
 			s.mu.Unlock()

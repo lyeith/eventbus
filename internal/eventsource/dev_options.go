@@ -16,6 +16,7 @@ type DevOptions struct {
 	Clock                func() time.Time
 	// Both ports are immutable startup dependencies for the optional retained
 	// owner. They are absent in ordinary mode and define no native mapping state.
-	Source   devactivity.Source
-	Activity devactivity.Activity
+	Source          devactivity.Source
+	Activity        devactivity.Activity
+	DeliveryCapture *DevDeliveryCaptureConfig
 }
