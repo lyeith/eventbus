@@ -45,9 +45,14 @@ and do not reproduce AWS asynchronous replay scheduling.
 SNS supports attribute/body filters, raw SQS delivery, protocol-specific JSON
 messages, confirmation tokens, tags, policies, SMS sandbox verification and
 mobile application/endpoint lifecycle. SNS DLQs must match the topic account,
-region and FIFO type. SQS destinations receive locally.
-HTTP/S, email, SMS, Lambda, Firehose and mobile-push delivery requests are
-captured without contacting their endpoints. The SMS sandbox starts enabled;
+region and FIFO type. SQS destinations receive locally. Firehose subscriptions on standard topics
+deliver through the local Firehose port to the configured S3/RustFS endpoint,
+after filtering and raw/envelope selection; admission failures use the existing
+DeliveryFailure/DLQ policy, and accepted-record S3 retries belong to Firehose.
+See [Firehose configuration and SDK example](FIREHOSE.md) for processing,
+buffering, limits and shutdown behavior. HTTP/S, email, SMS, Lambda and
+mobile-push delivery requests are captured without contacting their endpoints.
+The SMS sandbox starts enabled;
 read the captured OTP and call VerifySMSSandboxPhoneNumber before sending.
 Origination numbers and opted-out numbers start empty; there is no provider
 inventory or simulated carrier opt-out input.
@@ -83,7 +88,7 @@ Match assertions by message ID, not file position or time.
 | Delivery status | Meaning |
 | --- | --- |
 | captured | External delivery intent recorded locally |
-| scheduled | SQS delivery accepted for local enqueue |
+| scheduled | SQS enqueue or Firehose record admission scheduled locally |
 | filtered | Subscription filter did not match |
 | pending_confirmation | Subscription is awaiting confirmation |
 | paused | Explicit replay end has paused live subscription delivery |
@@ -94,7 +99,8 @@ A successful Publish accepts the notification; it does not guarantee every
 subscription delivered it. Later local failures use `operation: "DeliveryFailure"`
 with the same message ID. If this later capture fails, the accepted Publish
 remains successful, stderr records the error, and subsequent sends fail at their
-initial capture. Assert SQS outcomes by receiving the queue message.
+initial capture. Assert SQS outcomes by receiving the queue message, and Firehose outcomes by
+reading/decompressing the resulting S3 object and inspecting retained delivery errors.
 Replay records place original per-publication evidence in `details.publications`
 inside the top-level record, rather than appending those entries separately.
 SNS duplicates also produce capture evidence with `details.deduplicated=true`.

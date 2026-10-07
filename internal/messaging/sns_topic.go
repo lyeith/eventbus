@@ -290,12 +290,11 @@ func (b *Broker) Subscribe(topicARN, protocol, endpoint string, filter *FilterPo
 
 func (b *Broker) validateSNSSubscriptionEndpoint(protocol, endpoint string) error {
 	switch protocol {
-	case "sqs", "lambda", "firehose":
+	case "firehose":
+		return b.validateFirehoseEndpoint(endpoint)
+	case "sqs", "lambda":
 		parts := strings.SplitN(endpoint, ":", 6)
 		expected := protocol
-		if protocol == "firehose" {
-			expected = "firehose"
-		}
 		if len(parts) != 6 || parts[0] != "arn" || parts[2] != expected || parts[3] == "" || parts[4] == "" || parts[5] == "" {
 			return snsInvalid("Invalid " + protocol + " endpoint ARN")
 		}
@@ -385,7 +384,7 @@ func validateSNSSubscriptionAttributes(attributes map[string]string, protocol st
 		case "RedrivePolicy":
 			// Broker validates the policy and its topic/resource relationship.
 		case "SubscriptionRoleArn":
-			if protocol != "firehose" || !strings.Contains(value, ":iam:") {
+			if protocol != "firehose" || len(value) > 512 || !snsFirehoseRoleRE.MatchString(value) {
 				return nil, snsInvalid("SubscriptionRoleArn requires a Firehose subscription and IAM role ARN")
 			}
 		case "ReplayPolicy":
@@ -409,6 +408,9 @@ func (b *Broker) subscribeSNS(topicARN, protocol, endpoint string, attributes ma
 	topic := b.GetTopic(topicARN)
 	if topic == nil {
 		return nil, snsNotFound("Topic does not exist")
+	}
+	if protocol == "firehose" && strings.HasSuffix(topicARN, ".fifo") {
+		return nil, snsInvalid("Firehose subscriptions require a standard SNS topic")
 	}
 	if err := b.validateSNSSubscriptionEndpoint(protocol, endpoint); err != nil {
 		return nil, err

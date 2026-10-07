@@ -4,298 +4,214 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"strings"
-
-	"github.com/rs/zerolog/log"
 
 	"github.com/lyeith/eventbus/internal/awsprotocol"
 )
 
-// maxJSONRequestBytes retains this adapter's existing local transport budget.
-const maxJSONRequestBytes int64 = 1 << 20
+// Four MiB of decoded records require base64 overhead plus the JSON envelope.
+const maxJSONRequestBytes int64 = 6 << 20
 
-// Handler owns the Firehose AWS JSON adapter; the manager owns delivery state.
-type Handler struct {
-	firehose *FirehoseManager
+type Handler struct{ firehose *FirehoseManager }
+
+func NewHandler(manager *FirehoseManager) *Handler { return &Handler{firehose: manager} }
+func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	handler.ServeAction(w, r, awsprotocol.TargetAction(r.Header.Get("X-Amz-Target")))
 }
-
-func NewHandler(manager *FirehoseManager) *Handler {
-	return &Handler{firehose: manager}
-}
-
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.ServeAction(w, r, awsprotocol.TargetAction(r.Header.Get("X-Amz-Target")))
-}
-
-// ServeAction handles Firehose requests using the AWS JSON 1.1 protocol.
-// X-Amz-Target: Firehose_20150804.<Action>
-func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action string) {
-	log.Debug().Str("action", action).Msg("Firehose JSON API request")
-
+func (handler *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action string) {
 	switch action {
 	case "CreateDeliveryStream":
-		s.handleCreateDeliveryStream(w, r)
-	case "DeleteDeliveryStream":
-		s.handleDeleteDeliveryStream(w, r)
+		handler.handleCreateDeliveryStream(w, r)
 	case "DescribeDeliveryStream":
-		s.handleDescribeDeliveryStream(w, r)
+		handler.handleDescribeDeliveryStream(w, r)
+	case "DeleteDeliveryStream":
+		handler.handleDeleteDeliveryStream(w, r)
 	case "PutRecord":
-		s.handleFirehosePutRecord(w, r)
+		handler.handleFirehosePutRecord(w, r)
 	case "PutRecordBatch":
-		s.handleFirehosePutRecordBatch(w, r)
+		handler.handleFirehosePutRecordBatch(w, r)
 	default:
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidAction", fmt.Sprintf("Unknown Firehose action: %s", action))
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "UnknownOperationException", "Unknown Firehose action: "+action)
 	}
 }
 
-func (s *Handler) handleCreateDeliveryStream(w http.ResponseWriter, r *http.Request) {
+func readFirehoseJSON(w http.ResponseWriter, r *http.Request) (map[string]interface{}, bool) {
 	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
-		return
+	if err != nil || data == nil {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", "Invalid JSON request body")
+		return nil, false
 	}
-
-	name, _ := data["DeliveryStreamName"].(string)
-	if name == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "DeliveryStreamName is required")
-		return
+	return data, true
+}
+func firehoseName(w http.ResponseWriter, data map[string]interface{}) (string, bool) {
+	name, ok := data["DeliveryStreamName"].(string)
+	if !ok || !streamNameRE.MatchString(name) {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", "DeliveryStreamName must match [a-zA-Z0-9_.-]{1,64}")
+		return "", false
 	}
-
-	// Parse S3 destination config
-	bucketName := ""
-	prefix := ""
-	errorPrefix := ""
-	bufferSizeMB := 1
-	bufferIntervalSec := 60
-
-	if s3Config, ok := data["ExtendedS3DestinationConfiguration"].(map[string]interface{}); ok {
-		if bucketARN, ok := s3Config["BucketARN"].(string); ok {
-			// Extract bucket name from ARN: arn:aws:s3:::bucket-name
-			parts := strings.Split(bucketARN, ":::")
-			if len(parts) == 2 {
-				bucketName = parts[1]
-			}
-		}
-		if p, ok := s3Config["Prefix"].(string); ok {
-			prefix = p
-		}
-		if ep, ok := s3Config["ErrorOutputPrefix"].(string); ok {
-			errorPrefix = ep
-		}
-		if hints, ok := s3Config["BufferingHints"].(map[string]interface{}); ok {
-			if size, ok := hints["SizeInMBs"].(float64); ok {
-				bufferSizeMB = int(size)
-			}
-			if interval, ok := hints["IntervalInSeconds"].(float64); ok {
-				bufferIntervalSec = int(interval)
-			}
-		}
-	}
-
-	// Also check S3DestinationConfiguration (simpler form)
-	if bucketName == "" {
-		if s3Config, ok := data["S3DestinationConfiguration"].(map[string]interface{}); ok {
-			if bucketARN, ok := s3Config["BucketARN"].(string); ok {
-				parts := strings.Split(bucketARN, ":::")
-				if len(parts) == 2 {
-					bucketName = parts[1]
-				}
-			}
-			if p, ok := s3Config["Prefix"].(string); ok {
-				prefix = p
-			}
-		}
-	}
-
-	if bucketName == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "S3 destination bucket is required")
-		return
-	}
-
-	ds, err := s.firehose.CreateStream(name, bucketName, prefix, errorPrefix, bufferSizeMB, bufferIntervalSec)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusInternalServerError, "InternalError", err.Error())
-		return
-	}
-
-	log.Info().Str("stream", name).Str("bucket", bucketName).Str("prefix", prefix).Msg("Created delivery stream")
-
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]string{
-		"DeliveryStreamARN": ds.ARN,
-	})
+	return name, true
 }
 
-func (s *Handler) handleDeleteDeliveryStream(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
+func (handler *Handler) handleCreateDeliveryStream(w http.ResponseWriter, r *http.Request) {
+	data, ok := readFirehoseJSON(w, r)
+	if !ok {
+		return
+	}
+	config, err := configFromRequest(data)
 	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", err.Error())
 		return
 	}
-
-	name, _ := data["DeliveryStreamName"].(string)
-	if name == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "DeliveryStreamName is required")
+	stream, err := handler.firehose.CreateConfiguredStream(r.Context(), config)
+	if err != nil {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", err.Error())
 		return
 	}
-
-	ds := s.firehose.GetStream(name)
-	if ds == nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "Stream not found: "+name)
-		return
-	}
-
-	if err := s.firehose.DeleteStream(r.Context(), name); err != nil {
-		awsprotocol.JSONError(w, http.StatusServiceUnavailable, "ServiceUnavailableException", err.Error())
-		return
-	}
-	log.Info().Str("stream", name).Msg("Deleted delivery stream")
-
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{})
+	awsprotocol.JSON11.Response(w, http.StatusOK, map[string]string{"DeliveryStreamARN": stream.ARN})
 }
 
-func (s *Handler) handleDescribeDeliveryStream(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
+func (handler *Handler) handleDeleteDeliveryStream(w http.ResponseWriter, r *http.Request) {
+	data, ok := readFirehoseJSON(w, r)
+	if !ok {
 		return
 	}
-
-	name, _ := data["DeliveryStreamName"].(string)
-	if name == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "DeliveryStreamName is required")
+	name, ok := firehoseName(w, data)
+	if !ok {
 		return
 	}
-
-	ds := s.firehose.GetStream(name)
-	if ds == nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "Stream not found: "+name)
+	if handler.firehose.GetStream(name) == nil {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "ResourceNotFoundException", "Stream not found: "+name)
 		return
 	}
-
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{
-		"DeliveryStreamDescription": map[string]interface{}{
-			"DeliveryStreamARN":    ds.ARN,
-			"DeliveryStreamName":   ds.Name,
-			"DeliveryStreamStatus": ds.Status,
-			"DeliveryStreamType":   "DirectPut",
-		},
-	})
+	if err := handler.firehose.DeleteStream(r.Context(), name); err != nil {
+		awsprotocol.JSON11.Error(w, http.StatusInternalServerError, "ServiceUnavailableException", err.Error())
+		return
+	}
+	awsprotocol.JSON11.Response(w, http.StatusOK, map[string]interface{}{})
 }
 
-func (s *Handler) handleFirehosePutRecord(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
+func (handler *Handler) handleDescribeDeliveryStream(w http.ResponseWriter, r *http.Request) {
+	data, ok := readFirehoseJSON(w, r)
+	if !ok {
 		return
 	}
-
-	name, _ := data["DeliveryStreamName"].(string)
-	if name == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "DeliveryStreamName is required")
+	name, ok := firehoseName(w, data)
+	if !ok {
 		return
 	}
-
-	ds := s.firehose.GetStream(name)
-	if ds == nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "Stream not found: "+name)
+	snapshot, exists := handler.firehose.Snapshot(name)
+	if !exists {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "ResourceNotFoundException", "Stream not found: "+name)
 		return
 	}
+	config := snapshot.Config
+	destination := map[string]interface{}{"BucketARN": config.BucketARN, "RoleARN": config.RoleARN, "Prefix": config.Prefix, "ErrorOutputPrefix": config.ErrorOutputPrefix, "BufferingHints": config.BufferingHints, "CompressionFormat": config.CompressionFormat, "CustomTimeZone": config.CustomTimeZone, "FileExtension": config.FileExtension, "ProcessingConfiguration": config.ProcessingConfiguration, "DynamicPartitioningConfiguration": config.DynamicPartitioningConfiguration, "EncryptionConfiguration": map[string]string{"NoEncryptionConfig": "NoEncryption"}, "S3BackupMode": "Disabled"}
+	awsprotocol.JSON11.Response(w, http.StatusOK, map[string]interface{}{"DeliveryStreamDescription": map[string]interface{}{"DeliveryStreamARN": snapshot.ARN, "DeliveryStreamName": snapshot.Name, "DeliveryStreamStatus": snapshot.Status, "DeliveryStreamType": "DirectPut", "VersionId": "1", "CreateTimestamp": float64(snapshot.CreatedAt.UnixMilli()) / 1000, "HasMoreDestinations": false, "Destinations": []interface{}{map[string]interface{}{"DestinationId": "destinationId-000000000001", "ExtendedS3DestinationDescription": destination}}}})
+}
 
+func (handler *Handler) handleFirehosePutRecord(w http.ResponseWriter, r *http.Request) {
+	data, ok := readFirehoseJSON(w, r)
+	if !ok {
+		return
+	}
+	name, ok := firehoseName(w, data)
+	if !ok {
+		return
+	}
 	record, ok := data["Record"].(map[string]interface{})
 	if !ok {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "Record is required")
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", "Record is required")
 		return
 	}
-
-	recordData, err := extractRecordData(record)
+	decoded, err := extractRecordData(record)
 	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", err.Error())
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", err.Error())
 		return
 	}
-
-	recordID, err := s.firehose.PutRecord(ds, recordData)
+	if err := validateRecords([][]byte{decoded}); err != nil {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", err.Error())
+		return
+	}
+	stream := handler.firehose.GetStream(name)
+	if stream == nil {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "ResourceNotFoundException", "Stream not found: "+name)
+		return
+	}
+	results, err := handler.firehose.AcceptRecordBatch(r.Context(), stream, [][]byte{decoded})
 	if err != nil {
-		awsprotocol.JSONError(w, http.StatusServiceUnavailable, "ServiceUnavailableException", err.Error())
+		awsprotocol.JSON11.Error(w, http.StatusInternalServerError, "ServiceUnavailableException", err.Error())
 		return
 	}
-
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{
-		"RecordId":  recordID,
-		"Encrypted": false,
-	})
+	if result := results[0]; result.ErrorCode != "" {
+		awsprotocol.JSON11.Error(w, http.StatusInternalServerError, result.ErrorCode, result.ErrorMessage)
+		return
+	}
+	awsprotocol.JSON11.Response(w, http.StatusOK, map[string]interface{}{"RecordId": results[0].RecordID, "Encrypted": false})
 }
 
-func (s *Handler) handleFirehosePutRecordBatch(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
+func (handler *Handler) handleFirehosePutRecordBatch(w http.ResponseWriter, r *http.Request) {
+	data, ok := readFirehoseJSON(w, r)
+	if !ok {
 		return
 	}
-
-	name, _ := data["DeliveryStreamName"].(string)
-	if name == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "DeliveryStreamName is required")
+	name, ok := firehoseName(w, data)
+	if !ok {
 		return
 	}
-
-	ds := s.firehose.GetStream(name)
-	if ds == nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "Stream not found: "+name)
-		return
-	}
-
 	rawRecords, ok := data["Records"].([]interface{})
 	if !ok {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "Records is required")
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", "Records is required")
 		return
 	}
-
-	records := make([][]byte, 0, len(rawRecords))
-	for _, raw := range rawRecords {
+	// Decode and validate the entire modeled request before any state mutation.
+	records := make([][]byte, len(rawRecords))
+	for index, raw := range rawRecords {
 		record, ok := raw.(map[string]interface{})
 		if !ok {
-			continue
+			awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", fmt.Sprintf("Records[%d] must be an object", index))
+			return
 		}
-		recordData, err := extractRecordData(record)
+		decoded, err := extractRecordData(record)
 		if err != nil {
-			continue
+			awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", fmt.Sprintf("Records[%d]: %v", index, err))
+			return
 		}
-		records = append(records, recordData)
+		records[index] = decoded
 	}
-
-	ids, err := s.firehose.PutRecordBatch(ds, records)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusServiceUnavailable, "ServiceUnavailableException", err.Error())
+	if err := validateRecords(records); err != nil {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "InvalidArgumentException", err.Error())
 		return
 	}
-
-	responses := make([]map[string]interface{}, len(ids))
-	for i, id := range ids {
-		responses[i] = map[string]interface{}{
-			"RecordId": id,
+	stream := handler.firehose.GetStream(name)
+	if stream == nil {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "ResourceNotFoundException", "Stream not found: "+name)
+		return
+	}
+	results, err := handler.firehose.AcceptRecordBatch(r.Context(), stream, records)
+	if err != nil {
+		awsprotocol.JSON11.Error(w, http.StatusInternalServerError, "ServiceUnavailableException", err.Error())
+		return
+	}
+	responses := make([]map[string]interface{}, len(results))
+	failures := 0
+	for index, result := range results {
+		if result.ErrorCode != "" {
+			failures++
+			responses[index] = map[string]interface{}{"ErrorCode": result.ErrorCode, "ErrorMessage": result.ErrorMessage}
+		} else {
+			responses[index] = map[string]interface{}{"RecordId": result.RecordID}
 		}
 	}
-
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{
-		"FailedPutCount":   0,
-		"Encrypted":        false,
-		"RequestResponses": responses,
-	})
+	awsprotocol.JSON11.Response(w, http.StatusOK, map[string]interface{}{"FailedPutCount": failures, "Encrypted": false, "RequestResponses": responses})
 }
 
-// extractRecordData gets the raw bytes from a Firehose record.
-// The SDK sends Data as base64-encoded bytes.
 func extractRecordData(record map[string]interface{}) ([]byte, error) {
-	dataStr, ok := record["Data"].(string)
+	data, ok := record["Data"].(string)
 	if !ok {
 		return nil, fmt.Errorf("Record.Data is required")
 	}
-
-	// AWS SDK sends base64-encoded data
-	decoded, err := base64.StdEncoding.DecodeString(dataStr)
+	decoded, err := base64.StdEncoding.Strict().DecodeString(data)
 	if err != nil {
-		// Might be raw string (from tests)
-		return []byte(dataStr), nil
+		return nil, fmt.Errorf("Record.Data must be valid base64")
 	}
 	return decoded, nil
 }

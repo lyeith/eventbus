@@ -26,7 +26,7 @@ func TestFirehoseShutdownJoinsDeliveryAndRetainsFailedBuffer(t *testing.T) {
 	fm := NewFirehoseManager("us-east-1", "000000000000", sink.URL, "test", "test")
 	stream, err := fm.CreateStream("blocked", "bucket", "", "", 1, 3600)
 	require.NoError(t, err)
-	_, err = fm.PutRecord(stream, make([]byte, 1<<20))
+	_, err = fm.PutRecordBatch(stream, [][]byte{make([]byte, 600000), make([]byte, 600000)})
 	require.NoError(t, err)
 	select {
 	case <-entered:
@@ -41,10 +41,8 @@ func TestFirehoseShutdownJoinsDeliveryAndRetainsFailedBuffer(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stream delivery owner not joined")
 	}
-	stream.mu.Lock()
-	remaining := len(stream.buffer)
-	stream.mu.Unlock()
-	require.Equal(t, 1, remaining, "undelivered data must not vanish from a failed final flush")
+	snapshot, _ := fm.Snapshot(stream.Name)
+	require.Equal(t, 2, snapshot.BufferedRecords, "undelivered data must not vanish from a failed final flush")
 	_, err = fm.PutRecord(stream, []byte("late"))
 	require.Error(t, err)
 	_, err = fm.CreateStream("late", "bucket", "", "", 1, 1)
@@ -96,8 +94,7 @@ func TestFirehoseDeleteDoesNotAcknowledgeFailedFinalDelivery(t *testing.T) {
 	require.NoError(t, err)
 	require.Error(t, fm.DeleteStream(context.Background(), stream.Name))
 	require.Same(t, stream, fm.GetStream(stream.Name))
-	stream.mu.Lock()
-	require.Len(t, stream.buffer, 1)
-	stream.mu.Unlock()
+	snapshot, _ := fm.Snapshot(stream.Name)
+	require.Equal(t, 1, snapshot.BufferedRecords)
 	require.Error(t, fm.Shutdown())
 }

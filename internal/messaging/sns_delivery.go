@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"context"
 	"encoding/json"
 	"math/big"
 	"strings"
@@ -15,6 +16,7 @@ type snsPlannedDelivery struct {
 	subscription *Subscription
 	body         string
 	queue        *Queue
+	firehose     FirehoseDelivery
 	attributes   map[string]MessageAttribute
 	failure      error
 }
@@ -91,6 +93,14 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 				}
 			}
 			plans = append(plans, plan)
+		case "firehose":
+			plan.firehose = b.firehoseDelivery()
+			if plan.firehose == nil {
+				plan.failure = snsInternal("Firehose delivery is not configured")
+			} else {
+				delivery.Status = "scheduled"
+			}
+			plans = append(plans, plan)
 		case "sms":
 			_, plan.failure = smsDeliveryMessage(message, "")
 			if plan.failure == nil {
@@ -123,6 +133,10 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 }
 
 func (b *Broker) snsSendDeliveries(input SNSPublishInput, result SNSPublishResult, plans []snsPlannedDelivery, dedupID string, replayed bool) error {
+	// A single publication has one bounded admission budget across Firehose
+	// subscriptions; expensive queries cannot extend it once per subscriber.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	for _, plan := range plans {
 		err := plan.failure
 		queueDedup := ""
@@ -132,7 +146,9 @@ func (b *Broker) snsSendDeliveries(input SNSPublishInput, result SNSPublishResul
 				queueDedup = "replay-" + uuid.NewString()
 			}
 		}
-		if err == nil {
+		if err == nil && plan.firehose != nil {
+			_, err = plan.firehose.PutFirehoseRecord(ctx, plan.subscription.Endpoint, []byte(plan.body))
+		} else if err == nil {
 			_, err = b.SendQueueMessage(plan.queue, QueueMessageInput{Body: plan.body, Attributes: plan.attributes, MessageGroupID: input.MessageGroupID, MessageDeduplicationID: queueDedup, SenderID: b.accountID})
 		}
 		if err == nil {
