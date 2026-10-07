@@ -30,7 +30,8 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
   and FirehoseDelivery ports; external
   delivery uses versioned JSONL capture. Keep registry/entity locks independent.
 - `internal/eventsource` owns native SQS mappings through queue and function ports;
-  only completed execution permits current-receipt acknowledgment. SQS owns leases,
+  batch/concurrency limits are enforced by joined workers; only completed whole-
+  batch execution permits current-receipt acknowledgment. SQS owns leases,
   FIFO and redrive; Lambda owns execution. Close mappings before the runtime.
 - `internal/consumer` owns dev recipes, process execution and recipe settlement
   through QueueBroker. It does not implement native event-source mappings.

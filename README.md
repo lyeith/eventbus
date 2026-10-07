@@ -54,7 +54,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 | API gateway | Separate `eventbus-gateway` executable; REST/HTTP API REQUEST authorizers, IAM/simple responses, HTTP_PROXY and AWS_PROXY 1.0/2.0. [Contracts](docs/GATEWAY.md). |
 | Lambda | Synchronous/async Invoke with bounded execution and evidence for application-owned Go/custom runtimes, Python, Node and command handlers. [Execution](docs/LAMBDA.md). |
 | Scheduler | Create/Get/Delete one-time schedules, local Lambda admission, named fixture groups and cancellation. |
-| SQS Lambda mappings | Native Create/Get/Delete mappings, explicit batch size one, registered function/alias execution, FIFO ordering and native visibility/DLQ policy. [Contracts](docs/EVENT-SOURCES.md). |
+| SQS Lambda mappings | Native Create/Get/Delete mappings, batches of 1–10 records (default 10), configured maximum concurrency, registered function/alias execution, FIFO ordering and native visibility/DLQ policy. [Contracts](docs/EVENT-SOURCES.md). |
 | Dev consumers | Recipe-driven Go/Python handlers receive SQS events with harness timeouts, partial batch retry and dead-letter policy. |
 | SES | All six v1 and three v2 sending operations, captured as JSONL without delivery. Management APIs are backlogged. |
 | Firehose | SNS/record/batch ingestion, Go jq partitions, GZIP, error prefixes and retained S3 delivery retries. |

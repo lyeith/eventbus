@@ -18,27 +18,33 @@ type Options struct {
 	Dev               DevOptions
 }
 
+type ScalingConfig struct {
+	MaximumConcurrency *int `json:"MaximumConcurrency,omitempty"`
+}
+
 type CreateInput struct {
-	EventSourceARN                 string   `json:"EventSourceArn"`
-	FunctionName                   string   `json:"FunctionName"`
-	BatchSize                      *int     `json:"BatchSize,omitempty"`
-	Enabled                        *bool    `json:"Enabled,omitempty"`
-	MaximumBatchingWindowInSeconds *int     `json:"MaximumBatchingWindowInSeconds,omitempty"`
-	FunctionResponseTypes          []string `json:"FunctionResponseTypes,omitempty"`
+	EventSourceARN                 string         `json:"EventSourceArn"`
+	FunctionName                   string         `json:"FunctionName"`
+	BatchSize                      *int           `json:"BatchSize,omitempty"`
+	Enabled                        *bool          `json:"Enabled,omitempty"`
+	MaximumBatchingWindowInSeconds *int           `json:"MaximumBatchingWindowInSeconds,omitempty"`
+	FunctionResponseTypes          []string       `json:"FunctionResponseTypes,omitempty"`
+	ScalingConfig                  *ScalingConfig `json:"ScalingConfig,omitempty"`
 }
 
 type Mapping struct {
-	UUID                           string   `json:"UUID"`
-	EventSourceMappingARN          string   `json:"EventSourceMappingArn"`
-	EventSourceARN                 string   `json:"EventSourceArn"`
-	FunctionARN                    string   `json:"FunctionArn"`
-	BatchSize                      int      `json:"BatchSize"`
-	MaximumBatchingWindowInSeconds int      `json:"MaximumBatchingWindowInSeconds"`
-	FunctionResponseTypes          []string `json:"FunctionResponseTypes"`
-	State                          string   `json:"State"`
-	StateTransitionReason          string   `json:"StateTransitionReason"`
-	LastModified                   float64  `json:"LastModified"`
-	LastProcessingResult           string   `json:"LastProcessingResult"`
+	UUID                           string         `json:"UUID"`
+	EventSourceMappingARN          string         `json:"EventSourceMappingArn"`
+	EventSourceARN                 string         `json:"EventSourceArn"`
+	FunctionARN                    string         `json:"FunctionArn"`
+	BatchSize                      int            `json:"BatchSize"`
+	MaximumBatchingWindowInSeconds int            `json:"MaximumBatchingWindowInSeconds"`
+	FunctionResponseTypes          []string       `json:"FunctionResponseTypes"`
+	ScalingConfig                  *ScalingConfig `json:"ScalingConfig,omitempty"`
+	State                          string         `json:"State"`
+	StateTransitionReason          string         `json:"StateTransitionReason"`
+	LastModified                   float64        `json:"LastModified"`
+	LastProcessingResult           string         `json:"LastProcessingResult"`
 }
 
 type APIError struct {
@@ -92,11 +98,14 @@ func New(options Options, queues QueueSource, functions FunctionInvoker) (*Servi
 	if options.Dev.MaxMappings == 0 {
 		options.Dev.MaxMappings = 1000
 	}
+	if options.Dev.MaxWorkersPerMapping == 0 {
+		options.Dev.MaxWorkersPerMapping = 32
+	}
 	if options.Dev.EmptyPollDelay == 0 {
 		options.Dev.EmptyPollDelay = 100 * time.Millisecond
 	}
-	if options.Dev.MaxMappings < 1 || options.Dev.EmptyPollDelay < 0 {
-		return nil, invalid("Invalid development mapping capacity or empty-poll delay")
+	if options.Dev.MaxMappings < 1 || options.Dev.MaxWorkersPerMapping < 1 || options.Dev.EmptyPollDelay < 0 {
+		return nil, invalid("Invalid development mapping capacity, worker cap or empty-poll delay")
 	}
 	if options.Dev.Clock == nil {
 		options.Dev.Clock = time.Now
@@ -129,10 +138,14 @@ func (s *Service) validate(input CreateInput) (string, error) {
 	if parts == nil || parts[1] != s.region || parts[2] != s.account || len(parts[3]) > 80 {
 		return "", invalid("EventSourceArn must identify an owned local SQS queue")
 	}
-	// Native SQS defaults to 10. Require explicit 1 instead of quietly replacing
-	// AWS's unsupported default with a different batch size.
-	if input.BatchSize == nil || *input.BatchSize != 1 {
-		return "", invalid("Only explicit BatchSize=1 is supported; the AWS default of 10 is not implemented")
+	if input.BatchSize != nil && (*input.BatchSize < 1 || *input.BatchSize > 10) {
+		return "", invalid("Only BatchSize values from 1 through 10 are supported")
+	}
+	if input.ScalingConfig != nil && input.ScalingConfig.MaximumConcurrency != nil {
+		maximum := *input.ScalingConfig.MaximumConcurrency
+		if maximum < 2 || maximum > 1000 {
+			return "", invalid("ScalingConfig.MaximumConcurrency must be 2 through 1000")
+		}
 	}
 	if input.MaximumBatchingWindowInSeconds != nil && *input.MaximumBatchingWindowInSeconds != 0 {
 		return "", invalid("Only MaximumBatchingWindowInSeconds=0 is supported")
@@ -202,13 +215,22 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	if input.Enabled != nil && !*input.Enabled {
 		state = "Disabled"
 	}
-	mapping := Mapping{UUID: id, EventSourceMappingARN: "arn:aws:lambda:" + s.region + ":" + s.account + ":event-source-mapping:" + id, EventSourceARN: input.EventSourceARN, FunctionARN: arn, BatchSize: 1, FunctionResponseTypes: []string{}, State: state, StateTransitionReason: "USER_INITIATED", LastModified: float64(s.dev.Clock().UnixMilli()) / 1000, LastProcessingResult: "No records processed"}
+	batchSize := 10 // Native SQS default.
+	if input.BatchSize != nil {
+		batchSize = *input.BatchSize
+	}
+	workers := 1 // Local policy when no native concurrency ceiling is selected.
+	scaling := cloneScalingConfig(input.ScalingConfig)
+	if scaling != nil {
+		workers = min(*scaling.MaximumConcurrency, s.dev.MaxWorkersPerMapping)
+	}
+	mapping := Mapping{UUID: id, EventSourceMappingARN: "arn:aws:lambda:" + s.region + ":" + s.account + ":event-source-mapping:" + id, EventSourceARN: input.EventSourceARN, FunctionARN: arn, BatchSize: batchSize, ScalingConfig: scaling, FunctionResponseTypes: []string{}, State: state, StateTransitionReason: "USER_INITIATED", LastModified: float64(s.dev.Clock().UnixMilli()) / 1000, LastProcessingResult: "No records processed"}
 	workerCtx, cancel := context.WithCancel(s.ctx)
 	item := &entry{mapping: mapping, queue: queue, cancel: cancel, done: make(chan struct{})}
 	s.entries[id] = item
 	if state == "Enabled" {
 		s.wg.Add(1)
-		go s.run(workerCtx, item)
+		go s.run(workerCtx, item, workers)
 	} else {
 		cancel()
 		close(item.done)
@@ -216,8 +238,17 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	return cloneMapping(mapping), nil
 }
 
+func cloneScalingConfig(scaling *ScalingConfig) *ScalingConfig {
+	if scaling == nil || scaling.MaximumConcurrency == nil {
+		return nil // An empty native ScalingConfig selects no concurrency ceiling.
+	}
+	maximum := *scaling.MaximumConcurrency
+	return &ScalingConfig{MaximumConcurrency: &maximum}
+}
+
 func cloneMapping(mapping Mapping) Mapping {
 	mapping.FunctionResponseTypes = append([]string{}, mapping.FunctionResponseTypes...)
+	mapping.ScalingConfig = cloneScalingConfig(mapping.ScalingConfig)
 	return mapping
 }
 
@@ -274,7 +305,9 @@ func (s *Service) Delete(ctx context.Context, id string) (Mapping, error) {
 
 func (s *Service) setResult(item *entry, result string) {
 	s.mu.Lock()
-	item.mapping.LastProcessingResult = result
+	if item.mapping.State == "Enabled" {
+		item.mapping.LastProcessingResult = result
+	}
 	s.mu.Unlock()
 }
 
@@ -289,27 +322,46 @@ func (s *Service) pause(ctx context.Context) bool {
 	}
 }
 
-func (s *Service) run(ctx context.Context, item *entry) {
+// run owns a fixed worker set until every receive and execution has joined.
+// A worker never admits a second invocation before its current batch settles.
+func (s *Service) run(ctx context.Context, item *entry, count int) {
 	defer s.wg.Done()
 	defer close(item.done)
 	defer item.cancel()
+	var workers sync.WaitGroup
+	workers.Add(count)
+	for range count {
+		go func() {
+			defer workers.Done()
+			s.poll(ctx, item)
+		}()
+	}
+	workers.Wait()
+}
+
+func (s *Service) disableSource(item *entry, result string) {
+	s.mu.Lock()
+	if item.mapping.State != "Deleting" {
+		item.mapping.State = "Disabled"
+		item.mapping.StateTransitionReason = "LAMBDA_INITIATED"
+		item.mapping.LastModified = float64(s.dev.Clock().UnixMilli()) / 1000
+	}
+	item.mapping.LastProcessingResult = result
+	item.cancel() // All peer receives and actual executions share this owner.
+	s.mu.Unlock()
+}
+
+func (s *Service) poll(ctx context.Context, item *entry) {
 	for ctx.Err() == nil {
-		record, err := item.queue.Receive(ctx)
+		records, err := item.queue.Receive(ctx, item.mapping.BatchSize)
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
-			s.mu.Lock()
-			item.mapping.LastProcessingResult = "Source receive failed"
-			if item.mapping.State != "Deleting" {
-				item.mapping.State = "Disabled"
-				item.mapping.StateTransitionReason = "LAMBDA_INITIATED"
-				item.mapping.LastModified = float64(s.dev.Clock().UnixMilli()) / 1000
-			}
-			s.mu.Unlock()
+			s.disableSource(item, "Source receive failed")
 			return // A deleted bound source is never looked up again by ARN.
 		}
-		if record == nil {
+		if len(records) == 0 {
 			// Ports must long poll; this bounded pause also prevents a failed
 			// adapter from turning an empty queue into an unbounded CPU loop.
 			if !s.pause(ctx) {
@@ -317,7 +369,11 @@ func (s *Service) run(ctx context.Context, item *entry) {
 			}
 			continue
 		}
-		payload, err := json.Marshal(SQSEvent{Records: []Record{*record}})
+		payload, err := json.Marshal(SQSEvent{Records: records})
+		if len(records) > item.mapping.BatchSize || len(payload) > MaxBatchPayloadBytes {
+			s.disableSource(item, "Source batch exceeds the supported count or payload limit")
+			return // Invalid adapter leases remain unacknowledged.
+		}
 		if err == nil {
 			err = s.functions.InvokeTarget(ctx, item.mapping.FunctionARN, payload)
 		}
@@ -328,12 +384,21 @@ func (s *Service) run(ctx context.Context, item *entry) {
 			s.setResult(item, "Function invocation failed")
 			continue // Broker visibility and redrive remain the sole retry owner.
 		}
-		deleted, err := item.queue.Delete(ctx, record.ReceiptHandle)
-		if err != nil || !deleted {
-			s.setResult(item, "Source acknowledgment failed")
-			continue
+		acknowledged := true
+		for _, record := range records {
+			deleted, err := item.queue.Delete(ctx, record.ReceiptHandle)
+			if err != nil || !deleted {
+				acknowledged = false
+			}
+			if ctx.Err() != nil {
+				return
+			}
 		}
-		s.setResult(item, "OK")
+		if acknowledged {
+			s.setResult(item, "OK")
+		} else {
+			s.setResult(item, "Source acknowledgment failed")
+		}
 	}
 }
 

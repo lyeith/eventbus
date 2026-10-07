@@ -60,8 +60,8 @@ Publish acceptance and `DeliveryAdmission` evidence do not prove execution;
 correlate the invocation request ID with Lambda completion evidence and the
 application side effect. [Messaging](MESSAGING.md) states filtering/retry limits.
 
-For SQS, create a native mapping through the Lambda SDK with explicit
-`BatchSize=1`. [Mappings](EVENT-SOURCES.md) shows provisioning and limits.
+For SQS, create a native mapping through the Lambda SDK with `BatchSize` from
+1–10 (default 10) and optional `ScalingConfig={"MaximumConcurrency": 2}`. [Mappings](EVENT-SOURCES.md) shows provisioning and limits.
 The handler must complete successfully before its current receipt is deleted.
 Queue visibility, FIFO and redrive settings govern retries. Delete the mapping
 before deleting its queue. Mappings and registered targets belong to one owner;

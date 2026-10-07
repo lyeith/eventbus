@@ -80,13 +80,9 @@ type sqsMappingQueue struct {
 var _ eventsource.Queue = (*sqsMappingQueue)(nil)
 
 func (queue *sqsMappingQueue) Info() eventsource.QueueInfo { return queue.info }
-func (queue *sqsMappingQueue) Receive(ctx context.Context) (*eventsource.Record, error) {
-	messages, err := queue.broker.ReceiveMessagesContext(ctx, queue.queue, 1, 20*time.Second)
-	if err != nil || len(messages) == 0 {
-		return nil, err
-	}
-	event := messaging.BuildSQSLambdaEvent(messages, queue.info.ARN)
-	return &event.Records[0], nil
+func (queue *sqsMappingQueue) Receive(ctx context.Context, max int) ([]eventsource.Record, error) {
+	event, err := queue.broker.ReceiveSQSLambdaEventContext(ctx, queue.queue, max, 20*time.Second, eventsource.MaxBatchPayloadBytes)
+	return event.Records, err
 }
 func (queue *sqsMappingQueue) Delete(ctx context.Context, receipt string) (bool, error) {
 	if err := ctx.Err(); err != nil {

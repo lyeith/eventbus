@@ -2,7 +2,7 @@
 
 ## Completed ticket scope
 
-Tickets #2–#15 and recorded ownership-review findings have
+Tickets #2–#16 and recorded ownership-review findings have
 accepted implementations with race, SDK and native delivery evidence.
 [Issue triage](ISSUE-TRIAGE.md) records bounded scope, owners and dependencies.
 The service guides state supported contracts and remaining capability limits.
@@ -36,9 +36,10 @@ All SQS/SNS operations are implemented for the local harness; see
 [Messaging](MESSAGING.md) for supported state and external capture boundaries.
 Production IAM enforcement, KMS encryption, CloudWatch metrics, provider delivery
 and production delivery retry infrastructure are outside this scope. Native
-SQS mappings execute registered Go/Python/Node functions with explicit batch size
-one. Larger batches, Update/List, filters, partial responses and managed concurrency
-remain separate work. The Go/Python dev recipe consumer retains harness policy.
+SQS mappings execute registered Go/Python/Node functions with batches of 1–10
+records and a configured concurrency ceiling. Nonzero batching windows/larger
+batches, Update/List, filters, partial responses and AWS managed scaling remain
+separate work. The Go/Python dev recipe consumer retains harness policy.
 
 ## Separate gateway and Lambda work
 

@@ -21,15 +21,20 @@ type QueueInfo struct {
 	VisibilityTimeout time.Duration
 }
 
+// MaxBatchPayloadBytes is the synchronous Lambda Records JSON payload limit.
+// Queue adapters enforce it while selecting records, before leasing messages.
+const MaxBatchPayloadBytes = 6 << 20
+
 // Queue retains the broker's native visibility, FIFO and redrive behavior.
-// Receive is cancellation-aware, leases exactly one message and returns an owned
-// snapshot. Delete succeeds only for the current receipt. Neither method may
+// Receive is cancellation-aware and returns owned snapshots of at most max
+// leased messages. The encoded SQSEvent must fit MaxBatchPayloadBytes; remaining
+// records stay unleased in queue order. Delete succeeds only for the current receipt. Neither method may
 // contact AWS. Receive must wait when empty rather than spin. Non-cancellation
 // receive errors permanently stop this bound source; adapters retain transient
 // waits locally.
 type Queue interface {
 	Info() QueueInfo
-	Receive(context.Context) (*Record, error)
+	Receive(context.Context, int) ([]Record, error)
 	Delete(context.Context, string) (bool, error)
 }
 

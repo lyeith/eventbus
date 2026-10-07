@@ -78,8 +78,8 @@ func messagingCompositionInvocation() error {
 			EventSource string `json:"EventSource"`
 		} `json:"Records"`
 	}
-	if err := json.Unmarshal(payload, &source); err != nil || len(source.Records) != 1 {
-		return errors.New("provided handler expected one native record")
+	if err := json.Unmarshal(payload, &source); err != nil || len(source.Records) == 0 || len(source.Records) > 10 {
+		return errors.New("provided handler expected a native record batch")
 	}
 	directory := os.Getenv("MESSAGING_OBSERVATIONS")
 	if source.Records[0].EventSource == "aws:sns" {
@@ -385,7 +385,7 @@ func TestMessagingQueueAdapterRetainsOriginalIdentity(t *testing.T) {
 	require.NotSame(t, original, replacement)
 	sent, err := broker.SendQueueMessage(replacement, messaging.QueueMessageInput{Body: "replacement remains owned"})
 	require.NoError(t, err)
-	_, err = bound.Receive(t.Context())
+	_, err = bound.Receive(t.Context(), 1)
 	require.ErrorIs(t, err, messaging.ErrQueueUnavailable)
 	deleted, err := bound.Delete(t.Context(), "old-receipt")
 	require.False(t, deleted)

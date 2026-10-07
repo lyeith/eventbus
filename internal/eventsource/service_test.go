@@ -31,23 +31,38 @@ func (s fakeSource) ResolveQueue(ctx context.Context, arn string) (Queue, error)
 type fakeQueue struct {
 	info       QueueInfo
 	messages   chan *Record
+	batches    chan []Record
 	receiveErr chan error
 	deleted    chan string
 	entered    chan struct{}
 }
 
 func newFakeQueue() *fakeQueue {
-	return &fakeQueue{info: QueueInfo{ARN: sourceARN, VisibilityTimeout: time.Second}, messages: make(chan *Record, 10), receiveErr: make(chan error, 1), deleted: make(chan string, 10), entered: make(chan struct{}, 10)}
+	return &fakeQueue{info: QueueInfo{ARN: sourceARN, VisibilityTimeout: time.Second}, messages: make(chan *Record, 10), batches: make(chan []Record, 8), receiveErr: make(chan error, 1), deleted: make(chan string, 10), entered: make(chan struct{}, 10)}
 }
 func (q *fakeQueue) Info() QueueInfo { return q.info }
-func (q *fakeQueue) Receive(ctx context.Context) (*Record, error) {
+func (q *fakeQueue) Receive(ctx context.Context, max int) ([]Record, error) {
 	select {
 	case q.entered <- struct{}{}:
 	default:
 	}
 	select {
 	case record := <-q.messages:
-		return record, nil
+		if record == nil {
+			return nil, nil
+		}
+		records := []Record{*record}
+		for len(records) < max {
+			select {
+			case record := <-q.messages:
+				records = append(records, *record)
+			default:
+				return records, nil
+			}
+		}
+		return records, nil
+	case records := <-q.batches:
+		return records, nil
 	case err := <-q.receiveErr:
 		return nil, err
 	case <-ctx.Done():
@@ -154,8 +169,11 @@ func TestCreateRejectsUnsupportedOrNonlocalSelection(t *testing.T) {
 		name   string
 		change func(*CreateInput)
 	}{
-		{"native default ten", func(i *CreateInput) { i.BatchSize = nil }},
-		{"batch two", func(i *CreateInput) { n := 2; i.BatchSize = &n }},
+		{"batch eleven", func(i *CreateInput) { n := 11; i.BatchSize = &n }},
+		{"negative batch", func(i *CreateInput) { n := -1; i.BatchSize = &n }},
+		{"concurrency one", func(i *CreateInput) { n := 1; i.ScalingConfig = &ScalingConfig{MaximumConcurrency: &n} }},
+		{"concurrency too high", func(i *CreateInput) { n := 1001; i.ScalingConfig = &ScalingConfig{MaximumConcurrency: &n} }},
+		{"concurrency zero", func(i *CreateInput) { n := 0; i.ScalingConfig = &ScalingConfig{MaximumConcurrency: &n} }},
 		{"batch zero", func(i *CreateInput) { n := 0; i.BatchSize = &n }},
 		{"window", func(i *CreateInput) { n := 1; i.MaximumBatchingWindowInSeconds = &n }},
 		{"partial", func(i *CreateInput) { i.FunctionResponseTypes = []string{"ReportBatchItemFailures"} }},

@@ -350,10 +350,11 @@ func (b *Broker) RequeueExpired(q *Queue) int {
 	defer q.mu.Unlock()
 	return pruneQueueLocked(q, now)
 }
-func (b *Broker) collectVisible(q *Queue, max int) []*Message {
-	return collectVisibleWithTimeoutLocked(q, max, q.VisibilityTimeout, time.Now())
-}
-func collectVisibleWithTimeoutLocked(q *Queue, max int, visibility time.Duration, now time.Time) []*Message {
+
+// admission observes a prospective native receive snapshot before its receipt,
+// count or visibility is committed. Lambda batch byte admission uses this same
+// FIFO/fairness owner; ordinary SQS receives pass nil and keep their wire flow.
+func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration, now time.Time, admission func(*Message) bool) []*Message {
 	blocked := make(map[string]bool)
 	if q.fifoLocked() {
 		for _, message := range q.inFlight {
@@ -362,7 +363,6 @@ func collectVisibleWithTimeoutLocked(q *Queue, max int, visibility time.Duration
 	}
 	var result []*Message
 	remaining := make([]*Message, 0, len(q.messages))
-	selectedGroups := make(map[string]bool)
 	// Standard MessageGroupId provides tenant fairness without FIFO locking.
 	candidates := append([]*Message(nil), q.messages...)
 	if !q.fifoLocked() && q.lastFairGroup != "" {
@@ -371,24 +371,34 @@ func collectVisibleWithTimeoutLocked(q *Queue, max int, visibility time.Duration
 		})
 	}
 	for _, message := range candidates {
-		if len(result) >= max || now.Before(message.VisibleAt) || (q.fifoLocked() && blocked[message.GroupID] && !selectedGroups[message.GroupID]) {
+		if len(result) >= max || now.Before(message.VisibleAt) || (q.fifoLocked() && blocked[message.GroupID]) {
 			remaining = append(remaining, message)
 			if q.fifoLocked() && now.Before(message.VisibleAt) {
 				blocked[message.GroupID] = true
 			}
 			continue
 		}
-		invalidateReceiveAttemptsForMessageLocked(q, message.ID)
-		message.ReceiptHandle = uuid.NewString()
-		message.VisibleAt = now.Add(visibility)
-		message.ReceivedAt = now
-		if message.FirstReceivedAt.IsZero() {
-			message.FirstReceivedAt = now
+		prepared := *message
+		prepared.ReceiptHandle = uuid.NewString()
+		prepared.VisibleAt = now.Add(visibility)
+		prepared.ReceivedAt = now
+		if prepared.FirstReceivedAt.IsZero() {
+			prepared.FirstReceivedAt = now
 		}
-		message.ReceiveCount++
+		prepared.ReceiveCount++
+		if admission != nil && !admission(&prepared) {
+			remaining = append(remaining, message)
+			if q.fifoLocked() {
+				// A rejected candidate must block its group's tail even when an
+				// earlier member was admitted into this same batch.
+				blocked[message.GroupID] = true
+			}
+			continue
+		}
+		invalidateReceiveAttemptsForMessageLocked(q, message.ID)
+		*message = prepared
 		q.inFlight[message.ReceiptHandle] = message
 		q.receipts[message.ReceiptHandle] = message.SentTimestamp.Add(q.RetentionPeriod + 12*time.Hour)
-		selectedGroups[message.GroupID] = true
 		q.lastFairGroup = message.GroupID
 		result = append(result, cloneMessage(message))
 	}
@@ -409,6 +419,10 @@ func (b *Broker) ReceiveMessages(q *Queue, max int, wait time.Duration) []*Messa
 	return messages
 }
 func (b *Broker) receiveSQS(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string) ([]*Message, *sqsError) {
+	return b.receiveSQSWithAdmission(ctx, q, max, wait, visibility, attempt, nil)
+}
+
+func (b *Broker) receiveSQSWithAdmission(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string, admission func(*Message) bool) ([]*Message, *sqsError) {
 	deadline := time.Now().Add(wait)
 	for {
 		now := time.Now()
@@ -469,7 +483,15 @@ func (b *Broker) receiveSQS(ctx context.Context, q *Queue, max int, wait time.Du
 				return result, nil
 			}
 		}
-		messages := collectVisibleWithTimeoutLocked(q, max, timeout, now)
+		candidateSeen := false
+		choose := admission
+		if admission != nil {
+			choose = func(candidate *Message) bool {
+				candidateSeen = true
+				return admission(candidate)
+			}
+		}
+		messages := collectVisibleForReceiveLocked(q, max, timeout, now, choose)
 		if len(messages) > 0 {
 			if attempt != "" {
 				handles := make([]string, len(messages))
@@ -483,7 +505,9 @@ func (b *Broker) receiveSQS(ctx context.Context, q *Queue, max int, wait time.Du
 			q.mu.Unlock()
 			return messages, nil
 		}
-		if wait <= 0 || !now.Before(deadline) {
+		// A consumer byte budget that rejects every eligible candidate is a
+		// completed bounded receive, not an empty queue to repeatedly long poll.
+		if candidateSeen || wait <= 0 || !now.Before(deadline) {
 			q.mu.Unlock()
 			return nil, nil
 		}

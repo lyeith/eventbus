@@ -1,60 +1,42 @@
 # Handoff
 
-Tickets #13–#15 are implemented, reviewed, closed and published in v0.6.0:
-https://github.com/lyeith/eventbus/releases/tag/v0.6.0
-Release source/tag: 32142a3f23c312e3eb972b5fe9cc1235d5e4d39c.
 Canonical checkout: SSD /home/spite/Projects/eventbus, main.
-Public/latest release: v0.6.0, 2026-10-07, nine assets.
+Latest published release remains v0.6.0; no new binaries published yet.
 No developer stack, Plans pin or identity database changed.
 
-#13: SNS uses its LambdaDelivery port, app adapts the registered Lambda Admit
-operation, and native Records preserve message/topic/subscription/time/attributes.
-Filtering precedes lookup; eligible unavailable targets and admission pressure
-produce explicit delivery failure/DLQ evidence. Admitted execution/retries belong
-solely to Lambda. SNS admission request IDs correlate terminal Lambda evidence.
-
-#14: eventsource owns native Create/Get/Delete and one serial poller per mapping.
-Explicit batch size one, zero batching window, whole-batch success only. Unknown
-selected settings/default ten fail explicitly. Target timeout cannot exceed queue
-visibility. Broker queue handles retain instance ownership; visibility/FIFO/redrive
-stay native. Successful Execute completion settles only a current receipt. Shared
-sqsevent types/messaging projection also serve existing dev recipe consumers.
-Deletion/shutdown cancel and join actual work before runtime/resources close.
-First Close context governs one published terminal outcome for every closer.
-
-#15: explicit literal trailing-slash templates and full-before-greedy precedence;
-original paths remain unchanged in authorizer and integration events. Native
-request contracts and dev readiness validation retain distinct owners. Real
-unchanged Express/Swagger works through registered Node Lambdas in both formats.
-The public ingress readiness guard is an application-owned fixture, not deployment.
+#16 implementation is complete and reviewed:
+- eventsource owns native batch/default/scaling admission and fixed joined workers.
+- messaging owns pre-lease exact SQS Lambda event-byte admission (6 MiB), retaining
+  native FIFO/fairness/retry-attempt state. sqsevent owns wire types.
+- app and SDK adapters delegate projection/lease policy to messaging; Lambda
+  completion governs whole-batch ack. No legacy consumer routing or new dependency.
+- docs state native BatchSize 1–10/default 10, ScalingConfig 2–1000, separate local
+  cap 32, omitted-ceiling serial policy, zero window and remaining explicit limits.
 
 Verification logs under SSD /tmp, governed by existing finite retention:
-- eventbus-delivery-final-core-race.log: app/server/consumer/messaging/lambda/
-  gateway/CLI all pass; includes real Swagger and startup/shutdown proofs.
-- eventbus-delivery-final-sdk-race.log: six actual SDK scenarios pass (28.889s),
-  including SNS/SQS mappings, Lambda Event, Secrets rotation and Scheduler.
-- eventbus-mappings-final-core-race.log: final mappings pass (1.062s).
-- eventbus-mappings-final-sdk-race.log: final actual mapping proof PASS (11.909s);
-  ssd-dev finalization hit transient EAGAIN after the successful child exit. Exact
-  run b6139df94ec046ecb90dcbc6615b8c64 inspected inactive/quiescent; its empty
-  owned scratch was removed. The test output and resource barrier are verified.
-- eventbus-eventsource-agent-concurrent-close-race.log: full suite x50 (2.612s).
-- eventbus-delivery-final-vet.log and eventbus-delivery-sdk-fixtures.log pass.
-- npm ci passed with exact approved test-only Express/Swagger locks.
-Read-only final ownership review found no remaining issues.
+- eventbus-eventsource-batch-final-race.log: full core x20 PASS (5.667s).
+- eventbus-eventsource-batch-final-vet.log: scoped vet PASS.
+- eventbus-sqs-lambda-batch-final-race.log: full messaging race PASS (5.196s).
+- eventbus-sqs-lambda-batch-final-vet.log: final messaging vet PASS.
+- eventbus-issue16-app-consumer-race.log: app/consumer PASS (10.755s/11.059s),
+  including actual production batch-five alias wiring and existing lifecycle proofs.
+- eventbus-issue16-combined-sdk-race.log: four real Python SDK lanes PASS (39.907s):
+  native messaging, SNS Lambda, batch/concurrency and preserved batch-one mapping.
+  Actual batches [5,5,5] overlap at two; payload-bound backlog splits [7,3] without
+  leasing excluded records; full-batch failure/timeout/DLQ/FIFO/isolation and pending
+  Delete/Close joining two actual children are verified.
+- eventbus-sqs-batch-sdk-{normal,race,vet}.txt: focused new lane PASS.
+Read-only review found no remaining #16 ownership/seam/correctness defect.
 
-Release verification completed:
-- scripts/build-release.sh built eight CGO-free artifacts from clean v0.6.0.
-  All embed the tag version, source revision and correct target metadata.
-- Packaged Linux amd64 and macOS arm64 passed actual SNS alias/SQS mapping
-  side effects and acknowledgment, SQLite create/describe, gateway 1.0/2.0
-  slash/query/assets/binary/private routing/readiness and collision refusal.
-  Other targets were cross-built, not executed. Simple artifact fixtures supplement
-  the unchanged Express/Swagger source proof, without a live AWS parity claim.
-- Downloaded all nine GitHub assets, verified SHA256SUMS and exact manifest before
-  publication. Public/latest, non-draft, nine assets and source/tag verified.
-- Source/main pushed; GitHub has no open issues. Release/download/laptop staging,
-  temporary smoke scripts and owned fixture state/processes removed. No hold.
-Logs: eventbus-v0.6.0-{build,artifact-smoke,macos-artifact-smoke,metadata}.log
-and eventbus-v0.6.0-publication.json, governed by finite SSD /tmp retention.
-Next: consuming-application acceptance; guides state exact remaining limits.
+#17 is implementation work in flight, not accepted or published:
+- New devquiescence owner tracks/fences source HTTP and trusted callback HTTP.
+- Lambda optional dev lifetime port spans async queue/retry/terminal evidence and
+  independent sync child cleanup; private cleanup uncertainty must fail closed.
+- Non-closing SNS capture error inspection prevents a false safe recovery result.
+- Parent owns app two-endpoint/control/cleanup composition and explicit unsupported
+  producer refusals; SDK acceptance owns fresh fixtures and registered handlers.
+- Exact application cleanup stays application-owned; no broker reset or data wipe.
+No new dependencies or live resources were provisioned. Temporary fixtures are
+owned by tests and cleaned; reusable frozen SDK environments remain in place.
+
+Next: finish #17, integrate/review/test, publish next minor release and clean staging.

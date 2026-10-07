@@ -17,7 +17,7 @@ internal/
   cognito/               SQLite identities, lifecycle, shared challenge state, SRP/auth and JWT/JWKS
   cognitotrigger/        Application-owned Node trigger execution and child lifetime
   messaging/             Shared registry; separate queue and topic engines/adapters
-  eventsource/           Native SQS mapping state, serial polling and completion-based ack
+  eventsource/           Native SQS mapping state, bounded workers and completion-based ack
   sqsevent/              Shared native SQS Lambda wire types
   consumer/              Dev recipe configuration, polling, settlement and processes
   ses/                   Fixtures, sending, MIME, capture and v1/v2 adapters
@@ -65,6 +65,8 @@ pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
 - `eventsource` declares queue/function ports and owns native Create/Get/Delete
   mappings and poller lifetime. App binds the original broker queue instance and
   adapts completion-based Lambda Execute; SQS alone owns visibility/FIFO/redrive.
+  Mapping workers enforce configured batch/concurrency limits and join as one owner.
+  Messaging applies the Lambda event byte budget before leasing queue records.
 - `sqsevent` owns shared SQS Lambda wire types. Messaging owns projection from
   immutable receive snapshots. Both native mappings and dev consumers use it.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message

@@ -7,7 +7,8 @@ EventBus's endpoint, fake credentials and the configured region. All execution
 stays local; unknown resources never fall back to AWS.
 
 Register functions using `--lambda-functions` (see [Lambda](LAMBDA.md)), create
-the queue through SQS, then create the mapping explicitly with `BatchSize=1`:
+the queue through SQS, then create the mapping using its native batch and concurrency
+settings:
 
 ```python
 queue_url = sqs.create_queue(
@@ -24,7 +25,8 @@ queue_arn = sqs.get_queue_attributes(
 mapping = functions.create_event_source_mapping(
     EventSourceArn=queue_arn,
     FunctionName="verification-handler:live",
-    BatchSize=1,
+    BatchSize=5,
+    ScalingConfig={"MaximumConcurrency": 2},
     Enabled=True,
 )
 sqs.send_message(
@@ -42,22 +44,37 @@ must be registered explicitly. The function timeout must not exceed the queue's
 visibility timeout. AWS recommends a visibility timeout at least six times the
 function timeout. Queue redrive/DLQ configuration remains native SQS state.
 
-The handler receives one native `Records` entry: original body, message ID,
-current receipt handle, source ARN/region, body digest, string/binary message
-attributes and system attributes including receive count, timestamps and FIFO
-identifiers. Binary attributes use base64. Handler return values are ignored
-for this whole-batch contract; a function error or timeout retains the message.
-Successful execution acknowledges the current receipt only after the Lambda runner
-finishes successfully and joins its child processes. Asynchronous Lambda
-`Event` admission is a different contract and is never used for SQS settlement.
+The handler receives a native `Records` array of up to `BatchSize` entries:
+original bodies, message IDs, current receipt handles, source ARN/region, body
+digests, string/binary message attributes and system attributes including receive
+counts, timestamps and FIFO identifiers. Binary attributes use base64. Selection
+also respects the synchronous Lambda JSON payload limit of 6 MiB, including
+metadata and JSON escaping. A batch may therefore contain fewer records than
+BatchSize; remaining records stay unleased in queue order. With batching window
+zero, polling invokes available records without waiting to fill the batch.
 
-Each enabled mapping polls and executes serially. SQS owns visibility retries,
-FIFO group ordering, message retention and redrive after `maxReceiveCount`.
+Handler return values are ignored for this whole-batch contract. A function
+error or timeout retains every record in the batch. Only successful completion
+of the actual Lambda runner and its child cleanup permits acknowledgment of each
+current receipt. Asynchronous Lambda `Event` admission is a different contract
+and is never used for SQS settlement.
+
+`BatchSize` accepts 1–10 and defaults to the native SQS value of 10.
+`ScalingConfig.MaximumConcurrency` accepts 2–1000, is preserved in Create/Get,
+and limits concurrent invocations of this mapping. An empty `ScalingConfig`
+selects no ceiling. EventBus runs a fixed owned worker set, bounded by the selected
+ceiling and its separate local worker cap. Without a selected ceiling, the local
+policy uses one worker. This is local execution behavior, not AWS managed scaling.
+
+SQS owns visibility retries, FIFO group ordering, message retention and redrive
+after `maxReceiveCount`. All messages in a leased FIFO batch preserve their order;
+other workers cannot receive that group while its messages remain in flight.
+Different groups can execute concurrently within the mapping's worker limit.
 Disabled mappings do not poll. `LastProcessingResult` reports completion or a
 redacted source/invocation/acknowledgment failure. A deleted source disables and
 stops its mapping; recreating the same ARN does not rebind the old queue handle.
-Deleting a mapping cancels and joins pending receives and handler work before
-returning `202` with a `Deleting` snapshot; later Get returns
+Deleting a mapping cancels and joins every worker's pending receives and handler
+work before returning `202` with a `Deleting` snapshot; later Get returns
 `ResourceNotFoundException`. Unsettled receipts keep their native visibility.
 Owner shutdown uses the same join barrier before closing Lambda or queue state.
 The first Close call's context governs the terminal shutdown result, which is
@@ -65,17 +82,25 @@ published after cleanup joins and returned consistently to every concurrent call
 
 ## Explicit limits
 
-- Only standard/FIFO SQS sources, explicit `BatchSize=1`, batching window zero,
-  and whole-batch responses are supported. The native omitted batch default is
-  ten and is rejected until batching exists.
-- List/Update mapping operations, filters, partial batch responses, concurrency
-  scaling/provisioned pollers, stream/Kafka/MQ settings, tags and other selected
+- Only standard/FIFO SQS sources, `BatchSize` 1–10, batching window zero,
+  `ScalingConfig.MaximumConcurrency` and whole-batch responses are supported.
+  Standard queue batches above ten remain an explicit capability gap.
+- Records excluded by the cumulative 6 MiB payload budget stay visible and
+  unleased for a later batch. If no eligible visible record fits that limit, the
+  queue adapter returns a source error without leasing any record; the mapping
+  disables itself and cancels/joins its peer workers.
+- List/Update mapping operations, nonzero batching windows, filters, partial batch
+  responses, provisioned pollers, stream/Kafka/MQ settings, tags and other selected
   Create options return `InvalidParameterValueException`; they are not ignored.
 - Mappings are in-memory resources and must be provisioned for each owned run.
   Cross-account/region mappings and IAM/KMS policy evaluation are unsupported.
 - Development resource bounds live in `eventsource.DevOptions`: mapping capacity,
-  `EmptyPollDelay` and a test clock. They are distinct from native requests;
-  one serial poller per mapping does not emulate AWS's managed scaling.
+  `MaxWorkersPerMapping` (default 32), `EmptyPollDelay` and a test clock. The worker
+  cap must be positive and stays separate from native requests. Actual workers
+  are `min(MaximumConcurrency, MaxWorkersPerMapping)` when a ceiling is selected;
+  Create/Get continue to report the requested native ceiling. No selected ceiling
+  means one worker. Managed cloud scaling and function/account reserved concurrency
+  are not emulated.
 
 ## Agent verification
 
@@ -90,9 +115,14 @@ The frozen boto3 lane (`TestSQSLambdaPythonSDKSmoke`) covers native provisioning
 FIFO order, disabled/deleted mappings, alias execution, native record fields,
 completion-only deletion, standard visibility retry, five receives to a FIFO
 DLQ, real handler timeout, cross-owner isolation and teardown with pending work.
-Core tests cover validation, capacity and cancellation/deadline join barriers.
+`TestSQSBatchPythonSDKSmoke` covers configured size five and concurrency two, whole-batch
+success/failure, payload-budget selection and visibility/redrive. Core tests verify
+overlapping invocations and their ceiling, separate local caps, snapshot ownership,
+failed-batch retention, cancellation of peer workers and complete Delete/Close
+join barriers. Batch size one remains supported and keeps its existing SDK lane.
 See [SDK verification](../tests/sdk/README.md) for the lane command and dependencies.
 
 Contracts follow AWS's [CreateEventSourceMapping API](https://docs.aws.amazon.com/lambda/latest/api/API_CreateEventSourceMapping.html),
-[SQS mapping configuration](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html)
+[SQS mapping configuration](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html),
+[ScalingConfig](https://docs.aws.amazon.com/lambda/latest/api/API_ScalingConfig.html)
 and [DeleteEventSourceMapping API](https://docs.aws.amazon.com/lambda/latest/api/API_DeleteEventSourceMapping.html).

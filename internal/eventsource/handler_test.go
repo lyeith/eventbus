@@ -45,7 +45,9 @@ func TestUnsupportedSettingsNeverSilentlyAccepted(t *testing.T) {
 	s := newTestService(t, newFakeQueue(), fakeInvoker{})
 	h := NewHandler(s)
 	for _, selection := range []string{
-		`"ScalingConfig":{"MaximumConcurrency":2}`,
+		`"ScalingConfig":{"MaximumConcurrency":1}`,
+		`"ScalingConfig":{"MaximumConcurrency":1001}`,
+		`"ScalingConfig":{"MaximumConcurrency":2,"Unknown":true}`,
 		`"FilterCriteria":{"Filters":[{"Pattern":"{}"}]}`,
 		`"ProvisionedPollerConfig":{"MinimumPollers":2}`,
 		`"MaximumRetryAttempts":3`,
@@ -66,4 +68,26 @@ func TestUnsupportedSettingsNeverSilentlyAccepted(t *testing.T) {
 	}
 	got := requestMapping(t, h, http.MethodPut, mappingPath+"/123", "{}")
 	assert.Equal(t, 400, got.Code)
+}
+
+func TestNativeBatchAndScalingWire(t *testing.T) {
+	s := newTestService(t, newFakeQueue(), fakeInvoker{})
+	h := NewHandler(s)
+	body := `{"EventSourceArn":"` + sourceARN + `","FunctionName":"worker:live","BatchSize":5,"Enabled":false,"ScalingConfig":{"MaximumConcurrency":2}}`
+	created := requestMapping(t, h, http.MethodPost, mappingPath, body)
+	require.Equal(t, 202, created.Code, created.Body.String())
+	var mapping Mapping
+	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &mapping))
+	assert.Equal(t, 5, mapping.BatchSize)
+	require.NotNil(t, mapping.ScalingConfig)
+	assert.Equal(t, 2, *mapping.ScalingConfig.MaximumConcurrency)
+	got := requestMapping(t, h, http.MethodGet, mappingPath+"/"+mapping.UUID, "")
+	require.Equal(t, 200, got.Code)
+	assert.JSONEq(t, created.Body.String(), got.Body.String())
+	_, err := s.Delete(t.Context(), mapping.UUID)
+	require.NoError(t, err)
+	defaults := requestMapping(t, h, http.MethodPost, mappingPath, `{"EventSourceArn":"`+sourceARN+`","FunctionName":"worker:live","Enabled":false,"ScalingConfig":{}}`)
+	require.Equal(t, 202, defaults.Code, defaults.Body.String())
+	assert.Contains(t, defaults.Body.String(), `"BatchSize":10`)
+	assert.NotContains(t, defaults.Body.String(), `"ScalingConfig"`)
 }

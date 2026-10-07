@@ -36,7 +36,9 @@ preserve identity, refresh and a pending custom challenge.
 Python SNS Lambda verifies real asynchronous alias execution, native events,
 filtering, handler failures/timeouts, pressure, owner isolation and correlated evidence.
 SQS mapping proofs cover native Create/Get/Delete, FIFO, completion acknowledgment,
-visibility retry, DLQ counts and pending-child teardown. The tagged gateway proof
+visibility retry, DLQ counts and pending-child teardown. The batch lane proves
+five-record events, two concurrent invocations, FIFO groups, default-ten batching,
+whole-batch retry/DLQ and joined cancellation of multiple actual children. The tagged gateway proof
 uses unchanged Express/Swagger middleware behind real Node Lambda integrations
 for redirects, assets, original paths and protected/default-route boundaries.
 
