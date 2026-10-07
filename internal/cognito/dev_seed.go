@@ -1,4 +1,5 @@
-// YAML fixtures bootstrap deterministic pools, app clients and users.
+// Development harness YAML fixtures bootstrap deterministic pools, clients and users.
+// This adapter uses the Cognito store; it is not an AWS provisioning operation.
 // Seeding is idempotent; passwords become bcrypt hashes and SRP verifiers.
 package cognito
 
@@ -41,10 +42,9 @@ type CognitoSeedClient struct {
 	Secret string `yaml:"secret"`
 }
 
-// CognitoSeedUser carries an optional `totp_secret` (base32) — when set,
-// the dev service validates SOFTWARE_TOKEN_MFA codes against it via
-// pquerna/otp instead of the "any 6 digits" fallback. Useful for tests
-// that exercise real TOTP behaviour deterministically.
+// CognitoSeedUser can supply a deterministic base32 TOTP secret. With a
+// secret, SOFTWARE_TOKEN_MFA validates real codes. Legacy fixtures without
+// one retain six-digit-code acceptance; custom auth requires enrolled TOTP.
 type CognitoSeedUser struct {
 	Username   string            `yaml:"username"`
 	Enabled    *bool             `yaml:"enabled"`

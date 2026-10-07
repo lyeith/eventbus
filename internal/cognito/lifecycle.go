@@ -1,6 +1,7 @@
 package cognito
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/rs/zerolog/log"
 )
 
 func (s *Handler) userProfile(r *http.Request, user *CognitoUser, attributeField string) (map[string]interface{}, error) {
@@ -25,6 +28,35 @@ func (s *Handler) userProfile(r *http.Request, user *CognitoUser, attributeField
 		body["PreferredMfaSetting"] = "SOFTWARE_TOKEN_MFA"
 	}
 	return body, nil
+}
+
+// lookupAdminUser resolves an admin action's pool and Username (sub or
+// email), writing Cognito's error on failure.
+func (s *Handler) lookupAdminUser(w http.ResponseWriter, r *http.Request, poolID, username, action string) (*CognitoUser, bool) {
+	if poolID == "" || username == "" {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "UserPoolId and Username are required")
+		return nil, false
+	}
+	exists, err := s.cognito.PoolExists(r.Context(), poolID)
+	if err != nil {
+		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+		return nil, false
+	}
+	if !exists {
+		cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "User pool "+poolID+" does not exist")
+		return nil, false
+	}
+	user, err := s.cognito.LookupPoolUser(r.Context(), poolID, username)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			cognitoJSONError(w, http.StatusBadRequest, "UserNotFoundException", "User does not exist")
+			return nil, false
+		}
+		log.Error().Err(err).Str("action", action).Msg("LookupPoolUser failed")
+		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+		return nil, false
+	}
+	return user, true
 }
 
 func (s *Handler) handleAdminGetUser(w http.ResponseWriter, r *http.Request) {

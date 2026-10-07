@@ -5,15 +5,14 @@ package lambda
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
+// Config is the resolved local recipe used by this service. Native protocol
+// fields retain AWS semantics; file loading belongs to dev_config.go.
 type Config struct {
 	Functions map[string]Function `yaml:"functions"`
 }
@@ -27,29 +26,6 @@ type Function struct {
 	Environment map[string]string `yaml:"environment"`
 	Timeout     time.Duration     `yaml:"timeout"`
 	WorkDir     string            `yaml:"work_dir"`
-}
-
-// LoadConfig rejects unknown fields and extra YAML documents.
-func LoadConfig(filename string) (*Config, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, fmt.Errorf("read Lambda configuration: %w", err)
-	}
-	defer file.Close()
-	decoder := yaml.NewDecoder(file)
-	decoder.KnownFields(true)
-	var config Config
-	if err := decoder.Decode(&config); err != nil {
-		return nil, fmt.Errorf("parse Lambda configuration: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return nil, errors.New("Lambda configuration must contain exactly one YAML document")
-	}
-	if err := config.Validate(); err != nil {
-		return nil, err
-	}
-	return &config, nil
 }
 
 var functionName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}(?::[A-Za-z0-9_-]{1,128}|:\$LATEST)?$`)

@@ -3,19 +3,18 @@
 package gateway
 
 import (
-	"bytes"
 	"fmt"
-	"io"
+	"maps"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
+// Config is the resolved local recipe used by this service. Native protocol
+// fields retain AWS semantics; file loading belongs to dev_config.go.
 type Config struct {
 	Port           int                         `yaml:"port"`
 	Region         string                      `yaml:"region"`
@@ -49,27 +48,6 @@ type IntegrationConfig struct {
 	URI               string            `yaml:"uri"`
 	RequestParameters map[string]string `yaml:"request_parameters"`
 	RemoveHeaders     []string          `yaml:"remove_headers"`
-}
-
-func LoadConfig(filename string) (*Config, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("read gateway configuration: %w", err)
-	}
-	var cfg Config
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("decode gateway configuration: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return nil, fmt.Errorf("gateway configuration must contain one YAML document")
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -269,14 +247,27 @@ func validMappingSource(source string) bool {
 	return source == "context.requestId"
 }
 
-func yamlRoundTrip(cfg Config) (Config, error) {
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return Config{}, err
+// clone gives the gateway ownership of the resolved configuration before
+// validation applies defaults or requests read its nested maps and slices.
+func (cfg Config) clone() Config {
+	cloned := cfg
+	cloned.StageVariables = maps.Clone(cfg.StageVariables)
+	cloned.Authorizers = maps.Clone(cfg.Authorizers)
+	for name, authorizer := range cloned.Authorizers {
+		authorizer.IdentitySources = slices.Clone(authorizer.IdentitySources)
+		if authorizer.TTL != nil {
+			ttl := *authorizer.TTL
+			authorizer.TTL = &ttl
+		}
+		cloned.Authorizers[name] = authorizer
 	}
-	var result Config
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		return Config{}, err
+	cloned.Routes = slices.Clone(cfg.Routes)
+	for index := range cloned.Routes {
+		integration := &cloned.Routes[index].Integration
+		integration.RequestParameters = maps.Clone(integration.RequestParameters)
+		integration.RemoveHeaders = slices.Clone(integration.RemoveHeaders)
 	}
-	return result, nil
+	cloned.LogRedactions = slices.Clone(cfg.LogRedactions)
+	cloned.RemoveHeaders = slices.Clone(cfg.RemoveHeaders)
+	return cloned
 }

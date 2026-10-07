@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-// Legacy fixture clients retain a five-minute session when no client lifetime
-// is configured. API-created clients use Cognito's configured minute lifetime.
-const challengeSessionTTL = 5 * time.Minute
-
 var supportedChallenges = map[string]bool{
 	"SOFTWARE_TOKEN_MFA": true, "SMS_MFA": true,
 	"NEW_PASSWORD_REQUIRED": true, "PASSWORD_VERIFIER": true, "CUSTOM_CHALLENGE": true,

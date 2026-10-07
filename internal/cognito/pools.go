@@ -1,6 +1,5 @@
-// Pool and app-client operations let scenarios provision isolated identities.
-// Generated identifiers and the supported settings follow the Cognito protocol;
-// explicit PoolId/ClientId remain available for deterministic local fixtures.
+// Pool and app-client AWS operations. Legacy local request extensions are
+// declared separately in dev_provisioning.go; they are not Cognito API fields.
 package cognito
 
 import (
@@ -18,10 +17,9 @@ import (
 )
 
 type createUserPoolRequest struct {
+	devCreateUserPoolFields
 	PoolName              string                           `json:"PoolName"`
-	PoolID                string                           `json:"PoolId"` // dev-only override
 	Policies              *createPoolPoliciesEnv           `json:"Policies"`
-	PasswordPolicy        json.RawMessage                  `json:"PasswordPolicy"` // dev-only flat alias
 	UsernameAttributes    []string                         `json:"UsernameAttributes"`
 	AliasAttributes       []string                         `json:"AliasAttributes"`
 	UsernameConfiguration *createPoolUsernameConfiguration `json:"UsernameConfiguration"`
@@ -227,9 +225,9 @@ func poolPasswordPolicyResponse(policy *PasswordPolicy) map[string]interface{} {
 }
 
 type createUserPoolClientRequest struct {
+	devCreateUserPoolClientFields
 	UserPoolID          string   `json:"UserPoolId"`
 	ClientName          string   `json:"ClientName"`
-	ClientID            string   `json:"ClientId"` // dev-only override
 	GenerateSecret      bool     `json:"GenerateSecret"`
 	ExplicitAuthFlows   []string `json:"ExplicitAuthFlows"`
 	AuthSessionValidity *int     `json:"AuthSessionValidity"`

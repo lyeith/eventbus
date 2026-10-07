@@ -36,7 +36,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
@@ -150,40 +149,4 @@ func changePasswordValidation(req changePasswordRequest) string {
 	default:
 		return fmt.Sprintf("%d validation errors detected: %s", len(failures), strings.Join(failures, "; "))
 	}
-}
-
-// CognitoViolation is the first rule of the policy the password breaks, in
-// Cognito's words ("Password not long enough"), or "" when it breaks none.
-// Cognito reports one rule at a time. A nil policy is the pool without one.
-func (p *PasswordPolicy) CognitoViolation(password string) string {
-	if p == nil {
-		return ""
-	}
-	if p.MinLength > 0 && len([]rune(password)) < p.MinLength {
-		return "Password not long enough"
-	}
-	hasUpper, hasLower, hasDigit, hasSymbol := false, false, false, false
-	for _, r := range password {
-		switch {
-		case unicode.IsUpper(r):
-			hasUpper = true
-		case unicode.IsLower(r):
-			hasLower = true
-		case unicode.IsDigit(r):
-			hasDigit = true
-		case unicode.IsPunct(r) || unicode.IsSymbol(r) || r == ' ':
-			hasSymbol = true
-		}
-	}
-	switch {
-	case p.RequireUppercase && !hasUpper:
-		return "Password must have uppercase characters"
-	case p.RequireLowercase && !hasLower:
-		return "Password must have lowercase characters"
-	case p.RequireDigits && !hasDigit:
-		return "Password must have numeric characters"
-	case p.RequireSymbols && !hasSymbol:
-		return "Password must have symbol characters"
-	}
-	return ""
 }

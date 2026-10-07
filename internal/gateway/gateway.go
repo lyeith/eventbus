@@ -53,11 +53,7 @@ type integrationRequestKey struct{}
 func New(cfg Config, options Options) (*Gateway, error) {
 	// Copy caller maps/slices so validation defaults and per-request state cannot
 	// mutate fixtures owned by the application.
-	encoded, err := yamlRoundTrip(cfg)
-	if err != nil {
-		return nil, err
-	}
-	cfg = encoded
+	cfg = cfg.clone()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
