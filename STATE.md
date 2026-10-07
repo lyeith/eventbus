@@ -2,37 +2,35 @@
 
 Canonical source: SSD /home/spite/Projects/eventbus, main.
 Public MIT: https://github.com/lyeith/eventbus.
-Latest public binaries remain v0.7.0; no Plans or developer stack state changed.
+Latest public binaries: v0.7.0. No Plans or developer stack state changed.
 
-#18 implementation and acceptance are complete, ready to commit.
-The exclusive retained profile joins SQS mapping message custody/retry, accepted
-Scheduler dispatch, Cognito trigger children and buffered/retrying Firehose S3
-delivery. Future unclaimed schedules park; current resources survive resume.
-Exact declared RequestResponse cleanup revokes held safety and admits descendants;
-explicit re-quiesce joins them before attestation/resume. Native payload/auth stays
-unchanged; full/partial ARN cleanup selectors respect configured region/account.
-Gateway roots acquire versioned remote leases before body/auth/Invoke, pin process
-identity, freeze entry generation and reconcile lost ACKs without business replay.
-No active lease expiry. Failed final shutdown aborts/rejoins native owners with
-peers live, then dirty-abandons unresolved remote leases and retains stores.
-Legacy consumers, Secrets rotation and SQS move tasks remain profile refusals.
-Trusted OS handlers await side work/stay in owned groups; escaped processes are
-outside joined ownership. This profile remains exclusive to one operator.
+#18 committed/pushed 973e5f1: full retained application owners and exact declared
+RequestResponse cleanup. Native SQS retry custody, Scheduler, Cognito/Lambda
+children, Firehose delivery and gateway root leases join before held attestation.
+Resources survive resume; cleanup requires explicit re-quiesce. Native auth and
+payloads stay unchanged. Foreign namespace cleanup selectors are refused.
+Trusted handlers await side work/stay in owned OS groups; escaped descendants
+remain outside joined ownership. Legacy consumers/rotation/move tasks are refused
+in this exclusive profile. Failed shutdown retains dirty evidence/stores.
 
-#19 is committed/pushed as 9b8f56f: accept both exact native create mapping URIs.
-Both unchanged current/1.39.4 SDK batch/retry/teardown proofs passed (48.701s).
-User approved the isolated pinned test-only legacy SDK; frozen current lock intact.
-Owned legacy env is retained only for final combined verification, then removed.
+#19 committed/pushed 9b8f56f: accept both exact native create mapping URIs.
+Unchanged current and approved isolated boto3/botocore 1.39.4 proofs passed.
 
-All affected owner race/vet suites and combined read-only review passed.
-Production app full race passed19.587s. Actual full-stack Python/JavaScript SDK +
-owned RustFS race passed23.832s with exact persisted-delivery comparisons,
-authenticated generic cleanup, sentinels, resume and shutdown. Unavailable consuming
-Identity business handler is not claimed verified. Logs have finite SSD /tmp retention.
+#20 accepted: canonical queue-owned original-receipt settlement permits mapping
+ACK after actual handler deletion; stale HTTP success is insufficient. Native
+responses and strict local DeleteMessage remain unchanged. Core, app, eventsource
+race/vet and real boto3 normal/race acceptance passed, including native 60-second
+queue recreation, FIFO, mixed batch-five, durable effects and joined teardown.
 
-New #20: handler-issued current DeleteMessage causes false mapping ACK failure.
-MQ/eventsource/SDK owners are investigating read-only; no #20 implementation yet.
-Fix canonical receipt-settlement evidence while preserving stale-lease safety,
-then combined regressions and publish v0.8.0 under existing authorization.
-Temporary portable packaged smoke /tmp/eventbus-v0.8.0-native-smoke.py is ready;
-no release staging exists yet. Repo-owned fixtures joined; reusable caches retained.
+#18 production app full race passed19.587s; full Python/JavaScript/RustFS stack
+race passed23.832s. Unavailable consuming Identity business handler is not claimed
+verified. Complete logs use finite SSD /tmp retention; all test fixtures joined.
+Combined affected-owner regression is running before the #20 commit.
+
+New #21/#22 are on the plate: correlated SQS joined-delivery evidence and opt-in
+private native invocation diagnostics. Owners are designing typed dev seams;
+no native API expansion or new dependencies are needed. Publish v0.8.0 after
+these fixes and final acceptance under existing authorization.
+Owned legacy env /tmp/eventbus-legacy-sdk.UAIkso remains for final SDK verification;
+portable /tmp/eventbus-v0.8.0-native-smoke.py remains for packaged Linux/macOS proof.
+No release staging/tag exists yet. Reusable frozen caches are retained.

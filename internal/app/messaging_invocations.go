@@ -85,13 +85,7 @@ func (queue *sqsMappingQueue) Receive(ctx context.Context, max int) ([]eventsour
 	return event.Records, err
 }
 func (queue *sqsMappingQueue) Delete(ctx context.Context, receipt string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if _, err := queue.broker.QueueInfo(queue.queue); err != nil {
-		return false, err
-	}
-	return queue.broker.DeleteMessage(queue.queue, receipt), nil
+	return queue.broker.AcknowledgeSQSLambdaReceiptContext(ctx, queue.queue, receipt)
 }
 
 // Retained custody stays queue-owned; this adapter carries no retry/selection

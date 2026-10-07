@@ -171,6 +171,32 @@ and operation. For example:
 jq -c 'select(.schema_version == "eventbus.sns.capture.v1" and .operation == "Publish") | {message_id, message, deliveries}' .local/sns.jsonl
 ```
 
+## Native mapping receipt settlement
+
+Each receive issues a new receipt. `DeleteMessage` can accept an older issued
+receipt as a successful no-op without removing a later delivery, consistent with
+[AWS DeleteMessage](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_DeleteMessage.html).
+Unknown handles return `ReceiptHandleIsInvalid`. `DeleteMessageBatch` applies the
+same settlement rule per entry. HTTP success alone is not mapping ACK proof.
+
+After successful whole-batch Lambda execution and actual child join, mappings use
+the broker's [`AcknowledgeSQSLambdaReceiptContext`](../internal/messaging/sqs_receipts.go)
+on the original queue instance.
+It accepts either deletion of the current, unexpired receipt or retained proof
+that this exact original receipt was already deleted while current and unexpired.
+Both native `DeleteMessage` and `DeleteMessageBatch` record that proof. Thus one
+batch can mix handler-deleted records with records settled by the mapping.
+The queue-owned receipt history keeps its existing expiration.
+
+Receipt issuance, absence, expiry/redelivery, redrive or purge alone never prove
+settlement. Unknown/expired history and deleted/recreated queues cannot ACK a
+later lease or another queue's work. App and SDK adapters delegate this native
+queue-owned operation; it requires no development exception or SDK rewrite.
+
+Failed/timed-out handlers skip mapping ACK. Handler-issued native deletes remain
+effective; still-unsettled records retain normal visibility, FIFO and redrive
+behavior. See [SQS Lambda mappings](EVENT-SOURCES.md) for execution and join rules.
+
 ## Consumer events and verification
 
 Go/Python consumers receive the AWS Lambda SQS record shape, including queue ARN,

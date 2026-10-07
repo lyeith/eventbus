@@ -53,11 +53,14 @@ metadata and JSON escaping. A batch may therefore contain fewer records than
 BatchSize; remaining records stay unleased in queue order. With batching window
 zero, polling invokes available records without waiting to fill the batch.
 
-Handler return values are ignored for this whole-batch contract. A function
-error or timeout retains every record in the batch. Only successful completion
-of the actual Lambda runner and its child cleanup permits acknowledgment of each
-current receipt. Asynchronous Lambda `Event` admission is a different contract
-and is never used for SQS settlement.
+Handler return values are ignored for this whole-batch contract. A function error
+or timeout skips mapping ACK; still-unsettled records retain native visibility
+and redrive behavior. Handler-issued native deletes remain effective. Successful
+completion of the actual Lambda runner and its child cleanup permits ACK of each
+current, unexpired receipt or proven original receipt already settled by native
+deletion. A stale successful HTTP delete no-op is not that proof. See
+[receipt settlement](MESSAGING.md#native-mapping-receipt-settlement).
+Asynchronous Lambda `Event` admission is never used for SQS settlement.
 
 `BatchSize` accepts 1–10 and defaults to the native SQS value of 10.
 `ScalingConfig.MaximumConcurrency` accepts 2–1000, is preserved in Create/Get,

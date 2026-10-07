@@ -418,8 +418,8 @@ func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPollin
 	}
 	acknowledged := true
 	for _, record := range records {
-		deleted, err := item.queue.Delete(ctx, record.ReceiptHandle)
-		if err != nil || !deleted {
+		settled, err := item.queue.Delete(ctx, record.ReceiptHandle)
+		if err != nil || !settled {
 			acknowledged = false
 		}
 		if ctx.Err() != nil {

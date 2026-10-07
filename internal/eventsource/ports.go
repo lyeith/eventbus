@@ -28,10 +28,14 @@ const MaxBatchPayloadBytes = 6 << 20
 // Queue retains the broker's native visibility, FIFO and redrive behavior.
 // Receive is cancellation-aware and returns owned snapshots of at most max
 // leased messages. The encoded SQSEvent must fit MaxBatchPayloadBytes; remaining
-// records stay unleased in queue order. Delete succeeds only for the current receipt. Neither method may
-// contact AWS. Receive must wait when empty rather than spin. Non-cancellation
-// receive errors permanently stop this bound source; adapters retain transient
-// waits locally.
+// records stay unleased in queue order. Delete joins acknowledgment of the
+// original owned delivery: true means that exact receipt was settled while
+// current, either now or previously by the handler. Expired, unknown, superseded
+// or otherwise discarded receipts must not acknowledge a later lease. A replaced
+// queue must fail rather than rebind. Cancellation cannot settle another receipt.
+// Neither method may contact AWS. Receive must wait when empty rather than spin.
+// Non-cancellation receive errors permanently stop this bound source; adapters
+// retain transient waits locally.
 type Queue interface {
 	Info() QueueInfo
 	Receive(context.Context, int) ([]Record, error)

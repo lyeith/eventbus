@@ -51,7 +51,7 @@ func (queue sdkMappingQueue) Delete(ctx context.Context, receipt string) (bool, 
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	return queue.broker.DeleteMessage(queue.queue, receipt), nil
+	return queue.broker.AcknowledgeSQSLambdaReceiptContext(ctx, queue.queue, receipt)
 }
 
 type sdkMappingInvoker struct{ functions *lambda.Service }

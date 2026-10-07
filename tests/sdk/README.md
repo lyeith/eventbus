@@ -42,6 +42,13 @@ whole-batch retry/DLQ and joined cancellation of multiple actual children. The t
 uses unchanged Express/Swagger middleware behind real Node Lambda integrations
 for redirects, assets, original paths and protected/default-route boundaries.
 
+`TestSQSLambdaManualAcknowledgePythonSDKSmoke` is the accepted #20 proof: native
+SDK deletion plus durable SQLite effects, mixed manual/mapping settlement of
+batch-five records, FIFO, stale/expired leases and joined teardown.
+[Receipt settlement](../../docs/MESSAGING.md#native-mapping-receipt-settlement)
+defines the native contract. Publication is pending;
+[HANDOFF](../../HANDOFF.md) records verification.
+
 Python messaging covers direct SQS sending, binary attributes/checksums, typed
 errors, SNS raw fanout and locally captured mobile-push intents. Ordinary Go SDK
 contract tests additionally cover all SQS/SNS operation families and dispatch.

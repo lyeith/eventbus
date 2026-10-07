@@ -53,6 +53,17 @@ These are AWS core gaps. Registration, local capacity/evidence and dev recipe
 consumers remain named harness adapters. See [Messaging](MESSAGING.md),
 [Mappings](EVENT-SOURCES.md) and [Gateway](GATEWAY.md) for exact limits.
 
+## Handler-issued SQS deletion: native core
+
+[#20](https://github.com/lyeith/eventbus/issues/20) fixes a false mapping ACK failure
+after a handler successfully deletes its original receipt. Messaging owns bounded
+receipt-settlement proof; app/SDK adapters delegate its native ACK operation.
+`eventsource` still waits for successful whole-batch execution and actual child join.
+Stale HTTP delete success alone never proves settlement; native wire rules remain
+unchanged. [Messaging](MESSAGING.md#native-mapping-receipt-settlement) states the
+contract. Native SDK verification is accepted, awaiting publication;
+[HANDOFF](../HANDOFF.md) records verification.
+
 ## Retained-suite recovery: development harness
 
 [#17](https://github.com/lyeith/eventbus/issues/17) established the opt-in,

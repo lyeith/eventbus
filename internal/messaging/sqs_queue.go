@@ -29,7 +29,7 @@ type Queue struct {
 	LastPurgeTimestamp                      time.Time
 	OriginalSourceARN                       string
 	deleted                                 bool
-	receipts                                map[string]time.Time
+	receipts                                map[string]sqsReceipt
 	dedup                                   map[string]sqsDedupEntry
 	attempts                                map[string]sqsReceiveAttempt
 	sequence                                uint64
@@ -90,7 +90,7 @@ func defaultQueueAttributes() map[string]string {
 }
 func newQueue(b *Broker, name string, attrs, tags map[string]string) *Queue {
 	now := time.Now()
-	q := &Queue{Name: name, ARN: fmt.Sprintf("arn:aws:sqs:%s:%s:%s", b.region, b.accountID, name), URL: fmt.Sprintf("http://localhost:%d/queue/%s", b.port, name), messages: make([]*Message, 0), inFlight: make(map[string]*Message), Attributes: attrs, Tags: tags, CreatedTimestamp: now, LastModifiedTimestamp: now, receipts: make(map[string]time.Time), dedup: make(map[string]sqsDedupEntry), attempts: make(map[string]sqsReceiveAttempt), notify: make(chan struct{})}
+	q := &Queue{Name: name, ARN: fmt.Sprintf("arn:aws:sqs:%s:%s:%s", b.region, b.accountID, name), URL: fmt.Sprintf("http://localhost:%d/queue/%s", b.port, name), messages: make([]*Message, 0), inFlight: make(map[string]*Message), Attributes: attrs, Tags: tags, CreatedTimestamp: now, LastModifiedTimestamp: now, receipts: make(map[string]sqsReceipt), dedup: make(map[string]sqsDedupEntry), attempts: make(map[string]sqsReceiveAttempt), notify: make(chan struct{})}
 	q.cond = sync.NewCond(&q.mu)
 	q.devCustody = newDevQueueCustodyLocked(b)
 	applyQueueDurationsLocked(q)
@@ -340,11 +340,7 @@ func pruneQueueLocked(q *Queue, now time.Time) int {
 			return left < right
 		})
 	}
-	for handle, expires := range q.receipts {
-		if !now.Before(expires) {
-			delete(q.receipts, handle)
-		}
-	}
+	pruneSQSReceiptsLocked(q, now)
 	for attempt, entry := range q.attempts {
 		if !now.Before(entry.Expires) {
 			delete(q.attempts, attempt)
@@ -410,7 +406,7 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 		invalidateReceiveAttemptsForMessageLocked(q, message.ID)
 		*message = prepared
 		q.inFlight[message.ReceiptHandle] = message
-		q.receipts[message.ReceiptHandle] = message.SentTimestamp.Add(q.RetentionPeriod + 12*time.Hour)
+		issueSQSReceiptLocked(q, message)
 		q.lastFairGroup = message.GroupID
 		result = append(result, cloneMessage(message))
 	}
@@ -616,31 +612,6 @@ func invalidateReceiveAttemptsLocked(q *Queue, receipt string) {
 	}
 }
 
-// DeleteMessage settles only a current, unexpired receipt. Native HTTP and local
-// consumers share the same locked settlement; previously issued stale handles
-// may be accepted as HTTP no-ops, but cannot delete a later lease.
-func (b *Broker) DeleteMessage(q *Queue, receipt string) bool {
-	now := time.Now()
-	b.redriveExpiredSQS(q, now)
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	pruneQueueLocked(q, time.Now())
-	return deleteCurrentSQSReceiptLocked(q, receipt)
-}
-func deleteCurrentSQSReceiptLocked(q *Queue, receipt string) bool {
-	if q.deleted {
-		return false
-	}
-	message, ok := q.inFlight[receipt]
-	if !ok {
-		return false
-	}
-	delete(q.inFlight, receipt)
-	releaseDevSQSMessageLocked(q, message.ID)
-	invalidateReceiveAttemptsLocked(q, receipt)
-	notifyQueueLocked(q)
-	return true
-}
 func (b *Broker) QueueDepth(q *Queue) (waiting, inFlight int) {
 	now := time.Now()
 	b.redriveExpiredSQS(q, now)
