@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,49 @@ func TestInvokePythonHandlerFailure(t *testing.T) {
 	err := cm.invokeHandler(context.Background(), entry, event)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "handler failed")
+}
+
+func TestInvokePythonHandlerBatchResult(t *testing.T) {
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "received-event.json")
+	t.Setenv("UNRELATED_CONNECTOR_SECRET", "must-not-cross")
+	source := `import json
+import os
+import pathlib
+import sys
+
+def handler(event, context):
+    assert context is None
+    assert os.environ["TEST_VAR"] == "hello-from-config"
+    assert "UNRELATED_CONNECTOR_SECRET" not in os.environ
+    assert pathlib.Path("fixture.txt").read_text() == "owned fixture"
+    pathlib.Path(os.environ["EVENT_FILE"]).write_text(json.dumps(event))
+    print("handler diagnostic", file=sys.stderr)
+    return {"batchItemFailures": [{"itemIdentifier": event["Records"][1]["messageId"]}]}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "batch.py"), []byte(source), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "fixture.txt"), []byte("owned fixture"), 0600))
+	environment := fixtureToolEnvironment()
+	environment["TEST_VAR"] = "hello-from-config"
+	environment["EVENT_FILE"] = inputPath
+	entry := ConsumerEntry{
+		Name: "python-batch", Handler: "batch.handler", TimeoutSeconds: 5, Env: environment,
+	}
+	event := buildLambdaEvent([]*messaging.Message{
+		{ID: "msg-1", Body: `{"Message":"hello"}`, ReceiptHandle: "receipt-1"},
+		{ID: "msg-2", Body: "retry me", ReceiptHandle: "receipt-2"},
+	})
+	broker := messaging.NewBroker("us-east-1", "000000000000", 0)
+	manager := NewConsumerManager(broker, directory)
+	result, err := manager.invokeHandlerResult(t.Context(), entry, event)
+	require.NoError(t, err)
+	require.Len(t, result.BatchItemFailures, 1)
+	assert.Equal(t, "msg-2", result.BatchItemFailures[0].ItemIdentifier)
+	received, err := os.ReadFile(inputPath)
+	require.NoError(t, err)
+	expected, err := json.Marshal(event)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(expected), string(received))
 }
 
 func TestInvokeGoHandlerSuccess(t *testing.T) {

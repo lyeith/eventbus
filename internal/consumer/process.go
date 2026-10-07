@@ -35,21 +35,21 @@ func (cm *ConsumerManager) invokeHandler(ctx context.Context, entry ConsumerEntr
 }
 
 func (cm *ConsumerManager) invokeHandlerResult(ctx context.Context, entry ConsumerEntry, event map[string]interface{}) (*handlerBatchResult, error) {
-	switch entry.Type {
-	case "go":
-		return cm.invokeGoHandler(ctx, entry, event)
-	default:
-		return cm.invokePythonHandler(ctx, entry, event)
-	}
-}
-
-// invokePythonHandler runs the Python Lambda handler via uv subprocess.
-func (cm *ConsumerManager) invokePythonHandler(ctx context.Context, entry ConsumerEntry, event map[string]interface{}) (*handlerBatchResult, error) {
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
 		return nil, fmt.Errorf("marshal event: %w", err)
 	}
 
+	switch entry.Type {
+	case "go":
+		return cm.invokeGoHandler(ctx, entry, eventJSON)
+	default:
+		return cm.invokePythonHandler(ctx, entry, eventJSON)
+	}
+}
+
+// invokePythonHandler runs the Python Lambda handler via uv subprocess.
+func (cm *ConsumerManager) invokePythonHandler(ctx context.Context, entry ConsumerEntry, eventJSON []byte) (*handlerBatchResult, error) {
 	// Split handler into module path and function name
 	// e.g. "platform_lib.audit.handlers.sns_writer.handler" -> module="platform_lib.audit.handlers.sns_writer", func="handler"
 	parts := strings.Split(entry.Handler, ".")
@@ -64,69 +64,28 @@ func (cm *ConsumerManager) invokePythonHandler(ctx context.Context, entry Consum
 		modulePath, funcName, funcName,
 	)
 
-	timeout := time.Duration(entry.TimeoutSeconds) * time.Second
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, "uv", "run", "python", "-c", script)
-	cmd.Stdin = bytes.NewReader(eventJSON)
-	cmd.Dir = cm.workDir
-
-	// Set environment
-	cmd.Env = consumerProcessEnv(entry.Env)
-	if err := localexec.Configure(cmd); err != nil {
-		return nil, fmt.Errorf("handler process ownership: %w", err)
-	}
-
-	stdout := localexec.NewBoundedOutput(maxOutputBytes)
-	stderr := localexec.NewBoundedOutput(maxOutputBytes)
-	cmd.Stdout, cmd.Stderr = stdout, stderr
-
-	logger := log.With().Str("consumer", entry.Name).Str("handler", entry.Handler).Logger()
-
-	err = cmd.Run()
-	if cleanupErr := localexec.Cleanup(cmd); cleanupErr != nil {
-		return nil, fmt.Errorf("stop handler process group: %w", cleanupErr)
-	}
-
-	if stderr.Len() > 0 {
-		logger.Debug().Str("stderr", stderr.String()).Msg("Handler stderr")
-	}
-
-	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("handler timed out after %s", timeout)
-		}
-		return nil, fmt.Errorf("handler failed: %w\nstderr: %s", err, stderr.String())
-	}
-
-	if stdout.Len() > 0 {
-		logger.Debug().Str("result", stdout.String()).Msg("Handler result")
-	}
-
-	return parseHandlerBatchResult(stdout, stderr)
+	return cm.runHandler(ctx, entry, eventJSON, entry.Handler, "uv", "run", "python", "-c", script)
 }
 
 // invokeGoHandler runs a compiled Go binary, passing the SQS event via stdin.
 // The binary reads a Lambda SQS event from stdin and writes a JSON batch response
 // to stdout. Failed records are identified by the optional batchItemFailures array.
-func (cm *ConsumerManager) invokeGoHandler(ctx context.Context, entry ConsumerEntry, event map[string]interface{}) (*handlerBatchResult, error) {
-	eventJSON, err := json.Marshal(event)
-	if err != nil {
-		return nil, fmt.Errorf("marshal event: %w", err)
-	}
-
+func (cm *ConsumerManager) invokeGoHandler(ctx context.Context, entry ConsumerEntry, eventJSON []byte) (*handlerBatchResult, error) {
 	// Resolve handler path relative to workDir if not absolute
 	handlerPath := entry.Handler
 	if !filepath.IsAbs(handlerPath) {
 		handlerPath = filepath.Join(cm.workDir, handlerPath)
 	}
+	return cm.runHandler(ctx, entry, eventJSON, handlerPath, handlerPath)
+}
 
+// runHandler owns the subprocess lifetime and batch-response protocol for both languages.
+func (cm *ConsumerManager) runHandler(ctx context.Context, entry ConsumerEntry, eventJSON []byte, handler, executable string, args ...string) (*handlerBatchResult, error) {
 	timeout := time.Duration(entry.TimeoutSeconds) * time.Second
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, handlerPath)
+	cmd := exec.CommandContext(execCtx, executable, args...)
 	cmd.Stdin = bytes.NewReader(eventJSON)
 	cmd.Dir = cm.workDir
 
@@ -139,9 +98,9 @@ func (cm *ConsumerManager) invokeGoHandler(ctx context.Context, entry ConsumerEn
 	stderr := localexec.NewBoundedOutput(maxOutputBytes)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 
-	logger := log.With().Str("consumer", entry.Name).Str("handler", handlerPath).Logger()
+	logger := log.With().Str("consumer", entry.Name).Str("handler", handler).Logger()
 
-	err = cmd.Run()
+	err := cmd.Run()
 	if cleanupErr := localexec.Cleanup(cmd); cleanupErr != nil {
 		return nil, fmt.Errorf("stop handler process group: %w", cleanupErr)
 	}
