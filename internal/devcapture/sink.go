@@ -45,7 +45,18 @@ func Open(path, name string) (*Sink, error) {
 	if err == nil && !info.Mode().IsRegular() {
 		err = fmt.Errorf("%s log must be a regular file; use '-' for stdout", name)
 	}
-	if err == nil && info.Size() > 0 {
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return newFileSink(file, info, name)
+}
+
+// newFileSink shares durable record-boundary validation and file ownership
+// between ordinary and private capture opening.
+func newFileSink(file *os.File, info os.FileInfo, name string) (*Sink, error) {
+	var err error
+	if info.Size() > 0 {
 		last := make([]byte, 1)
 		_, err = file.ReadAt(last, info.Size()-1)
 		if err == nil && last[0] != '\n' {
@@ -60,7 +71,7 @@ func Open(path, name string) (*Sink, error) {
 }
 
 // NewWriter borrows writer. Closing the sink never closes the supplied writer;
-// only Open takes ownership of a file and synchronizes it after each append.
+// Open and OpenPrivate own files and synchronize them after each append.
 func NewWriter(writer io.Writer, name string) *Sink {
 	return &Sink{name: name, writer: writer}
 }
