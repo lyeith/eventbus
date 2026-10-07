@@ -21,6 +21,10 @@ const maxInvokePayload = 6 * 1024 * 1024
 const maxAuthorizerCache = 4096
 
 type requestEvent struct {
+	routeKey                        string
+	apiPath                         string
+	rawPath                         string
+	rawQueryString                  string
 	Type                            string              `json:"type"`
 	MethodARN                       string              `json:"methodArn"`
 	Resource                        string              `json:"resource"`
@@ -54,9 +58,11 @@ type requestIdentity struct {
 	UserAgent string `json:"userAgent"`
 }
 type authorizerResponse struct {
-	PrincipalID string
-	Context     map[string]string
-	Statements  []policyStatement
+	PrincipalID      string
+	NativeContext    map[string]any
+	SimpleAuthorized *bool
+	Context          map[string]string
+	Statements       []policyStatement
 }
 type policyStatement struct {
 	Effect             string
@@ -101,12 +107,20 @@ func newRequestEvent(cfg Config, route RouteConfig, r *http.Request, parameters 
 	if err != nil {
 		sourceIP = r.RemoteAddr
 	}
-	arn := "arn:aws:execute-api:" + cfg.Region + ":" + cfg.AccountID + ":" + cfg.APIID + "/" + cfg.Stage + "/" + r.Method + "/" + strings.TrimPrefix(r.URL.Path, "/")
+	routedPath, _ := apiPath(cfg.BasePath, r.URL.Path)
+	rawPath := rawAPIPath(cfg.BasePath, r.URL.EscapedPath())
+	arn := "arn:aws:execute-api:" + cfg.Region + ":" + cfg.AccountID + ":" + cfg.APIID + "/" + cfg.Stage + "/" + r.Method + "/" + strings.TrimPrefix(routedPath, "/")
+	contextPath := "/" + cfg.Stage + r.URL.Path
+	if cfg.Stage == "$default" {
+		contextPath = r.URL.Path
+	}
+	now := time.Now().UTC()
 	return requestEvent{
+		apiPath: routedPath, routeKey: route.RouteKey, rawPath: rawPath, rawQueryString: r.URL.RawQuery,
 		Type: "REQUEST", MethodARN: arn, Resource: route.Path, Path: r.URL.Path, HTTPMethod: r.Method,
 		Headers: headers, MultiValueHeaders: multiHeaders, QueryStringParameters: singleQuery, MultiValueQueryStringParameters: query,
 		PathParameters: parameters, StageVariables: cfg.StageVariables,
-		RequestContext: requestContext{Path: "/" + cfg.Stage + r.URL.Path, AccountID: cfg.AccountID, ResourceID: "local", Stage: cfg.Stage, RequestID: requestID, Identity: requestIdentity{SourceIP: sourceIP, UserAgent: r.UserAgent()}, ResourcePath: route.Path, HTTPMethod: r.Method, APIID: cfg.APIID, DomainName: r.Host, Protocol: r.Proto, RequestTime: time.Now().UTC().Format("02/Jan/2006:15:04:05 -0700"), RequestTimeEpoch: time.Now().UnixMilli()},
+		RequestContext: requestContext{Path: contextPath, AccountID: cfg.AccountID, ResourceID: "local", Stage: cfg.Stage, RequestID: requestID, Identity: requestIdentity{SourceIP: sourceIP, UserAgent: r.UserAgent()}, ResourcePath: route.Path, HTTPMethod: r.Method, APIID: cfg.APIID, DomainName: r.Host, Protocol: r.Proto, RequestTime: now.Format("02/Jan/2006:15:04:05 -0700"), RequestTimeEpoch: now.UnixMilli()},
 	}
 }
 
@@ -116,15 +130,23 @@ func (authorizer *lambdaAuthorizer) authorize(ctx context.Context, event request
 	}
 	ttl := *authorizer.config.TTL
 	cacheKey := ""
-	if ttl > 0 {
-		identity := make([]string, len(authorizer.config.IdentitySources))
+	identity := make([]string, len(authorizer.config.IdentitySources))
+	if ttl > 0 || authorizer.config.PayloadFormatVersion != "" {
 		for i, source := range authorizer.config.IdentitySources {
-			value, ok := identityValue(source, event)
+			var value string
+			var ok bool
+			if authorizer.config.PayloadFormatVersion == "" {
+				value, ok = identityValue(source, event)
+			} else {
+				value, ok = nativeIdentityValue(source, event)
+			}
 			if !ok || value == "" {
 				return authorizerResponse{}, http.StatusUnauthorized
 			}
 			identity[i] = value
 		}
+	}
+	if ttl > 0 {
 		keyJSON, _ := json.Marshal(identity)
 		digest := sha256.Sum256(keyJSON)
 		cacheKey = hex.EncodeToString(digest[:])
@@ -135,7 +157,7 @@ func (authorizer *lambdaAuthorizer) authorize(ctx context.Context, event request
 			return cached.response, policyStatus(cached.response, event.MethodARN)
 		}
 	}
-	response, status := authorizer.invoke(ctx, event)
+	response, status := authorizer.invoke(ctx, event, identity)
 	if status != 0 {
 		return authorizerResponse{}, status
 	}
@@ -164,38 +186,25 @@ func (authorizer *lambdaAuthorizer) authorize(ctx context.Context, event request
 	return response, policyStatus(response, event.MethodARN)
 }
 
-func (authorizer *lambdaAuthorizer) invoke(ctx context.Context, event requestEvent) (authorizerResponse, int) {
-	payload, err := json.Marshal(event)
+func (authorizer *lambdaAuthorizer) invoke(ctx context.Context, event requestEvent, identity []string) (authorizerResponse, int) {
+	payload, err := json.Marshal(authorizerPayload(event, authorizer.config.PayloadFormatVersion, identity))
 	if err != nil || len(payload) > maxInvokePayload {
 		return authorizerResponse{}, http.StatusInternalServerError
 	}
-	invokeContext, cancel := context.WithTimeout(ctx, authorizer.config.Timeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(invokeContext, http.MethodPost, authorizer.config.InvokeURL, bytes.NewReader(payload))
-	if err != nil {
+	invoked, failure := invokeLambda(ctx, authorizer.client, authorizer.config.InvokeURL, authorizer.config.Timeout, payload)
+	if failure != invokeOK {
 		return authorizerResponse{}, http.StatusInternalServerError
 	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Amz-Invocation-Type", "RequestResponse")
-	response, err := authorizer.client.Do(request)
-	if err != nil {
+	var functionFailure struct {
+		ErrorMessage string `json:"errorMessage"`
+	}
+	if json.Unmarshal(invoked.payload, &functionFailure) == nil && functionFailure.ErrorMessage == "Unauthorized" && (invoked.functionError || authorizer.config.PayloadFormatVersion != "") {
+		return authorizerResponse{}, http.StatusUnauthorized
+	}
+	if invoked.functionError {
 		return authorizerResponse{}, http.StatusInternalServerError
 	}
-	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxInvokePayload+1))
-	if err != nil || len(data) > maxInvokePayload || response.StatusCode != http.StatusOK {
-		return authorizerResponse{}, http.StatusInternalServerError
-	}
-	if response.Header.Get("X-Amz-Function-Error") != "" {
-		var failure struct {
-			ErrorMessage string `json:"errorMessage"`
-		}
-		if json.Unmarshal(data, &failure) == nil && failure.ErrorMessage == "Unauthorized" {
-			return authorizerResponse{}, http.StatusUnauthorized
-		}
-		return authorizerResponse{}, http.StatusInternalServerError
-	}
-	result, err := parseAuthorizerResponse(data)
+	result, err := parseConfiguredAuthorizerResponse(invoked.payload, authorizer.config)
 	if err != nil {
 		return authorizerResponse{}, http.StatusInternalServerError
 	}
@@ -248,6 +257,30 @@ func identityValue(source string, event requestEvent) (string, bool) {
 }
 
 func parseAuthorizerResponse(data []byte) (authorizerResponse, error) {
+	return parseConfiguredAuthorizerResponse(data, AuthorizerConfig{})
+}
+func parseConfiguredAuthorizerResponse(data []byte, config AuthorizerConfig) (authorizerResponse, error) {
+	if config.EnableSimpleResponses {
+		var simple struct {
+			IsAuthorized *bool                      `json:"isAuthorized"`
+			Context      map[string]json.RawMessage `json:"context"`
+		}
+		// IAM policies remain valid when simple responses are enabled.
+		var discriminator map[string]json.RawMessage
+		if err := json.Unmarshal(data, &discriminator); err != nil {
+			return authorizerResponse{}, err
+		}
+		if _, ok := discriminator["isAuthorized"]; ok {
+			if err := decodeStrict(data, &simple); err != nil || simple.IsAuthorized == nil {
+				return authorizerResponse{}, fmt.Errorf("invalid simple authorizer response")
+			}
+			result := authorizerResponse{SimpleAuthorized: simple.IsAuthorized}
+			if err := parseAuthorizerContext(&result, simple.Context, true); err != nil {
+				return authorizerResponse{}, err
+			}
+			return result, nil
+		}
+	}
 	var raw struct {
 		PrincipalID        string                     `json:"principalId"`
 		PolicyDocument     json.RawMessage            `json:"policyDocument"`
@@ -272,31 +305,37 @@ func parseAuthorizerResponse(data []byte) (authorizerResponse, error) {
 	if err != nil {
 		return authorizerResponse{}, err
 	}
-	result := authorizerResponse{PrincipalID: raw.PrincipalID, Context: make(map[string]string), Statements: statements}
-	for key, value := range raw.Context {
-		decoder := json.NewDecoder(bytes.NewReader(value))
-		decoder.UseNumber()
-		var scalar any
-		if err := decoder.Decode(&scalar); err != nil {
-			return authorizerResponse{}, err
-		}
-		switch item := scalar.(type) {
-		case string:
-			result.Context[key] = item
-		case json.Number:
-			result.Context[key] = item.String()
-		case bool:
-			if item {
-				result.Context[key] = "true"
-			} else {
-				result.Context[key] = "false"
-			}
-		default:
-			return authorizerResponse{}, fmt.Errorf("authorizer context must contain scalars")
-		}
+	result := authorizerResponse{PrincipalID: raw.PrincipalID, Statements: statements}
+	if err := parseAuthorizerContext(&result, raw.Context, config.PayloadFormatVersion == "2.0"); err != nil {
+		return authorizerResponse{}, err
 	}
 	return result, nil
 }
+func parseAuthorizerContext(result *authorizerResponse, raw map[string]json.RawMessage, structured bool) error {
+	result.Context = make(map[string]string, len(raw))
+	result.NativeContext = make(map[string]any, len(raw))
+	for key, value := range raw {
+		if key == "claims" && !structured {
+			return fmt.Errorf("claims is reserved in authorizer context")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(value))
+		decoder.UseNumber()
+		var native any
+		if err := decoder.Decode(&native); err != nil {
+			return err
+		}
+		scalar, ok := scalarContext(native)
+		if !ok && !structured {
+			return fmt.Errorf("authorizer context must contain scalars")
+		}
+		if ok {
+			result.Context[key] = scalar
+		}
+		result.NativeContext[key] = native
+	}
+	return nil
+}
+
 func policyStatements(data []byte) ([]policyStatement, error) {
 	var entries []json.RawMessage
 	trimmed := bytes.TrimSpace(data)
@@ -371,6 +410,12 @@ func decodeStrict(data []byte, destination any) error {
 	return nil
 }
 func policyStatus(response authorizerResponse, arn string) int {
+	if response.SimpleAuthorized != nil {
+		if *response.SimpleAuthorized {
+			return 0
+		}
+		return http.StatusForbidden
+	}
 	allowed := false
 	for _, statement := range response.Statements {
 		actionMatches, resourceMatches := false, false

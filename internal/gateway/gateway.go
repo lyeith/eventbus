@@ -35,14 +35,15 @@ type compiledRoute struct {
 	proxy    *httputil.ReverseProxy
 }
 type Gateway struct {
-	config      Config
-	options     Options
-	routes      []compiledRoute
-	authorizers map[string]*lambdaAuthorizer
-	frontend    http.Handler
-	transport   *http.Transport
-	connections *connectionTracker
-	closed      atomic.Bool
+	config       Config
+	options      Options
+	routes       []compiledRoute
+	authorizers  map[string]*lambdaAuthorizer
+	frontend     http.Handler
+	invokeClient *http.Client
+	transport    *http.Transport
+	connections  *connectionTracker
+	closed       atomic.Bool
 }
 type integrationRequest struct {
 	target  *url.URL
@@ -64,12 +65,17 @@ func New(cfg Config, options Options) (*Gateway, error) {
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 20
 	result := &Gateway{config: cfg, options: options, transport: transport, connections: connections, authorizers: make(map[string]*lambdaAuthorizer)}
-	authorizerClient := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	invokeClient := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	result.invokeClient = invokeClient
 	for name, configuration := range cfg.Authorizers {
-		result.authorizers[name] = &lambdaAuthorizer{config: configuration, client: authorizerClient, cache: make(map[string]cachedAuthorization), now: time.Now}
+		result.authorizers[name] = &lambdaAuthorizer{config: configuration, client: invokeClient, cache: make(map[string]cachedAuthorization), now: time.Now}
 	}
 	for _, configuration := range cfg.Routes {
 		template, _ := parseTemplate(configuration.Path)
+		if configuration.Integration.Type == "AWS_PROXY" {
+			result.routes = append(result.routes, compiledRoute{config: configuration, template: template})
+			continue
+		}
 		proxy := &httputil.ReverseProxy{
 			Transport: transport,
 			Rewrite: func(request *httputil.ProxyRequest) {
@@ -100,6 +106,9 @@ func New(cfg Config, options Options) (*Gateway, error) {
 	}
 	sort.SliceStable(result.routes, func(i, j int) bool {
 		left, right := result.routes[i], result.routes[j]
+		if left.config.RouteKey == "$default" || right.config.RouteKey == "$default" {
+			return left.config.RouteKey != "$default" && right.config.RouteKey == "$default"
+		}
 		if left.template.original == right.template.original {
 			return left.config.Method != "ANY" && right.config.Method == "ANY"
 		}
@@ -145,14 +154,22 @@ func (gateway *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeGatewayError(w, http.StatusBadRequest)
 		return
 	}
+	routingPath, mapped := apiPath(gateway.config.BasePath, r.URL.Path)
 	var route *compiledRoute
 	var parameters map[string]string
 	for i := range gateway.routes {
+		if !mapped {
+			break
+		}
 		candidate := &gateway.routes[i]
 		if candidate.config.Method != "ANY" && candidate.config.Method != r.Method {
 			continue
 		}
-		if values, ok := candidate.template.match(r.URL.Path); ok {
+		if candidate.config.RouteKey == "$default" {
+			route, parameters = candidate, map[string]string{}
+			break
+		}
+		if values, ok := candidate.template.match(routingPath); ok {
 			route = candidate
 			parameters = values
 			break
@@ -175,15 +192,19 @@ func (gateway *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	event := newRequestEvent(gateway.config, route.config, r, parameters, requestID)
 	response := authorizerResponse{Context: make(map[string]string)}
 	if route.config.Authorizer != "" && !gateway.options.NoAuth {
-		event := newRequestEvent(gateway.config, route.config, r, parameters, requestID)
 		var status int
 		response, status = gateway.authorizers[route.config.Authorizer].authorize(r.Context(), event)
 		if status != 0 {
 			writeGatewayError(w, status)
 			return
 		}
+	}
+	if route.config.Integration.Type == "AWS_PROXY" {
+		gateway.serveLambda(w, r, route.config, event, response)
+		return
 	}
 	target, headers, err := mapIntegration(route.config.Integration, mappingInput{request: r, parameters: parameters, authorizer: response, config: gateway.config, requestID: requestID})
 	if err != nil {
@@ -215,6 +236,8 @@ func writeGatewayError(w http.ResponseWriter, status int) {
 		message = "Bad request"
 	case http.StatusRequestURITooLong:
 		message = "Request URI too long"
+	case http.StatusRequestEntityTooLarge:
+		message = "Request too large"
 	case http.StatusBadGateway:
 		message = "Bad gateway"
 	case http.StatusServiceUnavailable:

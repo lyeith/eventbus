@@ -1,4 +1,4 @@
-// eventbus-gateway serves application-owned REST API Gateway fixtures.
+// eventbus-gateway serves application-owned API Gateway request fixtures.
 package main
 
 import (
@@ -67,18 +67,22 @@ func run() error {
 	case <-ctx.Done():
 		drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := server.Shutdown(drain); err != nil {
-			_ = server.Close()
-		}
-		// net/http does not drain hijacked WebSocket connections. Gateway owns its
-		// outbound connections and closes upgrades after ordinary requests drain.
-		if err := application.Close(); err != nil {
-			return err
-		}
-		err := <-failure
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
+		return shutdownGateway(drain, server, application.Close, failure)
 	}
+}
+
+func shutdownGateway(ctx context.Context, server *http.Server, closeApplication func() error, failure <-chan error) error {
+	shutdownErr := server.Shutdown(ctx)
+	var closeErr error
+	if shutdownErr != nil {
+		closeErr = server.Close()
+	}
+	// net/http does not drain hijacked WebSocket connections. Gateway owns its
+	// outbound connections and closes upgrades after ordinary requests drain.
+	applicationErr := closeApplication()
+	serveErr := <-failure
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	return errors.Join(shutdownErr, closeErr, applicationErr, serveErr)
 }
