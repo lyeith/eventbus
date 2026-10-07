@@ -1,9 +1,11 @@
 # Handoff
 
 Completed all ten triaged ticket scopes #2–#11 plus ownership-review findings on
-SSD main, after cleanup baseline 063e6966. Source is committed/pushed through
-c005666. User now requested publication: prepare v0.5.0 service/gateway binaries
-with the existing build script. Plans pins and live stacks remain unchanged.
+SSD main, after cleanup baseline 063e6966. Verified release source/tag is
+1f770c9 (v0.5.0), published 2026-10-07 as latest:
+https://github.com/lyeith/eventbus/releases/tag/v0.5.0
+Eight service/gateway binaries (Linux/macOS amd64/arm64) plus SHA256SUMS.
+Plans pins and live stacks remain unchanged.
 
 Owners: Cognito persists metadata/schema/permissions/token policy and workflows;
 Secrets owns immutable versions/stages/rotation; Lambda owns execution/Event queue;
@@ -24,7 +26,7 @@ Approved: pinned gojq v0.12.19 (+timefmt-go v0.1.8), test-only JS Scheduler
 SDK 3.1146.0. Frozen npm ci and go mod tidy completed. No jq binary/framework.
 Go jq implements the documented tested profile, not literal jq 1.6 equivalence.
 
-Verification through ssd-dev on Linux:
+Verification (SSD tests/builds use ssd-dev):
 - go test -race -count=1 -p 3 ./...: every package except Cognito passed.
   Cognito (355.267s) failed exactly two old legacy policy input fixtures; all other
   cases passed. Those fixtures lacked explicit PoolId despite legacy aliases.
@@ -40,7 +42,15 @@ Verification through ssd-dev on Linux:
   filters/raw/envelope, partitions/GZIP/errors, failed delivery recovery and drain.
   Later backing-reference/ARN guard fixes passed focused Firehose race/vet.
 - Darwin arm64 and Windows amd64 CGO-free runner/Scheduler/app/server tests
-  compile with -exec=true. Target-platform execution was not performed.
+  compile with -exec=true; Windows target execution was not performed.
+- Existing build-release.sh built all eight clean tagged v0.5.0 CGO-free artifacts.
+  Exact source revision and target architecture verified in every Go build record.
+  Downloaded all GitHub assets and verified SHA256SUMS before public publication.
+- Linux amd64 packaged service/gateway: real Node HTTP 2.0 authorizer/AWS_PROXY,
+  native Cognito signup/code capture/confirmation, SES v2 JSONL, Lambda Event
+  completion, Scheduler Create/Get/one-time execution/delete and shutdown passed.
+- macOS arm64: both CLI startups, service health/native Cognito SQLite write and
+  shutdown passed; macOS amd64/Linux arm64 were cross-built, not executed.
 
 Evidence under /tmp on SSD, governed by existing finite retention:
  eventbus-plate-final-{race,sdk,vet}-20261007.log
@@ -48,6 +58,7 @@ Evidence under /tmp on SSD, governed by existing finite retention:
  eventbus-firehose-agent-verified.txt / eventbus-firehose-ownership-verified.txt
  eventbus-background-drain-race-20261007.log
  eventbus-plate-{darwin,windows}-compile-20261007.log
+ eventbus-v0.5.0-{build,artifact-smoke}.log / eventbus-v0.5.0-publication.json
 
 All fixtures owned listeners/state/processes; no live stack reset. RustFS 40955
 and its task volume are gone; staging/probes/bytecode removed, no worktrees.
@@ -55,7 +66,8 @@ Canonical frozen SDK environments remain reusable. Failed managed allocations
 are quiescent/unpinned and expire through SSD GC; no receipts were rewritten.
 STATE.md and service guides record current truth and explicit unsupported limits.
 
-Next: verify native release binaries and checksums, publish v0.5.0 and clean
-owned release scratch; then consuming-app acceptance. Low-priority SES
+Owned release/download/laptop artifact directories and smoke state/processes are
+removed. Latest public release, nine uploaded assets and GitHub tag source verified.
+Next: consuming-app acceptance. Low-priority SES
 management. Do not imply all management APIs, production IAM/KMS or durable
 async/schedule recovery are present. Preserve developer identity SQLite data.

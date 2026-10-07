@@ -2,9 +2,10 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD, main.
 Public MIT repository: https://github.com/lyeith/eventbus.
-Preparing v0.5.0 service and gateway binaries from the verified main source.
-Published release is v0.4.0 until upload/verification completes. Plans pins and
-live stacks are unchanged; this task publishes binaries without deploying them.
+Published latest v0.5.0 on 2026-10-07: service and gateway, Linux/macOS amd64/arm64.
+Release source: 1f770c9d24969edd50641150bd78ea303406b7b9; eight CGO-free binaries
+and SHA256SUMS. All GitHub downloads match checksums; tag/source metadata verified.
+Plans pins and live stacks are unchanged; binaries were published without deployment.
 
 All ten agreed ticket scopes #2–#11 and ownership-review findings are complete:
 - Cognito native regional metadata/readback, client token lifetimes, schema,
@@ -37,8 +38,11 @@ stopped/deleted. Canonical frozen SDK environments are reusable; bytecode scratc
 removed. /tmp evidence and quiescent failed allocations use existing finite GC.
 Developer SQLite/live stack state was preserved.
 
-Next: build/checksum/smoke the eight release binaries, publish v0.5.0, verify
-GitHub assets, remove owned artifact scratch and record publication. SES
-management remains low priority. API Gateway management, full Scheduler APIs,
-production IAM/KMS/provider delivery and durable queue/schedule recovery remain
+Packaged Linux amd64 passed gateway/Node, native Cognito/SES capture, async Lambda,
+Scheduler and graceful shutdown. macOS arm64 passed both CLI startups plus service
+health, native Cognito SQLite write and shutdown. Other targets were cross-built.
+Owned release/download/macOS staging and smoke state/processes are cleaned.
+
+Next: consuming-app acceptance. SES management remains low priority. API Gateway
+management, full Scheduler APIs, production IAM/KMS/provider delivery and durable queue/schedule recovery remain
 outside the agreed subset. Reprovision in-memory resources after restart.
