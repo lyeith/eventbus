@@ -37,7 +37,8 @@ func RequestMode(request *http.Request) AdmissionMode {
 func (c *Coordinator) beginEnvelope(lane Lane) (AdmissionMode, func(error), error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.state == Open && !c.closing && !c.evidenceFailure || lane == Callback && c.state == Draining && c.work > 0 {
+	c.used = true
+	if c.sourceOpenLocked() || lane == Callback && c.descendantsAllowedLocked() {
 		return Work, c.beginWorkLocked("http."+string(lane), ""), nil
 	}
 	// Provisional cleanup envelopes are tracked even before rejecting a source.
@@ -54,13 +55,7 @@ func (c *Coordinator) beginEnvelope(lane Lane) (AdmissionMode, func(error), erro
 		released = true
 		c.cleanup--
 		if evidenceErr != nil {
-			c.evidenceFailure = true
-			if c.evidenceCode == "" {
-				c.evidenceCode = "incomplete_ownership_evidence"
-			}
-			if c.state == Open {
-				c.state = Draining
-			}
+			c.failEvidenceLocked("incomplete_ownership_evidence")
 		}
 		c.wakeLocked()
 	}
@@ -160,6 +155,7 @@ const ControlPath = "/__eventbus/dev/retained-owner"
 func NewHandler(c *Coordinator) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
+		c.markUsed()
 		switch request.URL.Path {
 		case ControlPath:
 			if request.Method != http.MethodGet {
@@ -187,6 +183,10 @@ func NewHandler(c *Coordinator) http.Handler {
 			defer cancel()
 			result, err := c.Quiesce(ctx)
 			writeControlResult(writer, result, err)
+		case ControlPath + "/source-leases/acquire":
+			c.handleSourceLease(writer, request, true)
+		case ControlPath + "/source-leases/release":
+			c.handleSourceLease(writer, request, false)
 		case ControlPath + "/resume":
 			if request.Method != http.MethodPost {
 				methodError(writer, http.MethodPost)
@@ -224,10 +224,10 @@ func decodeControl(writer http.ResponseWriter, request *http.Request, output any
 			return err
 		}
 		key, ok := token.(string)
-		if !ok || seen[key] {
+		if !ok || seen[strings.ToLower(key)] {
 			return errors.New("control fields must be unique")
 		}
-		seen[key] = true
+		seen[strings.ToLower(key)] = true
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return err

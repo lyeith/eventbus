@@ -91,6 +91,35 @@ REQUEST authorizer and integration, including through a protected `$default`.
 No harness prefix is added: AWS_PROXY 1.0 receives its original `path` and 2.0 its
 original `rawPath`, subject only to the documented API mapping above.
 
+## Retained-owner ingress
+
+For an exclusively owned [retained application suite](RETAINED-OWNER.md), start
+EventBus first and add this gateway recipe setting:
+
+```yaml
+retained_owner_control_url: http://127.0.0.1:14100/__eventbus/dev/retained-owner
+```
+
+`--retained-owner-control-url` provides the same optional CLI override.
+In the recipe above, change **both** authorizer and AWS_PROXY integration Invoke
+origins to `http://127.0.0.1:14101`, the owner's advertised `callback_origin`.
+Preserve authentication and native payload-format settings. The control URL must
+be literal loopback HTTP at the exact control path, without credentials/query/
+fragment; `localhost` is not accepted. Startup validates owner identity and every
+Invoke origin. HTTP_PROXY integrations and `-frontend-proxy` are rejected because
+their external work is outside the joined profile. Local static frontend files
+remain supported.
+
+Each root acquires a shared source lease before body read, authorization or Invoke.
+Accepted roots and independently admitted callbacks remain joined despite lost
+responses; leases do not expire. Refused candidates cannot execute after resume
+in a later generation. New roots return 503 while fenced. Immediately after resume,
+cache refresh may briefly cause 503; retry with a new request. Keep the gateway and
+broker controls/callbacks available during join: reversible `draining`/`held` does
+not shut the gateway down. Irreversible owner shutdown stops/drains ingress;
+an owner identity change fails closed. See the retained guide for cleanup/rejoin,
+dirty recovery and generation rules.
+
 ## Authorization
 
 | Contract | Behavior |

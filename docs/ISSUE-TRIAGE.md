@@ -55,14 +55,17 @@ consumers remain named harness adapters. See [Messaging](MESSAGING.md),
 
 ## Retained-suite recovery: development harness
 
-[#17](https://github.com/lyeith/eventbus/issues/17) adds an opt-in, process-exclusive
-ownership barrier in `devquiescence`, composed by app `dev_retained_owner.go` with
-Lambda's `dev_lifecycle.go` seam. It fences source HTTP before parsing/capture,
-joins accepted callback/async-retry/native-child activity, permits exact fixture
-cleanup while held and resumes by generation. It is a development control
-contract, not an AWS API or a change to #16. Autonomous owners outside the first
-profile are explicitly refused; [Retained owner](RETAINED-OWNER.md) states endpoint,
-failure and cleanup boundaries. [HANDOFF](../HANDOFF.md) records current verification.
+[#17](https://github.com/lyeith/eventbus/issues/17) established the opt-in,
+process-exclusive ownership barrier. [#18](https://github.com/lyeith/eventbus/issues/18)
+extends it to mapped-message custody, Scheduler, Cognito runners, Firehose,
+gateway root leases and declared native cleanup functions. `devquiescence` owns
+fence/held/resume and leases; optional `devactivity` ports leave native state,
+execution and settlement with services. App composes listeners/cleanup declarations;
+gateway acquires root leases before auth/body/Invoke. Applications own exact
+authenticated cleanup and fixture assertions, followed by explicit re-quiesce.
+These are development controls; #16's native batch contract remains separate.
+[Retained owner](RETAINED-OWNER.md) states endpoints and remaining refusals;
+[HANDOFF](../HANDOFF.md) records current verification.
 
 ## Core versus harness code
 
@@ -74,7 +77,7 @@ failure and cleanup boundaries. [HANDOFF](../HANDOFF.md) records current verific
 | Async acceptance/retries, rotation steps, scheduled target dispatch, SNS Firehose delivery | Respective AWS service core with consumer-owned typed ports |
 | YAML loading, deterministic fixture IDs/aliases, fixture profiles, local executable/endpoint selection | Explicit `dev_*.go` adapters; composition in `internal/app` |
 | Captures, agent wait/reset/inspection controls, fault injection and accelerated clocks | Development harness adapters; HTTP controls use a distinct namespace |
-| Retained-suite fence, safe held proof and resume | `devquiescence`; EventBus app owns listener/profile composition, Lambda reports joined lifetimes, consuming applications own exact cleanup |
+| Retained-suite fence, source leases, declared cleanup and resume | `devquiescence`/`devactivity`; app composes profile, service seams retain custody/lifetimes, gateway leases roots, consuming apps own cleanup effects |
 | Consumer polling/process recipes, frontend hosting and private application mappings | Existing harness owners; never substitute for missing AWS operations |
 
 Development adapters translate into validated core configuration and operations.

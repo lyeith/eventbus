@@ -5,6 +5,7 @@ package cognitotrigger
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -96,7 +97,7 @@ func TestInvokeTimeoutAndCloseCleanUpChildren(t *testing.T) {
 }
 
 func TestInheritedChildPipesCannotExtendInvocationIndefinitely(t *testing.T) {
-	runner, _ := fixtureRunner(t, "handler.mjs", `import {spawn} from 'node:child_process';
+	runner, _ := activityFixtureRunner(t, `import {spawn} from 'node:child_process';
 export async function handler(event){
   const child=spawn(process.execPath,['-e','setInterval(()=>{},1000);setTimeout(()=>process.exit(0),5000)'],{stdio:'inherit'});
   child.unref();
@@ -104,6 +105,7 @@ export async function handler(event){
 }`, nil)
 	started := time.Now()
 	_, err := runner.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
-	require.Error(t, err, "incomplete process output ownership must fail closed")
+	require.ErrorIs(t, err, exec.ErrWaitDelay, "incomplete process output ownership must fail closed")
+	require.ErrorIs(t, runner.Close(t.Context()), exec.ErrWaitDelay)
 	require.Less(t, time.Since(started), 3*time.Second)
 }

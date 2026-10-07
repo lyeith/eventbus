@@ -37,6 +37,7 @@ type bufferedRecord struct {
 	group         string
 	keys          map[string]string
 	errorType     string
+	lease         *devRecordLease
 }
 type deliveryObject struct {
 	key           string
@@ -79,6 +80,7 @@ type FirehoseManager struct {
 	mu                                                      sync.RWMutex
 	region, accountID, s3Endpoint, s3AccessKey, s3SecretKey string
 	metadata                                                MetadataExtractor
+	dev                                                     *devDelivery
 	bufferLimit                                             int
 	httpClient                                              *http.Client
 	stopping                                                bool
@@ -296,14 +298,24 @@ func (fm *FirehoseManager) AcceptRecordBatch(ctx context.Context, ds *DeliverySt
 			results[index] = RecordResult{ErrorCode: "ServiceUnavailableException", ErrorMessage: "Firehose stream is stopping or its retained delivery buffer is full"}
 			continue
 		}
+		recordID := uuid.NewString()
+		if fm.dev != nil {
+			lease, err := fm.dev.beginRecord(recordID)
+			if err != nil {
+				results[index] = RecordResult{ErrorCode: "ServiceUnavailableException", ErrorMessage: "Firehose delivery ownership is unavailable"}
+				continue
+			}
+			record.lease = lease
+		}
 		ds.buffer = append(ds.buffer, record)
 		ds.bufferedBytes += record.originalBytes
-		results[index].RecordID = uuid.NewString()
+		results[index].RecordID = recordID
 	}
 	select {
 	case ds.flush <- struct{}{}:
 	default:
 	}
+	fm.devWake()
 	return results, nil
 }
 
@@ -394,9 +406,26 @@ func (fm *FirehoseManager) flushBuffer(ctx context.Context, ds *DeliveryStream) 
 }
 
 func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, force bool) error {
+	ctx, finishAttempt, err := fm.devAttempt(ctx)
+	if err != nil {
+		return err
+	}
+	var acknowledged []*devRecordLease
+	acquired := false
+	defer func() {
+		if acquired {
+			<-ds.flushSlot
+		}
+		// Completions cannot reenter a stream/entity lock or report safe ownership
+		// until the serialized attempt and response-body cleanup have joined.
+		for _, lease := range acknowledged {
+			lease.finish(nil)
+		}
+		finishAttempt()
+	}()
 	select {
 	case ds.flushSlot <- struct{}{}:
-		defer func() { <-ds.flushSlot }()
+		acquired = true
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -404,6 +433,15 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 		return err
 	}
 	ds.mu.Lock()
+	if owner, ok := ctx.Value(devForceContextKey{}).(*devDelivery); ok {
+		owner.mu.Lock()
+		forcing := owner.forcing && !owner.aborted
+		owner.mu.Unlock()
+		if !forcing {
+			ds.mu.Unlock()
+			return nil
+		}
+	}
 	groups := map[string][]bufferedRecord{}
 	var order []string
 	for _, record := range ds.buffer {
@@ -473,6 +511,11 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 		ds.mu.Lock()
 		object.attempts++
 		if err == nil {
+			for _, record := range object.records {
+				if record.lease != nil {
+					acknowledged = append(acknowledged, record.lease)
+				}
+			}
 			for index, current := range ds.pending {
 				if current == object {
 					ds.pending = slices.Delete(ds.pending, index, index+1)
@@ -517,10 +560,13 @@ func (fm *FirehoseManager) putS3Object(ctx context.Context, bucket, key string, 
 	if err != nil {
 		return fmt.Errorf("send Firehose delivery: %w", err)
 	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+	_, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+	closeErr := response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("Firehose destination returned status %d", response.StatusCode)
+		return errors.Join(fmt.Errorf("Firehose destination returned status %d", response.StatusCode), readErr, closeErr)
+	}
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return fmt.Errorf("complete Firehose destination response: %w", err)
 	}
 	return nil
 }
@@ -580,6 +626,9 @@ func (fm *FirehoseManager) ShutdownContext(ctx context.Context) error {
 	}
 	fm.mu.Unlock()
 	var failures []error
+	if err := fm.devStopForce(ctx); err != nil {
+		failures = append(failures, err)
+	}
 	for _, ds := range streams {
 		select {
 		case <-ds.done:
@@ -593,6 +642,9 @@ func (fm *FirehoseManager) ShutdownContext(ctx context.Context) error {
 		}
 	}
 	result := errors.Join(failures...)
+	if result == nil && fm.dev != nil {
+		fm.httpClient.CloseIdleConnections()
+	}
 	fm.mu.Lock()
 	fm.shutdownErr = result
 	close(fm.done)

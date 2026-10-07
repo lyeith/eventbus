@@ -59,13 +59,47 @@ for 202/empty acceptance and handler/retry evidence. Scheduler uses the approved
 pinned JS client and a real Node alias, checking exact input and completion
 removal before handler business completion. All fixtures own state and children.
 
-The opt-in `TestRetainedOwnerPythonSDKBarrier` lane targets the development
-[retained-owner profile](../../docs/RETAINED-OWNER.md) through owned source/callback
-listeners and ordinary boto3/native Lambda requests. Its recovery boundary is
-joined accepted activity, exact app-owned cleanup and explicit resume, with no
-business-success or restart-persistence claim. [HANDOFF](../../HANDOFF.md) records
-current verification; the profile's unsupported autonomous sources remain explicit
-refusals.
+`TestRetainedOwnerPythonSDKBarrier` covers baseline SNS/Lambda retained recovery.
+`TestRetainedStackNativeSDKRecovery` (`sdksmoke,integration`) adds native batch/retry
+custody, gateway/Cognito callbacks, Firehose delivery, declared cleanup/descendants,
+timeout recovery, sentinels and same-resource resume. It starts an already installed
+RustFS binary with owned listeners/data; select its absolute path explicitly:
+
+```sh
+EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" \
+EVENTBUS_SMOKE_RUSTFS=/absolute/path/to/rustfs \
+go test -race -count=1 -tags sdksmoke,integration ./tests/sdk \
+  -run '^TestRetainedStackNativeSDKRecovery$'
+```
+
+[Retained owner](../../docs/RETAINED-OWNER.md) states the contract;
+[HANDOFF](../../HANDOFF.md) records current verification. Consuming applications
+own their actual authenticated cleanup and business assertions.
+
+## Optional older Lambda SDK compatibility
+
+The current lock uses boto3 `1.40.61`/botocore `1.40.76`.
+`TestSQSMappingCurrentPythonSDKURI` checks its native CreateEventSourceMapping URI.
+The optional `TestSQSMappingLegacyPythonSDKSmoke` reuses the unchanged batch script
+with boto3/botocore `1.39.4`; provision the [fully pinned requirements](python/requirements-lambda-legacy.txt)
+in a separate temporary environment, preserving the project's frozen environment:
+
+```sh
+legacy_sdk_dir=$(mktemp -d /tmp/eventbus-legacy-sdk.XXXXXX)
+uv venv --python "$PWD/.venv/bin/python" "$legacy_sdk_dir"
+uv pip install --python "$legacy_sdk_dir/bin/python" \
+  -r tests/sdk/python/requirements-lambda-legacy.txt
+EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" \
+EVENTBUS_SMOKE_PYTHON_LEGACY="$legacy_sdk_dir/bin/python" \
+go test -race -count=1 -tags sdksmoke ./tests/sdk \
+  -run 'TestSQSMappingCurrentPythonSDKURI|TestSQSMappingLegacyPythonSDKSmoke|TestSQSBatchPythonSDKSmoke'
+```
+
+Absent `EVENTBUS_SMOKE_PYTHON_LEGACY` skips only that legacy proof. When configured,
+it must be an absolute existing executable with exact boto3/botocore `1.39.4`.
+After tests and all users of the environment have joined, remove that exact
+temporary environment with `rm -rf -- "$legacy_sdk_dir"`. See
+[HANDOFF](../../HANDOFF.md) for verification status.
 
 Each runner requires a successful exit and exactly one PASS marker. Missing
 dependencies, false success, assertion failures and timeouts fail the lane.

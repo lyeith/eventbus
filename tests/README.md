@@ -18,12 +18,15 @@ sending, SNS Lambda, SQS mappings, Secrets rotation, Lambda Event, Scheduler,
 real Express/Swagger gateway redirects and restart evidence. It requires Node >=20
 and frozen SDK dependencies, with no running application stack.
 
-Retained-owner controls are development harness behavior: coordinator/evidence
-tests live in `internal/devquiescence`, invocation ownership in Lambda seam tests,
-and two-listener/profile/shutdown composition in `internal/app`.
-`TestRetainedOwnerPythonSDKBarrier` is the opt-in retained-suite recovery lane;
+Retained-owner checks belong beside their owners: fence/source leases/evidence
+in `internal/devquiescence`, native custody/execution/drain in service seam tests,
+root ingress in gateway tests, and profile/declared cleanup/shutdown in `internal/app`.
+`TestRetainedOwnerPythonSDKBarrier` is the baseline SNS/Lambda recovery lane;
+`TestRetainedStackNativeSDKRecovery` adds the `sdksmoke,integration` full-profile
+fixture with its own RustFS process and data.
 [Retained owner](../docs/RETAINED-OWNER.md) defines its supported boundary.
-Current verification is recorded in [HANDOFF](../HANDOFF.md).
+Current expanded-profile verification is recorded in [HANDOFF](../HANDOFF.md);
+consuming applications own actual authenticated cleanup and fixture assertions.
 
 Firehose's optional native S3 suite requires an explicitly owned loopback RustFS
 endpoint. It creates and removes a unique bucket:

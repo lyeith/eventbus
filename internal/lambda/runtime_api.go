@@ -52,9 +52,10 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	processDone := make(chan error, 1)
 	go func() { processDone <- command.Wait() }()
 	finished := false
+	var waitErr error
 	select {
 	case result = <-runtime.result:
-	case <-processDone:
+	case waitErr = <-processDone:
 		finished = true
 		// A runtime may exit after posting a reply. Prefer the already admitted
 		// response over its process exit, regardless of scheduler ordering.
@@ -68,13 +69,18 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	}
 	cleanupErr := cleanup(command)
 	if !finished {
-		<-processDone
+		waitErr = <-processDone
 	}
 	if cleanupErr != nil {
 		result = failure("Runtime.InternalError", "Cannot stop function process group")
 	}
 	result.logs = logs.Bytes()
 	result.ownershipErr = cleanupErr
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		// The native Runtime API response wins over process exit, but a forced
+		// output-pipe join must still make the developer ownership lease dirty.
+		result.ownershipErr = errors.Join(result.ownershipErr, exec.ErrWaitDelay)
+	}
 	return result
 }
 

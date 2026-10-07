@@ -24,6 +24,17 @@ retains dirty state. No automatic reset or application cleanup is included.
 [HANDOFF](../HANDOFF.md) records the combined race and real SDK acceptance.
 The completed native #2–#16 scope remains separate.
 
+## In progress: full retained application owners
+
+[#18](https://github.com/lyeith/eventbus/issues/18) extends the [retained profile](RETAINED-OWNER.md)
+to native mapping custody, Scheduler, Cognito runners, Firehose and shared gateway
+root leases. Declared RequestResponse cleanup keeps sources fenced and requires
+another explicit join before fixture assertions/resume. Native resources are
+paused/reused, not recreated; auth settings and payloads stay unchanged.
+Applications own cleanup effects.
+[HANDOFF](../HANDOFF.md) records current verification. Actual consuming-application
+cleanup acceptance belongs in that application's tests.
+
 ## Low priority: remaining SES APIs
 
 SES sending is capture-only. Implement the non-sending APIs after the nine

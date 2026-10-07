@@ -38,7 +38,7 @@ func TestRetainedOwnerCLIProfileValidation(t *testing.T) {
 		{"invalid low", []string{"--retained-owner-callback-port", "-1"}, false, 0},
 		{"invalid high", []string{"--retained-owner-callback-port", "65536"}, false, 0},
 		{"autonomous legacy consumers", []string{"--retained-owner-callback-port", "4101", "--consumers", "consumers.yaml"}, false, 0},
-		{"untracked trigger runner", []string{"--retained-owner-callback-port", "4101", "--cognito-triggers", "triggers.yaml"}, false, 0},
+		{"tracked trigger runner", []string{"--retained-owner-callback-port", "4101", "--cognito-triggers", "triggers.yaml"}, true, 4101},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			flags := flag.NewFlagSet("retained", flag.ContinueOnError)
@@ -65,16 +65,15 @@ func (h *retainedActionTrap) ServeQuery(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(204)
 }
 
-func TestRetainedProfileRefusesAutonomousSourcesBeforeCoreAdmission(t *testing.T) {
+func TestRetainedProfileKeepsTrackedServicesAndRefusesUntrackedSources(t *testing.T) {
 	core := &retainedActionTrap{}
-	rest := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("autonomous source reached native admission") })
+	restCalls := 0
+	rest := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { restCalls++; w.WriteHeader(204) })
 	router := server.New(retainedServices(server.Services{Messaging: core, Secrets: core, Firehose: core, EventSources: rest, Scheduler: rest}))
 	for _, tc := range []struct{ path, target, body string }{
-		{"/2015-03-31/event-source-mappings", "", `{}`},
-		{"/schedules", "", `{}`},
-		{"/", "Firehose_20150804.PutRecord", `{}`},
-		{"/", "secretsmanager.RotateSecret", `{}`},
-		{"/", "", "Action=Subscribe&Version=2010-03-31&Protocol=firehose"},
+		{"/", "secretsmanager.RotateSecret", "{}"},
+		{"/", "AmazonSQS.StartMessageMoveTask", "{}"},
+		{"/", "", "Action=StartMessageMoveTask&Version=2012-11-05"},
 	} {
 		r := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
 		if tc.target != "" {
@@ -88,12 +87,25 @@ func TestRetainedProfileRefusesAutonomousSourcesBeforeCoreAdmission(t *testing.T
 		require.Contains(t, w.Body.String(), "retained-owner profile")
 	}
 	require.Zero(t, core.calls)
-	r := httptest.NewRequest("POST", "/", strings.NewReader(`{}`))
-	r.Header.Set("X-Amz-Target", "secretsmanager.GetSecretValue")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, r)
-	require.Equal(t, 204, w.Code)
-	require.Equal(t, 1, core.calls)
+	for _, tc := range []struct{ path, target, body string }{
+		{"/2015-03-31/event-source-mappings", "", "{}"},
+		{"/schedules", "", "{}"},
+		{"/", "Firehose_20150804.PutRecord", "{}"},
+		{"/", "secretsmanager.GetSecretValue", "{}"},
+		{"/", "", "Action=Subscribe&Version=2010-03-31&Protocol=firehose"},
+	} {
+		r := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
+		if tc.target != "" {
+			r.Header.Set("X-Amz-Target", tc.target)
+		} else {
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		require.Equal(t, 204, w.Code, tc.path+" "+tc.target)
+	}
+	require.Equal(t, 2, restCalls)
+	require.Equal(t, 3, core.calls)
 }
 
 func TestRetainedCleanupCannotRouteDeletionHeaderIntoNativeInvoke(t *testing.T) {
@@ -418,10 +430,15 @@ func TestRetainedListenerFailedJoinAbortsNativeThenJoinsReceivedEnvelope(t *test
 	store, err := cognito.OpenCognitoStore(filepath.Join(t.TempDir(), "retained.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	aborted := make(chan struct{}, 1)
+	aborted := make(chan struct{}, 2)
+	closeCalls := 0
 	functions := retainedLifecycleFunctions{close: func(ctx context.Context) error {
-		if ctx.Err() == nil {
+		closeCalls++
+		if closeCalls == 1 && ctx.Err() == nil {
 			return fmt.Errorf("failed retained join did not request native abort")
+		}
+		if closeCalls == 2 && ctx.Err() != nil {
+			return fmt.Errorf("actual native join inherited the expired budget")
 		}
 		// Both peers are still live until native process ownership has joined.
 		response, err := peer.Client().Get(peer.URL + "/health")
@@ -455,6 +472,7 @@ func TestRetainedListenerFailedJoinAbortsNativeThenJoinsReceivedEnvelope(t *test
 	released = true
 	err = <-stopped
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 2, closeCalls, "abort must be followed by actual joined cleanup")
 	<-clientDone
 	require.Zero(t, owner.Snapshot().WorkCount)
 	require.False(t, owner.Snapshot().FixtureSafe)

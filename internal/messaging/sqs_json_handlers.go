@@ -45,17 +45,21 @@ func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action str
 func (s *Handler) writeSQSError(w http.ResponseWriter, err *sqsError, jsonProtocol bool) {
 	requestID := awsprotocol.RequestID()
 	w.Header().Set("x-amzn-RequestId", requestID)
+	status, errorType := http.StatusBadRequest, "Sender"
+	if err.Code == "ServiceUnavailable" {
+		status, errorType = http.StatusServiceUnavailable, "Receiver"
+	}
 	if jsonProtocol {
 		w.Header().Set("x-amzn-ErrorType", err.Code)
-		awsprotocol.JSONError(w, http.StatusBadRequest, err.Code, err.Message)
+		awsprotocol.JSONError(w, status, err.Code, err.Message)
 		return
 	}
 	code := err.Code
 	if code == "QueueDoesNotExist" {
 		code = "AWS.SimpleQueueService.NonExistentQueue"
 	}
-	body := `<ErrorResponse xmlns="http://queue.amazonaws.com/doc/2012-11-05/"><Error><Type>Sender</Type><Code>` + awsprotocol.XMLEscape(code) + `</Code><Message>` + awsprotocol.XMLEscape(err.Message) + `</Message></Error><RequestId>` + requestID + `</RequestId></ErrorResponse>`
-	awsprotocol.XMLResponse(w, http.StatusBadRequest, body)
+	body := `<ErrorResponse xmlns="http://queue.amazonaws.com/doc/2012-11-05/"><Error><Type>` + errorType + `</Type><Code>` + awsprotocol.XMLEscape(code) + `</Code><Message>` + awsprotocol.XMLEscape(err.Message) + `</Message></Error><RequestId>` + requestID + `</RequestId></ErrorResponse>`
+	awsprotocol.XMLResponse(w, status, body)
 }
 func extractSQSJSONAction(target string) string {
 	parts := strings.SplitN(target, ".", 2)

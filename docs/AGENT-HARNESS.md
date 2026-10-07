@@ -29,10 +29,11 @@ for client and container addressing.
 For retained-suite interruption/recovery, opt into [Retained owner](RETAINED-OWNER.md).
 Its source URL is for suite roots; registered handlers/owned native peers use the
 separate trusted callback URL. Fence and join before exact fixture cleanup, then
-resume the held generation. A stopped client, missing capture or absent PID is
-insufficient. This exclusive profile refuses mappings, Scheduler, rotation,
-Firehose, dev recipe consumers and Cognito trigger runners; default mode remains
-available for those workflows.
+explicitly join declared cleanup/descendants before fixture assertions and resume.
+The profile joins native mappings, Scheduler, Cognito runners and Firehose without
+recreating resources; a retained gateway uses shared root leases. A stopped client
+or absent PID is insufficient. Legacy consumers, rotation and message-move tasks
+remain outside the profile; see the guide for exact refusals and endpoint settings.
 
 ## Connect and seed the app
 

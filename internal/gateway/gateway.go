@@ -43,6 +43,7 @@ type Gateway struct {
 	invokeClient *http.Client
 	transport    *http.Transport
 	connections  *connectionTracker
+	retained     *retainedGateway
 	closed       atomic.Bool
 }
 type integrationRequest struct {
@@ -58,13 +59,21 @@ func New(cfg Config, options Options) (*Gateway, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	var retained *retainedGateway
+	if cfg.RetainedOwnerControlURL != "" {
+		var err error
+		retained, err = newRetainedGateway(cfg, options)
+		if err != nil {
+			return nil, err
+		}
+	}
 	connections := newConnectionTracker()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = connections.DialContext
 	transport.ResponseHeaderTimeout = 30 * time.Second
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 20
-	result := &Gateway{config: cfg, options: options, transport: transport, connections: connections, authorizers: make(map[string]*lambdaAuthorizer)}
+	result := &Gateway{config: cfg, options: options, transport: transport, connections: connections, authorizers: make(map[string]*lambdaAuthorizer), retained: retained}
 	invokeClient := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	result.invokeClient = invokeClient
 	for name, configuration := range cfg.Authorizers {
@@ -120,10 +129,25 @@ func New(cfg Config, options Options) (*Gateway, error) {
 		return nil, err
 	}
 	result.frontend = frontend
+	if retained != nil {
+		retained.start()
+	}
 	return result, nil
 }
 
 func (gateway *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if gateway.closed.Load() {
+		writeGatewayError(w, http.StatusServiceUnavailable)
+		return
+	}
+	if gateway.retained == nil || r.Method == http.MethodGet && r.URL.Path == gateway.config.DevHealthPath && canonicalRequestPath(r.URL) {
+		gateway.serveHTTP(w, r)
+		return
+	}
+	gateway.retained.serve(w, r, http.HandlerFunc(gateway.serveHTTP))
+}
+
+func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if gateway.closed.Load() {
 		writeGatewayError(w, http.StatusServiceUnavailable)
 		return
@@ -213,12 +237,30 @@ func (gateway *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), integrationRequestKey{}, integrationRequest{target: target, headers: headers})))
 }
 
-func (gateway *Gateway) Close() error {
-	if gateway == nil || !gateway.closed.CompareAndSwap(false, true) {
+// RetainedShutdownSignal is nil in ordinary mode. The broker's irreversible
+// shutdown fences local roots and asks the standalone listener owner to drain.
+func (gateway *Gateway) RetainedShutdownSignal() <-chan struct{} {
+	if gateway == nil || gateway.retained == nil {
 		return nil
 	}
-	gateway.transport.CloseIdleConnections()
-	return gateway.connections.Close()
+	return gateway.retained.shutdownSignal
+}
+
+func (gateway *Gateway) Close() error {
+	if gateway == nil {
+		return nil
+	}
+	var transportErr error
+	if gateway.closed.CompareAndSwap(false, true) {
+		gateway.transport.CloseIdleConnections()
+		transportErr = gateway.connections.Close()
+	}
+	if gateway.retained == nil {
+		return transportErr
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gateway.retained.controlBudget())
+	defer cancel()
+	return errors.Join(transportErr, gateway.retained.close(ctx))
 }
 func removeBackendRequestID(response *http.Response) error {
 	response.Header.Del("X-Request-Id")

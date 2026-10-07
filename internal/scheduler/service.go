@@ -480,6 +480,21 @@ func (s *Service) wait(ctx context.Context, duration time.Duration) bool {
 
 func (s *Service) run(ctx context.Context, key string, item *entry) {
 	defer s.wg.Done()
+	var completeSource func(error)
+	// The source lifetime includes observation and item completion, but excludes
+	// dormant waiting. Register before the existing finalizers so release cannot
+	// expose a fixture-safe barrier while those owners are still running.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if completeSource != nil {
+				completeSource(errors.New("Scheduler source ownership panicked"))
+			}
+			panic(recovered)
+		}
+		if completeSource != nil {
+			completeSource(nil)
+		}
+	}()
 	defer close(item.done)
 	defer item.cancel()
 	outcome := Outcome{ScheduleARN: item.schedule.Arn, Status: "canceled"}
@@ -489,6 +504,11 @@ func (s *Service) run(ctx context.Context, key string, item *entry) {
 		}
 	}()
 	if !s.wait(ctx, item.due.Sub(s.dev.Clock())) {
+		return
+	}
+	var admitted bool
+	completeSource, admitted = s.beginSource(ctx, item.schedule.Name)
+	if !admitted {
 		return
 	}
 	attempts, age := 185, 86400

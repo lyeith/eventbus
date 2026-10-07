@@ -64,10 +64,12 @@ func unavailable() error {
 }
 
 type entry struct {
-	mapping Mapping
-	queue   Queue
-	cancel  context.CancelFunc
-	done    chan struct{}
+	mapping             Mapping
+	queue               Queue
+	cancel              context.CancelFunc
+	done                chan struct{}
+	retained            DevQueue
+	releaseRegistration func()
 }
 
 type Service struct {
@@ -94,6 +96,9 @@ var idPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 func New(options Options, queues QueueSource, functions FunctionInvoker) (*Service, error) {
 	if !regionPattern.MatchString(options.Region) || !accountPattern.MatchString(options.AccountID) {
 		return nil, invalid("Region and twelve-digit AccountID are required")
+	}
+	if (options.Dev.Source == nil) != (options.Dev.Activity == nil) {
+		return nil, invalid("Development source admission and activity must be configured together")
 	}
 	if options.Dev.MaxMappings == 0 {
 		options.Dev.MaxMappings = 1000
@@ -227,6 +232,19 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	mapping := Mapping{UUID: id, EventSourceMappingARN: "arn:aws:lambda:" + s.region + ":" + s.account + ":event-source-mapping:" + id, EventSourceARN: input.EventSourceARN, FunctionARN: arn, BatchSize: batchSize, ScalingConfig: scaling, FunctionResponseTypes: []string{}, State: state, StateTransitionReason: "USER_INITIATED", LastModified: float64(s.dev.Clock().UnixMilli()) / 1000, LastProcessingResult: "No records processed"}
 	workerCtx, cancel := context.WithCancel(s.ctx)
 	item := &entry{mapping: mapping, queue: queue, cancel: cancel, done: make(chan struct{})}
+	if state == "Enabled" && s.dev.Source != nil {
+		retained, ok := queue.(DevQueue)
+		if !ok {
+			cancel()
+			return Mapping{}, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Retained SQS custody is unavailable"}
+		}
+		release, err := retained.RegisterRetained()
+		if err != nil || release == nil {
+			cancel()
+			return Mapping{}, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Cannot register retained SQS custody"}
+		}
+		item.retained, item.releaseRegistration = retained, release
+	}
 	s.entries[id] = item
 	if state == "Enabled" {
 		s.wg.Add(1)
@@ -328,6 +346,9 @@ func (s *Service) run(ctx context.Context, item *entry, count int) {
 	defer s.wg.Done()
 	defer close(item.done)
 	defer item.cancel()
+	if item.releaseRegistration != nil {
+		defer item.releaseRegistration()
+	}
 	var workers sync.WaitGroup
 	workers.Add(count)
 	for range count {
@@ -353,53 +374,64 @@ func (s *Service) disableSource(item *entry, result string) {
 
 func (s *Service) poll(ctx context.Context, item *entry) {
 	for ctx.Err() == nil {
-		records, err := item.queue.Receive(ctx, item.mapping.BatchSize)
-		if ctx.Err() != nil {
+		empty, keepPolling := s.pollBatch(ctx, item)
+		if !keepPolling {
 			return
 		}
-		if err != nil {
-			s.disableSource(item, "Source receive failed")
-			return // A deleted bound source is never looked up again by ARN.
-		}
-		if len(records) == 0 {
-			// Ports must long poll; this bounded pause also prevents a failed
-			// adapter from turning an empty queue into an unbounded CPU loop.
-			if !s.pause(ctx) {
-				return
-			}
-			continue
-		}
-		payload, err := json.Marshal(SQSEvent{Records: records})
-		if len(records) > item.mapping.BatchSize || len(payload) > MaxBatchPayloadBytes {
-			s.disableSource(item, "Source batch exceeds the supported count or payload limit")
-			return // Invalid adapter leases remain unacknowledged.
-		}
-		if err == nil {
-			err = s.functions.InvokeTarget(ctx, item.mapping.FunctionARN, payload)
-		}
-		if ctx.Err() != nil {
+		// The lease is complete before this empty-poll guard. Fenced workers
+		// subsequently park on source/queue changes without owning empty retries.
+		if empty && !s.pause(ctx) {
 			return
-		}
-		if err != nil {
-			s.setResult(item, "Function invocation failed")
-			continue // Broker visibility and redrive remain the sole retry owner.
-		}
-		acknowledged := true
-		for _, record := range records {
-			deleted, err := item.queue.Delete(ctx, record.ReceiptHandle)
-			if err != nil || !deleted {
-				acknowledged = false
-			}
-			if ctx.Err() != nil {
-				return
-			}
-		}
-		if acknowledged {
-			s.setResult(item, "OK")
-		} else {
-			s.setResult(item, "Source acknowledgment failed")
 		}
 	}
+}
+
+func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPolling bool) {
+	records, complete, err := s.receive(ctx, item)
+	if complete != nil {
+		defer complete(nil) // Business failure leaves native queue custody intact.
+	}
+	if ctx.Err() != nil {
+		return false, false
+	}
+	if err != nil {
+		s.disableSource(item, "Source receive failed")
+		return false, false // A deleted bound source is never looked up again.
+	}
+	if len(records) == 0 {
+		return true, true
+	}
+	payload, err := json.Marshal(SQSEvent{Records: records})
+	if len(records) > item.mapping.BatchSize || len(payload) > MaxBatchPayloadBytes {
+		s.disableSource(item, "Source batch exceeds the supported count or payload limit")
+		return false, false // Invalid adapter leases remain unacknowledged.
+	}
+	if err == nil {
+		err = s.functions.InvokeTarget(ctx, item.mapping.FunctionARN, payload)
+	}
+	if ctx.Err() != nil {
+		return false, false
+	}
+	if err != nil {
+		s.setResult(item, "Function invocation failed")
+		return false, true // Queue visibility/redrive remain the sole retry owner.
+	}
+	acknowledged := true
+	for _, record := range records {
+		deleted, err := item.queue.Delete(ctx, record.ReceiptHandle)
+		if err != nil || !deleted {
+			acknowledged = false
+		}
+		if ctx.Err() != nil {
+			return false, false
+		}
+	}
+	if acknowledged {
+		s.setResult(item, "OK")
+	} else {
+		s.setResult(item, "Source acknowledgment failed")
+	}
+	return false, true
 }
 
 // Close stops new mappings, cancels polling/execution and joins all owned work.

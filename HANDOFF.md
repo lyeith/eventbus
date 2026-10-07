@@ -1,63 +1,47 @@
 # Handoff
 
-Canonical checkout: SSD /home/spite/Projects/eventbus, main.
-Published latest: https://github.com/lyeith/eventbus/releases/tag/v0.7.0.
-Immutable release source: a4bed486162edd892e5ba28d78c81fbbcd23f3e8.
-No Plans pin, developer stack or identity database changed; no dependency added.
+Canonical SSD checkout: /home/spite/Projects/eventbus, main.
+Latest public release: v0.7.0. No Plans pins/stacks/databases changed.
+#19 committed/pushed9b8f56f. #18 accepted, ready to commit; #20 newly on the plate.
 
-#16 is committed/pushed as 360c0f8: native SQS batch/concurrency support.
-eventsource owns joined workers/native validation; messaging owns pre-lease
-6 MiB projection and FIFO/lease/redrive state; Lambda owns whole-batch completion.
-Actual SDK proof covers overlapping [5,5,5] at concurrency two, payload [7,3]
-without leasing exclusions, failure/timeout/DLQ/FIFO/isolation and two-child
-Delete/Close. Existing batch-one behavior remains covered.
+#18 shared ownership:
+- devactivity typed ports; devquiescence owns fences, held generations, transitions,
+  cleanup admission, owner identity and idempotent bounded remote lease ledger.
+- SQS owns accepted mapped-message custody through visibility/ack/redrive/removal;
+  eventsource owns joined workers and restricted continuations of exact custody.
+- Scheduler retains accepted dispatch/retry ownership and parks unclaimed timers.
+- Cognito runner/Lambda join direct child/pipes/cleanup; private uncertainty sticky.
+- SES/Cognito captures expose nonclosing evidence; Firehose evidence is terminal
+  only, accepted work counted through buffer/retry/S3 response/flush-slot join.
+- Gateway roots lease before auth/body/Invoke, freeze entry generation, reconcile
+  ACKs without replay and join actual delayed envelopes through shutdown.
+- App composes ports, exact --retained-owner-cleanup-functions, native metadata
+  and namespace policy, then permanent abort/actual rejoin after failed shutdown.
+- No source reopening, auth bypass or payload rewrite. Explicit re-quiesce after
+  cleanup descendants before safe attestation/resume. Same resources reused.
+- Exclusive/trusted process-group boundary and foreign-lease shutdown uncertainty
+  are documented; legacy consumer/rotation/move-task profile refusals remain.
 
-#17 is committed/pushed as a4bed48, accepted and published:
-- devquiescence owns exclusive source fencing, counts, held proof and generations.
-- app/dev_retained_owner.go composes two loopback endpoints, controls and bounded
-  exact cleanup; autonomous untracked producers are refused only in this profile.
-- Lambda dev_lifecycle.go observes whole async tasks and independent sync calls;
-  private ownership errors cannot be forged by handler results or erased by retry.
-- Provided Runtime API joins every admitted HTTP handler, including duplicate
-  next polls and post-ack handlers; closing its listener is insufficient.
-- devcapture owns sticky non-closing evidence inspection; SNS exposes its seam.
-  Capture failure during held Unsubscribe prevents safe completion/resume.
-- awsprotocol owns shared JSON target media-version selection for dispatcher
-  and native dev refusals; service/REST admission remains caller-owned.
-- Shutdown fences irreversibly, preserves peers while joining, then drains owners.
-  A failed join aborts/joins native work and received envelopes and retains stores.
-- docs/RETAINED-OWNER.md defines endpoint ownership, controls and failure limits.
-  Applications still own SDK settings, exact fixtures and business assertions.
+Verification (finite SSD /tmp logs):
+- Independent affected-owner race/vet suites PASS; combined read-only review PASS.
+- eventbus-retained-full-stack-app-race-20261008.log: full app PASS19.587s.
+- eventbus-retained-full-stack-app-vet-20261008.log: app vet PASS.
+- eventbus-retained-stack-sdk-race-final-20261008.log: SDK/RustFS PASS23.832s.
+- eventbus-retained-stack-sdk-vet-20261008.log: tagged SDK vet PASS.
+- eventbus-sqs-uri-{core-race,core-vet,sdk-race,sdk-vet}.log: #19 PASS both exact
+  SDK models and unchanged native batches/retries/teardown.
+SDK uses generic JWT-authenticated native cleanup, not unavailable production
+Identity handler. All SDK/proof children, listeners/RustFS/data joined/removed.
 
-Latest combined verification logs in SSD /tmp under existing finite retention:
-- eventbus-issue17-final-core-race.log: app/server/eventsource/messaging/Lambda/
-  consumer/devcapture/devquiescence/gateway integration all PASS.
-- eventbus-issue17-final-sdk-race.log: Messaging, retained-owner barrier, SNS
-  Lambda, SQS batches and original SQS Lambda actual Python SDK lanes PASS (50.031s).
-- eventbus-issue17-other-native-sdk-race.log: Lambda Event, JavaScript Scheduler
-  and Python Secrets rotation PASS (12.434s).
-- eventbus-issue17-final-vet.log: tagged scoped vet PASS.
-- eventbus-issue17-wire-owner-race.log: awsprotocol/server/devquiescence PASS.
-  SSD wrapper finalization hit EAGAIN after success; exact run inspected inactive/
-  quiescent; empty owned scratch was removed. This was not a Go test failure.
-- Earlier focused runtime/lifecycle race repeats and evidence proofs also PASS.
-Read-only combined review found no remaining bounded ownership/correctness issue.
+#20 proposed core owner: upgrade existing issued-receipt history with Settled bit,
+set only by actual current/unexpired deletion. New bound-queue mapping ACK succeeds
+for current delete or proven prior settlement; issued stale HTTP no-op stays false.
+MQ owns receipt source/tests; eventsource owns port comment/ACK join tests;
+SDK owner owns real handler manual-settlement proof; parent owns app adapter.
+No edits granted yet while #18 commit is prepared.
 
-Release verification:
-- eventbus-v0.7.0-build.log / metadata.log: eight CGO-free EventBus/gateway targets
-  match v0.7.0, a4bed48, clean VCS state and their declared OS/architecture.
-- eventbus-v0.7.0-{linux,macos}-native.log: packaged Linux amd64/macOS arm64 PASS:
-  actual SQLite startup, two gated five-record children, completion-only receipt
-  settlement, native deletion, SNS async -> independent nested Invoke, timed
-  unsafe fence, live peer completion, exact cleanup/sentinel/resumed second suite.
-- Both native gateway binaries' --help executed; gateway integration race passed.
-  Other six cross-built targets were inspected, not executed.
-- Draft assets downloaded; all eight checksums and SHA256SUMS comparison passed.
-  Final release is public/latest with nine assets; remote annotated tag resolves
-  to the verified source. #16/#17 are closed; no open issues at final check.
-
-Cleanup complete: owned native processes/fixtures joined; source/download/laptop
-release staging, temporary smoke/notes scripts, new task bytecode and empty
-failed-wrapper scratch removed. Frozen SDK caches and unrelated state preserved.
-Evidence logs remain under existing finite SSD /tmp retention. No task resources
-are held. SES management and durable async restart recovery are separate backlog.
+Finish #20, final affected regressions, then build/publish clean v0.8.0 (eight
+binaries + SHA256SUMS), native packaged Linux/macOS proof and downloaded checksums.
+Portable smoke is /tmp/eventbus-v0.8.0-native-smoke.py; remove after proof.
+Legacy env /tmp/eventbus-legacy-sdk.UAIkso is held only for final SDK, then remove.
+No release staging/tag yet. Preserve reusable frozen caches/unrelated user state.

@@ -66,6 +66,10 @@ var ErrSQSLambdaPayloadTooLarge = errors.New("visible SQS record exceeds the Lam
 // a receipt, receive count, first-receive timestamp or visibility lease. The
 // ordinary SQS receive/FIFO/redrive path still owns selection and all state.
 func (b *Broker) ReceiveSQSLambdaEventContext(ctx context.Context, queue *Queue, max int, wait time.Duration, maxPayloadBytes int) (sqsevent.Event, error) {
+	return b.receiveSQSLambdaEventContext(ctx, queue, max, wait, maxPayloadBytes, false)
+}
+
+func (b *Broker) receiveSQSLambdaEventContext(ctx context.Context, queue *Queue, max int, wait time.Duration, maxPayloadBytes int, ownedOnly bool) (sqsevent.Event, error) {
 	event := BuildSQSLambdaEvent(nil, "")
 	if err := b.validateBoundReceive(ctx, queue, max, wait); err != nil {
 		return event, err
@@ -105,7 +109,7 @@ func (b *Broker) ReceiveSQSLambdaEventContext(ctx context.Context, queue *Queue,
 		event.Records = append(event.Records, record)
 		return true
 	}
-	_, failure := b.receiveSQSWithAdmission(ctx, queue, max, wait, nil, "", admit)
+	_, failure := b.receiveSQSWithOwnership(ctx, queue, max, wait, nil, "", admit, ownedOnly && queue.devCustody != nil)
 	if failure != nil {
 		return event, ErrQueueUnavailable
 	}

@@ -93,3 +93,16 @@ func (queue *sqsMappingQueue) Delete(ctx context.Context, receipt string) (bool,
 	}
 	return queue.broker.DeleteMessage(queue.queue, receipt), nil
 }
+
+// Retained custody stays queue-owned; this adapter carries no retry/selection
+// policy and remains bound to the original queue instance.
+func (queue *sqsMappingQueue) RegisterRetained() (func(), error) {
+	return queue.broker.RegisterSQSLambdaCustody(queue.queue)
+}
+func (queue *sqsMappingQueue) PendingRetained() (bool, <-chan struct{}, error) {
+	return queue.broker.SQSLambdaCustodyState(queue.queue)
+}
+func (queue *sqsMappingQueue) ReceiveRetained(ctx context.Context, max int) ([]eventsource.Record, error) {
+	event, err := queue.broker.ReceiveOwnedSQSLambdaEventContext(ctx, queue.queue, max, 20*time.Second, eventsource.MaxBatchPayloadBytes)
+	return event.Records, err
+}

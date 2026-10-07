@@ -169,6 +169,10 @@ func NewService(config *Config, workDir string) (*Service, error) {
 	return service, nil
 }
 
+func requestFunctionName(request *http.Request) string {
+	return strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, invokePrefix), invokeSuffix)
+}
+
 func (service *Service) Match(request *http.Request) bool {
 	return strings.HasPrefix(request.URL.Path, invokePrefix)
 }
@@ -185,7 +189,7 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		invokeError(writer, http.StatusMethodNotAllowed, "InvalidRequestContentException", "Lambda Invoke requires POST")
 		return
 	}
-	requestedFunction := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, invokePrefix), invokeSuffix)
+	requestedFunction := requestFunctionName(request)
 	entry, name, err := service.resolveTarget(requestedFunction, request.URL.Query().Get("Qualifier"))
 	if err != nil {
 		var invokeErr *InvokeError
@@ -238,7 +242,7 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	if invocationType == "Event" {
-		requestedName := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, invokePrefix), invokeSuffix)
+		requestedName := requestFunctionName(request)
 		_, err := service.Admit(request.Context(), InvokeInput{FunctionName: requestedName, Qualifier: request.URL.Query().Get("Qualifier"), Payload: payload, TraceID: request.Header.Get("X-Amzn-Trace-Id")})
 		if err != nil {
 			var admissionErr *InvokeError
@@ -256,7 +260,7 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	invocation := invocation{payload: payload, requestID: uuid.NewString(), name: name, clientContext: clientContext, traceID: request.Header.Get("X-Amzn-Trace-Id")}
-	requestedName := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, invokePrefix), invokeSuffix)
+	requestedName := requestFunctionName(request)
 	if strings.HasPrefix(requestedName, "arn:") {
 		invocation.functionARN = requestedName
 		if qualifier := request.URL.Query().Get("Qualifier"); qualifier != "" {

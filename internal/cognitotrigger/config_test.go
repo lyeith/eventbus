@@ -17,6 +17,7 @@ func TestLoadStrictCompleteConfiguration(t *testing.T) {
 	}{
 		{"valid", valid, true},
 		{"unknown-top-level", "unknown: true\n" + valid, false},
+		{"observer-is-not-yaml", "dev_activity: {}\n" + valid, false},
 		{"unknown-trigger", strings.Replace(valid, "CreateAuthChallenge:", "OtherTrigger:", 1), false},
 		{"unknown-entry-field", strings.Replace(valid, "timeout_seconds:", "timeout:", 1), false},
 		{"missing-trigger", "pools: {local-pool: {DefineAuthChallenge: {handler: define.mjs}}}", false},

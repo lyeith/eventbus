@@ -680,6 +680,9 @@ func (b *Broker) sqsMoveOneLocked(task *sqsMoveTask, source *Queue, now time.Tim
 	msg.ReceivedAt = time.Time{}
 	msg.ReceiveCount = 0
 	msg.OriginalSourceARN = ""
+	if err := admitDevSQSMessageLocked(destination, msg.ID); err != nil {
+		return false, true, "Development SQS ownership admission is unavailable."
+	}
 	if sqsQueueIsFIFO(destination) {
 		// New enqueue identity prevents deduplication of independently redriven items.
 		msg.DeduplicationID = selected.ID
@@ -697,6 +700,7 @@ func (b *Broker) sqsMoveOneLocked(task *sqsMoveTask, source *Queue, now time.Tim
 	msg.VisibleAt = now.Add(time.Duration(delay) * time.Second)
 	source.messages = append(source.messages[:index], source.messages[index+1:]...)
 	destination.messages = append(destination.messages, &msg)
+	releaseDevSQSMessageLocked(source, selected.ID)
 	notifyQueueLocked(source)
 	notifyQueueLocked(destination)
 	return true, true, ""

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/devactivity"
 	"github.com/lyeith/eventbus/internal/localexec"
 	"github.com/rs/zerolog/log"
 )
@@ -60,8 +61,8 @@ type executableEntry struct {
 	env              map[string]string
 }
 
-// Runner owns every admitted invocation until its process group is terminated
-// and the directly launched child is reaped. Configuration is immutable.
+// Runner owns each admitted invocation through direct-child reaping, owned pipe
+// joining and process-group cleanup. Configuration is immutable.
 type Runner struct {
 	node, workDir string
 	pools         map[string]map[string]executableEntry
@@ -71,6 +72,11 @@ type Runner struct {
 	active        map[uint64]context.CancelFunc
 	inflight      sync.WaitGroup
 	done          chan struct{}
+	devActivity   devactivity.Activity
+	// The private adapter defaults to real group cleanup; tests wrap it for
+	// bounded gates and ownership faults without replacing process execution.
+	processCleanup func(*exec.Cmd) error
+	ownershipErr   error
 }
 
 // New resolves the executable and handler files at startup. It never falls back
@@ -108,6 +114,7 @@ func New(config *Config, workDir string) (*Runner, error) {
 	runner := &Runner{
 		node: node, workDir: directory, pools: make(map[string]map[string]executableEntry),
 		active: make(map[uint64]context.CancelFunc), done: make(chan struct{}),
+		devActivity: config.DevActivity, processCleanup: localexec.Cleanup,
 	}
 	for poolID, pool := range config.Pools {
 		entries := make(map[string]executableEntry)
@@ -166,14 +173,37 @@ func (r *Runner) Invoke(ctx context.Context, poolID, name string, event map[stri
 	}
 	r.next++
 	id := r.next
+	var release func(error)
+	if r.devActivity != nil {
+		var err error
+		release, err = r.devActivity.BeginActivity("cognito_trigger", fmt.Sprintf("trigger-%d", id))
+		if err != nil || release == nil {
+			r.mu.Unlock()
+			return nil, &InvocationError{Kind: Closed, Trigger: name}
+		}
+	}
 	r.active[id] = cancel
 	r.inflight.Add(1)
 	r.mu.Unlock()
+	var ownershipErr error
 	defer func() {
+		recovered := recover()
+		if recovered != nil {
+			ownershipErr = errors.Join(ownershipErr, errors.New("Cognito trigger ownership did not complete"))
+		}
 		r.mu.Lock()
+		defer r.mu.Unlock()
 		delete(r.active, id)
-		r.mu.Unlock()
+		if r.ownershipErr == nil {
+			r.ownershipErr = ownershipErr
+		}
+		if release != nil {
+			release(ownershipErr)
+		}
 		r.inflight.Done()
+		if recovered != nil {
+			panic(recovered)
+		}
 	}()
 	input, err := json.Marshal(event)
 	if err != nil || len(input) > maxEventBytes {
@@ -192,7 +222,11 @@ func (r *Runner) Invoke(ctx context.Context, poolID, name string, event map[stri
 		return nil, &InvocationError{Kind: HandlerFailure, Trigger: name, Cause: err}
 	}
 	err = command.Run()
-	cleanupErr := localexec.Cleanup(command)
+	cleanupErr := r.processCleanup(command)
+	ownershipErr = cleanupErr
+	if errors.Is(err, exec.ErrWaitDelay) {
+		ownershipErr = errors.Join(ownershipErr, exec.ErrWaitDelay)
+	}
 	if stdout.Overflowed() || stderr.Overflowed() {
 		return nil, &InvocationError{Kind: InvalidResponse, Trigger: name, Cause: errors.New("trigger output limit exceeded")}
 	}
@@ -233,7 +267,8 @@ func (r *Runner) Invoke(ctx context.Context, poolID, name string, event map[stri
 }
 
 // Close stops admission, cancels active process groups and waits for every
-// invocation's cleanup. A caller timeout does not cancel the cleanup owner.
+// invocation's cleanup. Ownership failures remain sticky after joining.
+// A caller timeout does not cancel the cleanup owner.
 func (r *Runner) Close(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -252,7 +287,9 @@ func (r *Runner) Close(ctx context.Context) error {
 	}
 	select {
 	case <-r.done:
-		return nil
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.ownershipErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}

@@ -53,11 +53,13 @@ before configuring endpoints or cleaning fixtures.
   for wire mechanics.
   Services keep schemas, admission, result policies and native validation.
 - `internal/devquiescence` owns the development retained-owner fence, live counts
-  and generations; `app/dev_retained_owner.go` owns its two loopback listeners
-  and profile refusals. Lambda `dev_lifecycle.go` reports actual joined lifetimes.
-  Require a safe held generation before exact app-owned cleanup; preserve
-  accepted callback peers and unrelated sentinels. No concurrent unrelated suite
-  or callback caller is supported by this exclusive profile.
+  and source leases/generations; `devactivity` supplies optional typed ports.
+  Services own native execution, mapped-message custody and reversible drain hooks;
+  app composes listeners/profile/declared cleanup, gateway leases root ingress.
+  Require safe held proof before cleanup and explicitly re-quiesce after declared
+  cleanup before fixture assertions/resume. Preserve callback peers and sentinels;
+  no unrelated concurrent suite/callback caller is supported. Keep auth/payloads
+  native and actual application cleanup external.
 - `internal/ses` owns fixtures, capture records, MIME and both sending adapters.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.

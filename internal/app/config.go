@@ -7,29 +7,30 @@ import (
 )
 
 type config struct {
-	port                  int
-	retainedCallbackPort  int
-	region                string
-	accountID             string
-	s3Endpoint            string
-	consumersFile         string
-	lambdaFunctions       string
-	workDir               string
-	issuerBase            string
-	jwksBase              string
-	cognitoPools          string
-	cognitoTriggers       string
-	cognitoDB             string
-	cognitoProfile        string
-	cognitoLog            string
-	schedulerGroups       string
-	schedulerExactSeconds bool
-	accessTokenTTL        time.Duration
-	refreshTokenTTL       time.Duration
-	snsLog                string
-	sesLog                string
-	sesConfig             string
-	debug                 bool
+	port                     int
+	retainedCallbackPort     int
+	retainedCleanupFunctions string
+	region                   string
+	accountID                string
+	s3Endpoint               string
+	consumersFile            string
+	lambdaFunctions          string
+	workDir                  string
+	issuerBase               string
+	jwksBase                 string
+	cognitoPools             string
+	cognitoTriggers          string
+	cognitoDB                string
+	cognitoProfile           string
+	cognitoLog               string
+	schedulerGroups          string
+	schedulerExactSeconds    bool
+	accessTokenTTL           time.Duration
+	refreshTokenTTL          time.Duration
+	snsLog                   string
+	sesLog                   string
+	sesConfig                string
+	debug                    bool
 }
 
 // readConfig accepts an owned FlagSet so CLI parsing does not mutate Go's
@@ -37,6 +38,7 @@ type config struct {
 func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	port := flags.Int("port", 4100, "Port to listen on")
 	retainedCallbackPort := flags.Int("retained-owner-callback-port", 0, "Opt-in exclusive retained-owner mode: trusted callback loopback port (0 disables)")
+	retainedCleanupFunctions := flags.String("retained-owner-cleanup-functions", "", "Comma-separated exact registered Lambda cleanup targets (RequestResponse while retained sources remain fenced)")
 	region := flags.String("region", "us-east-1", "AWS region")
 	accountID := flags.String("account-id", "000000000000", "AWS account ID")
 	s3Endpoint := flags.String("s3-endpoint", "http://localhost:9000", "S3 endpoint for Firehose flush (RustFS)")
@@ -72,29 +74,30 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		return config{}, fmt.Errorf("unknown Cognito fixture profile %q", *cognitoProfile)
 	}
 	cfg := config{
-		retainedCallbackPort:  *retainedCallbackPort,
-		port:                  *port,
-		region:                *region,
-		accountID:             *accountID,
-		s3Endpoint:            *s3Endpoint,
-		consumersFile:         *consumersFile,
-		lambdaFunctions:       *lambdaFunctions,
-		workDir:               *workDir,
-		issuerBase:            *issuerBase,
-		jwksBase:              *jwksBase,
-		cognitoPools:          *cognitoPools,
-		cognitoTriggers:       *cognitoTriggers,
-		cognitoDB:             *cognitoDB,
-		cognitoProfile:        *cognitoProfile,
-		cognitoLog:            *cognitoLog,
-		schedulerGroups:       *schedulerGroups,
-		schedulerExactSeconds: *schedulerExactSeconds,
-		accessTokenTTL:        *accessTokenTTL,
-		refreshTokenTTL:       *refreshTokenTTL,
-		snsLog:                *snsLog,
-		sesLog:                *sesLog,
-		sesConfig:             *sesConfig,
-		debug:                 *debug,
+		retainedCallbackPort:     *retainedCallbackPort,
+		retainedCleanupFunctions: *retainedCleanupFunctions,
+		port:                     *port,
+		region:                   *region,
+		accountID:                *accountID,
+		s3Endpoint:               *s3Endpoint,
+		consumersFile:            *consumersFile,
+		lambdaFunctions:          *lambdaFunctions,
+		workDir:                  *workDir,
+		issuerBase:               *issuerBase,
+		jwksBase:                 *jwksBase,
+		cognitoPools:             *cognitoPools,
+		cognitoTriggers:          *cognitoTriggers,
+		cognitoDB:                *cognitoDB,
+		cognitoProfile:           *cognitoProfile,
+		cognitoLog:               *cognitoLog,
+		schedulerGroups:          *schedulerGroups,
+		schedulerExactSeconds:    *schedulerExactSeconds,
+		accessTokenTTL:           *accessTokenTTL,
+		refreshTokenTTL:          *refreshTokenTTL,
+		snsLog:                   *snsLog,
+		sesLog:                   *sesLog,
+		sesConfig:                *sesConfig,
+		debug:                    *debug,
 	}
 	return cfg, validateRetainedConfig(cfg)
 }

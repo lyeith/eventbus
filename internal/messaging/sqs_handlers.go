@@ -403,6 +403,7 @@ func (s *Handler) executeSQS(ctx context.Context, action string, input sqsReques
 		if !q.LastPurgeTimestamp.IsZero() && time.Since(q.LastPurgeTimestamp) < 60*time.Second {
 			return nil, newSQSError("PurgeQueueInProgress", "Only one PurgeQueue request is allowed every 60 seconds")
 		}
+		releaseAllDevSQSCustodyLocked(q)
 		q.messages = nil
 		q.inFlight = make(map[string]*Message)
 		q.attempts = make(map[string]sqsReceiveAttempt)
@@ -541,7 +542,7 @@ func (s *Handler) executeSQSBatch(q *Queue, action string, entries []sqsBatchEnt
 			err = s.changeSQSVisibility(q, entry.ReceiptHandle, entry.VisibilityTimeout)
 		}
 		if err != nil {
-			failed = append(failed, map[string]any{"Id": entry.ID, "Code": err.Code, "Message": err.Message, "SenderFault": true})
+			failed = append(failed, map[string]any{"Id": entry.ID, "Code": err.Code, "Message": err.Message, "SenderFault": err.Code != "ServiceUnavailable"})
 		} else {
 			if result == nil {
 				result = map[string]any{}

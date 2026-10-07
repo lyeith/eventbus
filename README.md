@@ -31,7 +31,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Agent workflow](docs/AGENT-HARNESS.md): configure the app, seed resources,
   run consumers, inspect results and manage state.
 - [Retained-owner recovery](docs/RETAINED-OWNER.md): opt-in source/callback fencing,
-  joined fixture cleanup and explicit resume for one exclusive suite owner.
+  joined native owners, declared cleanup and explicit resume for one exclusive suite owner.
 - [Cognito contracts](docs/COGNITO.md): lifecycle, SRP, custom triggers and persistence.
 - [API gateway](docs/GATEWAY.md): REST/HTTP REQUEST authorizers and HTTP/Lambda proxy integrations.
 - [Lambda execution](docs/LAMBDA.md): application-owned Go, Python and Node handlers.
@@ -58,7 +58,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 | Scheduler | Create/Get/Delete one-time schedules, local Lambda admission, named fixture groups and cancellation. |
 | SQS Lambda mappings | Native Create/Get/Delete mappings, batches of 1–10 records (default 10), configured maximum concurrency, registered function/alias execution, FIFO ordering and native visibility/DLQ policy. [Contracts](docs/EVENT-SOURCES.md). |
 | Dev consumers | Recipe-driven Go/Python handlers receive SQS events with harness timeouts, partial batch retry and dead-letter policy. |
-| Retained-owner dev profile | Opt-in two-loopback-listener ownership barrier, live activity diagnostics, exact SNS/SQS cleanup while held and generation-checked resume. [Boundary and refusals](docs/RETAINED-OWNER.md). |
+| Retained-owner dev profile | Opt-in source/callback ownership barrier for native mappings, Scheduler, Cognito runners, Firehose and gateway roots; declared cleanup, diagnostics and generation-checked resume. [Contract](docs/RETAINED-OWNER.md). |
 | SES | All six v1 and three v2 sending operations, captured as JSONL without delivery. Management APIs are backlogged. |
 | Firehose | SNS/record/batch ingestion, Go jq partitions, GZIP, error prefixes and retained S3 delivery retries. |
 | SSM | Four Standard parameter operations, versions, hierarchy pagination and local SecureString protection. |
@@ -75,10 +75,10 @@ messages, Firehose buffers, SSM, secrets, schedules and mappings are in memory a
 after restart. Shutdown cancels and joins SQS mappings, stops scheduling and drains accepted rotation/Lambda work while the AWS
 listener remains available, then drains HTTP, flushes Firehose and closes stores
 and captures. Deadline failures are reported rather than claimed successful.
-The opt-in `--retained-owner-callback-port` profile first fences suite sources
-and joins accepted callback chains. Its [separate endpoint contract](docs/RETAINED-OWNER.md)
-requires an exclusive owner and refuses autonomous sources outside that profile;
-the default native API/runtime behavior is unchanged.
+The opt-in `--retained-owner-callback-port` profile fences suite sources and joins
+accepted native work while callback peers remain live. Declared cleanup functions
+require another barrier before fixture assertions/resume. Its [endpoint contract](docs/RETAINED-OWNER.md)
+requires an exclusive owner; default native API/runtime behavior is unchanged.
 
 ## Verify and build releases
 

@@ -189,12 +189,23 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 	}
 	waitErr := command.Wait()
 	cleanupErr := cleanup(command)
+	ownershipErr := cleanupErr
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		// A valid result may coexist with forcibly closed diagnostic pipes.
+		// Preserve native result policy, but never certify that ownership clean.
+		ownershipErr = errors.Join(ownershipErr, exec.ErrWaitDelay)
+	}
 	if reader != nil {
 		// Grandchildren could retain fd3. Group termination happens before
 		// joining the result reader; closing it also bounds the failure path.
-		_ = reader.SetReadDeadline(time.Now().Add(time.Second))
+		if err := reader.SetReadDeadline(time.Now().Add(time.Second)); err != nil && !errors.Is(err, os.ErrClosed) {
+			ownershipErr = errors.Join(ownershipErr, err)
+		}
 		<-readDone
 		_ = reader.Close()
+		if readErr != nil && !errors.Is(readErr, os.ErrClosed) {
+			ownershipErr = errors.Join(ownershipErr, readErr)
+		}
 	}
 	var result invocationResult
 	switch {
@@ -219,7 +230,7 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 		}
 	}
 	result.logs = logs.Bytes()
-	result.ownershipErr = cleanupErr
+	result.ownershipErr = ownershipErr
 	return result
 }
 

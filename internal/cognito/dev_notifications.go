@@ -35,3 +35,13 @@ func (capture *NotificationCapture) Close() error {
 	}
 	return capture.sink.Close()
 }
+
+// Err checks capture evidence without closing it. A failed append/sync remains
+// sticky, and an in-progress append must finish before evidence can be healthy.
+func (capture *NotificationCapture) Err() error {
+	var sink *devcapture.Sink
+	if capture != nil {
+		sink = capture.sink
+	}
+	return sink.Err()
+}

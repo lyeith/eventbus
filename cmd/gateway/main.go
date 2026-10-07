@@ -29,6 +29,7 @@ func run() error {
 	frontendDir := flag.String("frontend-dir", "", "static frontend SPA directory")
 	frontendProxy := flag.String("frontend-proxy", "", "frontend development server URL")
 	noAuth := flag.Bool("no-auth", false, "explicitly bypass configured authorizers")
+	retainedControl := flag.String("retained-owner-control-url", "", "opt-in exclusively owned loopback retained-owner control URL")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
 	cfg, err := gateway.LoadConfig(*configuration)
@@ -37,6 +38,9 @@ func run() error {
 	}
 	if *port != 0 {
 		cfg.Port = *port
+	}
+	if *retainedControl != "" {
+		cfg.RetainedOwnerControlURL = *retainedControl
 	}
 	level := zerolog.InfoLevel
 	if *debug {
@@ -65,10 +69,11 @@ func run() error {
 		}
 		return err
 	case <-ctx.Done():
-		drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return shutdownGateway(drain, server, application.Close, failure)
+	case <-application.RetainedShutdownSignal():
 	}
+	drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return shutdownGateway(drain, server, application.Close, failure)
 }
 
 func shutdownGateway(ctx context.Context, server *http.Server, closeApplication func() error, failure <-chan error) error {

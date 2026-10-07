@@ -1,6 +1,10 @@
 package lambda
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/lyeith/eventbus/internal/devactivity"
+)
 
 // DevActivity is the optional application-owned lifecycle observer. A successful
 // BeginActivity returns a non-nil release, which Lambda calls once after all
@@ -8,9 +12,7 @@ import "net/http"
 // an ordinary handler error. Callbacks may only update their own coordinator:
 // they run under Lambda's mutex and must not call back into this service.
 // This port is configured before startup and is not part of the AWS API.
-type DevActivity interface {
-	BeginActivity(kind, requestID string) (func(error), error)
-}
+type DevActivity = devactivity.Activity
 
 func (service *Service) beginActivityLocked(kind, requestID string) (func(error), error) {
 	if service.devActivity == nil {

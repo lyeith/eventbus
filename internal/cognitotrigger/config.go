@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lyeith/eventbus/internal/devactivity"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,6 +26,8 @@ const (
 type Config struct {
 	Node  string          `yaml:"node"`
 	Pools map[string]Pool `yaml:"pools"`
+	// DevActivity is supplied by the application before startup, never YAML.
+	DevActivity devactivity.Activity `yaml:"-"`
 }
 
 type Pool struct {

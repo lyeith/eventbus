@@ -12,6 +12,7 @@ import (
 
 	"github.com/lyeith/eventbus/internal/cognito"
 	"github.com/lyeith/eventbus/internal/consumer"
+	"github.com/lyeith/eventbus/internal/devactivity"
 	"github.com/lyeith/eventbus/internal/devquiescence"
 	"github.com/lyeith/eventbus/internal/eventsource"
 	"github.com/lyeith/eventbus/internal/firehose"
@@ -52,9 +53,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if err := firehoseManager.SetMetadataExtractor(firehose.NewGoJQMetadataExtractor()); err != nil {
 		return fmt.Errorf("failed to configure Firehose metadata extraction: %w", err)
 	}
-	if cfg.retainedCallbackPort == 0 {
-		broker.SetFirehoseDelivery(firehoseManager)
-	}
+	broker.SetFirehoseDelivery(firehoseManager)
 	ssmStore := ssm.NewSSMStore()
 	secretsStore := secrets.NewSecretsStore(cfg.region, cfg.accountID)
 
@@ -81,10 +80,6 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	}
 	owned.sns = snsCapture
 	broker.SetSNSCapture(snsCapture)
-	var retained *devquiescence.Coordinator
-	if cfg.retainedCallbackPort != 0 {
-		retained = devquiescence.New(snsCapture.Err)
-	}
 	var sesFixtures ses.SESFixtures
 	if cfg.sesConfig != "" {
 		sesFixtures, err = ses.LoadSESFixtures(cfg.sesConfig)
@@ -98,6 +93,35 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	}
 	sesManager := ses.NewSESManager(sesFixtures, capture)
 	owned.ses = sesManager
+	cognitoLog := cfg.cognitoLog
+	if cognitoLog == "" {
+		cognitoLog = "-"
+	}
+	notifications, err := cognito.OpenNotificationCapture(cognitoLog)
+	if err != nil {
+		return fmt.Errorf("failed to open Cognito notification capture: %w", err)
+	}
+	owned.notifications = notifications
+
+	var retained *devquiescence.Coordinator
+	var retainedActivity devactivity.Activity
+	var retainedSource devactivity.Source
+	if cfg.retainedCallbackPort != 0 {
+		retained = devquiescence.NewWithOptions(devquiescence.Options{
+			Checks:     []func() error{snsCapture.Err, capture.Err, notifications.Err, firehoseManager.DevEvidence},
+			DrainHooks: []devquiescence.DrainHook{{Start: firehoseManager.DevBeginDrain, Resume: firehoseManager.DevResume}},
+		})
+		if err := retained.SetCallbackOrigin(fmt.Sprintf("http://127.0.0.1:%d", cfg.retainedCallbackPort)); err != nil {
+			return fmt.Errorf("configure retained callback origin: %w", err)
+		}
+		if err := firehoseManager.SetDevActivity(retained); err != nil {
+			return fmt.Errorf("configure retained Firehose ownership: %w", err)
+		}
+		if err := broker.SetDevActivity(retained); err != nil {
+			return fmt.Errorf("configure retained SQS custody: %w", err)
+		}
+		retainedActivity, retainedSource = retained, retained
+	}
 	projectRoot := cfg.workDir
 	if projectRoot == "" {
 		projectRoot = findProjectRoot(".")
@@ -118,27 +142,18 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		broker.SetLambdaDelivery(snsLambdaInvoker{runtime: functions})
 		mappingFunctions = eventSourceLambdaInvoker{runtime: functions}
 	}
-	mappings, err := eventsource.New(eventsource.Options{Region: cfg.region, AccountID: cfg.accountID}, sqsMappingSource{broker: broker}, mappingFunctions)
+	mappings, err := eventsource.New(eventsource.Options{Region: cfg.region, AccountID: cfg.accountID, Dev: eventsource.DevOptions{Source: retainedSource, Activity: retainedActivity}}, sqsMappingSource{broker: broker}, mappingFunctions)
 	if err != nil {
 		return fmt.Errorf("failed to configure Lambda event-source mappings: %w", err)
 	}
 	owned.mappings = mappings
-	triggers, err := loadCognitoTriggers(cfg.cognitoTriggers, projectRoot)
+	triggers, err := loadCognitoTriggersWithActivity(cfg.cognitoTriggers, projectRoot, retainedActivity)
 	if err != nil {
 		return fmt.Errorf("failed to configure Cognito triggers: %w", err)
 	}
 	if triggers != nil {
 		owned.triggers = triggers
 	}
-	cognitoLog := cfg.cognitoLog
-	if cognitoLog == "" {
-		cognitoLog = "-"
-	}
-	notifications, err := cognito.OpenNotificationCapture(cognitoLog)
-	if err != nil {
-		return fmt.Errorf("failed to open Cognito notification capture: %w", err)
-	}
-	owned.notifications = notifications
 	cognitoOptions := cognito.Options{Region: cfg.region, AccountID: cfg.accountID, DevProfile: cfg.cognitoProfile, Notifications: notifications, IssuerBase: cfg.issuerBase, AccessTokenTTL: cfg.accessTokenTTL, RefreshTokenTTL: cfg.refreshTokenTTL}
 	if triggers != nil {
 		cognitoOptions.Triggers = triggers
@@ -163,7 +178,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		}
 	}
 	schedules, err := scheduler.New(scheduler.Options{Region: cfg.region, AccountID: cfg.accountID, Dev: scheduler.DevOptions{
-		Groups: groups, ExactSeconds: cfg.schedulerExactSeconds,
+		Groups: groups, ExactSeconds: cfg.schedulerExactSeconds, Source: retainedSource,
 		Observe: func(outcome scheduler.Outcome) {
 			log.Info().Str("schedule_arn", outcome.ScheduleARN).Str("status", outcome.Status).Str("code", outcome.Code).Int("attempts", outcome.Attempts).Msg("Scheduler target admission completed")
 		},
@@ -233,7 +248,11 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if retained != nil {
 		httpServer.Addr = fmt.Sprintf("127.0.0.1:%d", cfg.port)
 		httpServer.WriteTimeout = 0 // Controls use their explicit bounded deadline, up to five minutes.
-		httpServer.Handler, devHTTP = newRetainedHTTP(retained, router, cfg.retainedCallbackPort)
+		cleanup, err := retainedCleanupInvocations(retained, functions, cfg.retainedCleanupFunctions, cfg.region, cfg.accountID, router)
+		if err != nil {
+			return fmt.Errorf("configure retained cleanup targets: %w", err)
+		}
+		httpServer.Handler, devHTTP = newRetainedHTTP(retained, router, cfg.retainedCallbackPort, cleanup)
 	}
 	shutdown := newEventBusListener(httpServer, owned, 30*time.Second)
 	shutdown.devRetained = devHTTP
