@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/localexec"
 	"github.com/rs/zerolog/log"
 )
 
@@ -25,23 +26,6 @@ var safeConsumerInheritedEnv = []string{
 	"SSL_CERT_DIR",
 	"SSL_CERT_FILE",
 	"TMPDIR",
-}
-
-// limitedWriter wraps a bytes.Buffer and stops writing after limit bytes.
-type limitedWriter struct {
-	buf   *bytes.Buffer
-	limit int
-}
-
-func (w *limitedWriter) Write(p []byte) (int, error) {
-	remaining := w.limit - w.buf.Len()
-	if remaining <= 0 {
-		return len(p), nil // discard silently
-	}
-	if len(p) > remaining {
-		p = p[:remaining]
-	}
-	return w.buf.Write(p)
 }
 
 // invokeHandler dispatches to the appropriate handler based on consumer type.
@@ -90,14 +74,20 @@ func (cm *ConsumerManager) invokePythonHandler(ctx context.Context, entry Consum
 
 	// Set environment
 	cmd.Env = consumerProcessEnv(entry.Env)
+	if err := localexec.Configure(cmd); err != nil {
+		return nil, fmt.Errorf("handler process ownership: %w", err)
+	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &limitedWriter{buf: &stdout, limit: maxOutputBytes}
-	cmd.Stderr = &limitedWriter{buf: &stderr, limit: maxOutputBytes}
+	stdout := localexec.NewBoundedOutput(maxOutputBytes)
+	stderr := localexec.NewBoundedOutput(maxOutputBytes)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 
 	logger := log.With().Str("consumer", entry.Name).Str("handler", entry.Handler).Logger()
 
 	err = cmd.Run()
+	if cleanupErr := localexec.Cleanup(cmd); cleanupErr != nil {
+		return nil, fmt.Errorf("stop handler process group: %w", cleanupErr)
+	}
 
 	if stderr.Len() > 0 {
 		logger.Debug().Str("stderr", stderr.String()).Msg("Handler stderr")
@@ -114,7 +104,7 @@ func (cm *ConsumerManager) invokePythonHandler(ctx context.Context, entry Consum
 		logger.Debug().Str("result", stdout.String()).Msg("Handler result")
 	}
 
-	return parseHandlerBatchResult(stdout.Bytes())
+	return parseHandlerBatchResult(stdout, stderr)
 }
 
 // invokeGoHandler runs a compiled Go binary, passing the SQS event via stdin.
@@ -141,14 +131,20 @@ func (cm *ConsumerManager) invokeGoHandler(ctx context.Context, entry ConsumerEn
 	cmd.Dir = cm.workDir
 
 	cmd.Env = consumerProcessEnv(entry.Env)
+	if err := localexec.Configure(cmd); err != nil {
+		return nil, fmt.Errorf("handler process ownership: %w", err)
+	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &limitedWriter{buf: &stdout, limit: maxOutputBytes}
-	cmd.Stderr = &limitedWriter{buf: &stderr, limit: maxOutputBytes}
+	stdout := localexec.NewBoundedOutput(maxOutputBytes)
+	stderr := localexec.NewBoundedOutput(maxOutputBytes)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 
 	logger := log.With().Str("consumer", entry.Name).Str("handler", handlerPath).Logger()
 
 	err = cmd.Run()
+	if cleanupErr := localexec.Cleanup(cmd); cleanupErr != nil {
+		return nil, fmt.Errorf("stop handler process group: %w", cleanupErr)
+	}
 
 	if stderr.Len() > 0 {
 		logger.Debug().Str("stderr", stderr.String()).Msg("Handler stderr")
@@ -165,11 +161,14 @@ func (cm *ConsumerManager) invokeGoHandler(ctx context.Context, entry ConsumerEn
 		logger.Debug().Str("result", stdout.String()).Msg("Handler result")
 	}
 
-	return parseHandlerBatchResult(stdout.Bytes())
+	return parseHandlerBatchResult(stdout, stderr)
 }
 
-func parseHandlerBatchResult(stdout []byte) (*handlerBatchResult, error) {
-	data := bytes.TrimSpace(stdout)
+func parseHandlerBatchResult(stdout, stderr *localexec.BoundedOutput) (*handlerBatchResult, error) {
+	if stdout.Overflowed() || stderr.Overflowed() {
+		return nil, fmt.Errorf("handler output exceeded the %d byte limit", maxOutputBytes)
+	}
+	data := bytes.TrimSpace(stdout.Bytes())
 	if len(data) == 0 {
 		return nil, fmt.Errorf("handler returned an empty batch response")
 	}
@@ -200,22 +199,4 @@ func consumerProcessEnv(configured map[string]string) []string {
 		result = append(result, fmt.Sprintf("%s=%s", key, environment[key]))
 	}
 	return result
-}
-
-// FindProjectRoot walks up from the given start directory looking for a pyproject.toml or go.work file.
-func FindProjectRoot(start string) string {
-	dir, _ := filepath.Abs(start)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); err == nil {
-			return dir
-		}
-		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return start
-		}
-		dir = parent
-	}
 }

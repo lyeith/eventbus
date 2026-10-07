@@ -8,18 +8,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/localexec"
 	"github.com/lyeith/eventbus/internal/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestParseHandlerBatchResultFailsClosed(t *testing.T) {
-	_, err := parseHandlerBatchResult(nil)
+	parse := func(data []byte) (*handlerBatchResult, error) {
+		stdout := localexec.NewBoundedOutput(maxOutputBytes)
+		_, err := stdout.Write(data)
+		require.NoError(t, err)
+		return parseHandlerBatchResult(stdout, localexec.NewBoundedOutput(maxOutputBytes))
+	}
+	_, err := parse(nil)
 	require.Error(t, err)
-	_, err = parseHandlerBatchResult([]byte("not-json"))
+	_, err = parse([]byte("not-json"))
 	require.Error(t, err)
 
-	result, err := parseHandlerBatchResult([]byte(`{"processed":1,"batchItemFailures":[{"itemIdentifier":"msg-2"}]}`))
+	result, err := parse([]byte(`{"processed":1,"batchItemFailures":[{"itemIdentifier":"msg-2"}]}`))
 	require.NoError(t, err)
 	require.Len(t, result.BatchItemFailures, 1)
 	assert.Equal(t, "msg-2", result.BatchItemFailures[0].ItemIdentifier)
@@ -55,6 +62,7 @@ func TestInvokePythonHandlerFailure(t *testing.T) {
 		Type:           "python",
 		Handler:        "not_a_real_module.handler",
 		TimeoutSeconds: 5,
+		Env:            fixtureToolEnvironment(),
 	}
 
 	event := buildLambdaEvent([]*messaging.Message{{ID: "1", Body: "test", ReceiptHandle: "rh"}})
@@ -154,26 +162,33 @@ func TestInvokeGoHandlerEnvPropagation(t *testing.T) {
 }
 
 func TestInvokeHandlerTimeout(t *testing.T) {
+	directory := t.TempDir()
+	marker := filepath.Join(directory, "started")
+	source := `import os
+import time
+
+def handler(event, context):
+    with open(os.environ["STARTED_FILE"], "w") as marker:
+        marker.write("started")
+    time.sleep(30)
+    return {}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "slow.py"), []byte(source), 0600))
 	broker := messaging.NewBroker("us-east-1", "000000000000", 0)
-	cm := NewConsumerManager(broker, t.TempDir())
-
+	cm := NewConsumerManager(broker, directory)
+	environment := fixtureToolEnvironment()
+	environment["STARTED_FILE"] = marker
 	entry := ConsumerEntry{
-		Name:           "timeout-test",
-		Type:           "python",
-		Handler:        "time.sleep_handler", // doesn't exist, but test the timeout path
-		TimeoutSeconds: 1,
+		Name: "timeout-test", Type: "python", Handler: "slow.handler",
+		Env: environment, TimeoutSeconds: 3,
 	}
-
 	event := buildLambdaEvent([]*messaging.Message{{ID: "1", Body: "test", ReceiptHandle: "rh"}})
-
-	// With a very short timeout and a non-existent module, it will fail with handler error
-	// not timeout (module import fails before timeout). That's fine — we're testing
-	// that the timeout context is properly set.
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
-
 	err := cm.invokeHandler(ctx, entry, event)
-	assert.Error(t, err)
+	require.ErrorContains(t, err, "timed out")
+	_, err = os.Stat(marker)
+	require.NoError(t, err, "the real Python handler must start before its timeout")
 }
 
 func TestInvokeGoHandlerTimeout(t *testing.T) {
@@ -219,23 +234,47 @@ func TestInvokePythonHandlerInvalidFormat(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid handler format")
 }
 
-func TestFindProjectRoot(t *testing.T) {
-	// Create a temp dir structure with pyproject.toml
-	root := t.TempDir()
-	sub := filepath.Join(root, "tools", "eventbus")
-	require.NoError(t, os.MkdirAll(sub, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "pyproject.toml"), []byte("[project]"), 0644))
-
-	result := FindProjectRoot(sub)
-	assert.Equal(t, root, result)
+func TestParseHandlerBatchResultRejectsOverflowedOutput(t *testing.T) {
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run(stream, func(t *testing.T) {
+			// The retained stdout prefix is valid JSON exactly at the cap. Extra
+			// bytes arrive in a later write and cannot be accepted as that prefix.
+			stdout, stderr := localexec.NewBoundedOutput(8), localexec.NewBoundedOutput(8)
+			_, err := stdout.Write([]byte("{}      "))
+			require.NoError(t, err)
+			_, err = parseHandlerBatchResult(stdout, stderr)
+			require.NoError(t, err)
+			overflowed := stdout
+			if stream == "stderr" {
+				overflowed = stderr
+				_, err = stderr.Write([]byte("12345678"))
+				require.NoError(t, err)
+			}
+			_, err = overflowed.Write([]byte("discarded"))
+			require.NoError(t, err)
+			result, err := parseHandlerBatchResult(stdout, stderr)
+			require.ErrorContains(t, err, "output exceeded")
+			require.Nil(t, result)
+		})
+	}
 }
 
-func TestFindProjectRootFallback(t *testing.T) {
-	// No pyproject.toml anywhere — falls back to start dir
-	tmp := t.TempDir()
-	sub := filepath.Join(tmp, "deep", "nested")
-	require.NoError(t, os.MkdirAll(sub, 0755))
-
-	result := FindProjectRoot(sub)
-	assert.Equal(t, sub, result)
+// The test host may wrap uv in a resource-owner launcher. Supply its existing
+// ownership explicitly as fixture configuration; production consumers must not
+// inherit arbitrary host control variables or connector credentials.
+func fixtureToolEnvironment() map[string]string {
+	environment := map[string]string{}
+	if os.Getenv("SSD_DEV_RUN_ID") == "" {
+		return environment
+	}
+	for _, name := range []string{
+		"SSD_DEV_RUN_ID", "SSD_DEV_RECEIPT", "SSD_DEV_SCOPE", "INVOCATION_ID",
+		"TMPDIR", "GOTMPDIR", "GOCACHE", "UV_CACHE_DIR",
+		"DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR",
+	} {
+		if value, ok := os.LookupEnv(name); ok {
+			environment[name] = value
+		}
+	}
+	return environment
 }

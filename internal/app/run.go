@@ -84,7 +84,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	owned.ses = sesManager
 	projectRoot := cfg.workDir
 	if projectRoot == "" {
-		projectRoot = consumer.FindProjectRoot(".")
+		projectRoot = findProjectRoot(".")
 	}
 	var functions http.Handler
 	if cfg.lambdaFunctions != "" {

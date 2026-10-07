@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/localexec"
 	"github.com/rs/zerolog/log"
 )
 
@@ -24,7 +25,6 @@ const (
 	maxEventBytes      = 1 << 20
 	maxResultBytes     = 1 << 20
 	maxDiagnosticBytes = 64 << 10
-	processWaitDelay   = time.Second
 )
 
 //go:embed wrapper.mjs
@@ -185,14 +185,15 @@ func (r *Runner) Invoke(ctx context.Context, poolID, name string, event map[stri
 	command.Dir = r.workDir
 	command.Env = processEnvironment(entry.env)
 	command.Stdin = bytes.NewReader(input)
-	stdout := &boundedOutput{limit: maxResultBytes}
-	stderr := &boundedOutput{limit: maxDiagnosticBytes}
+	stdout := localexec.NewBoundedOutput(maxResultBytes)
+	stderr := localexec.NewBoundedOutput(maxDiagnosticBytes)
 	command.Stdout, command.Stderr = stdout, stderr
-	command.WaitDelay = processWaitDelay
-	ownProcessGroup(command)
+	if err := localexec.Configure(command); err != nil {
+		return nil, &InvocationError{Kind: HandlerFailure, Trigger: name, Cause: err}
+	}
 	err = command.Run()
-	cleanupErr := stopProcessGroup(command)
-	if stdout.overflow || stderr.overflow {
+	cleanupErr := localexec.Cleanup(command)
+	if stdout.Overflowed() || stderr.Overflowed() {
 		return nil, &InvocationError{Kind: InvalidResponse, Trigger: name, Cause: errors.New("trigger output limit exceeded")}
 	}
 
@@ -255,27 +256,6 @@ func (r *Runner) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-type boundedOutput struct {
-	buffer   bytes.Buffer
-	limit    int
-	overflow bool
-}
-
-func (b *boundedOutput) Len() int       { return b.buffer.Len() }
-func (b *boundedOutput) String() string { return b.buffer.String() }
-func (b *boundedOutput) Bytes() []byte  { return b.buffer.Bytes() }
-
-func (b *boundedOutput) Write(data []byte) (int, error) {
-	size := len(data)
-	remaining := b.limit - b.Len()
-	if len(data) > remaining {
-		b.overflow = true
-		data = data[:remaining]
-	}
-	_, _ = b.buffer.Write(data)
-	return size, nil
 }
 
 var inheritedEnvironment = []string{"PATH", "LANG", "LC_ALL", "SSL_CERT_DIR", "SSL_CERT_FILE", "TMPDIR", "TMP", "TEMP"}

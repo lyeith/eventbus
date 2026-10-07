@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lyeith/eventbus/internal/localexec"
 )
 
 //go:embed wrapper.mjs
@@ -53,22 +55,6 @@ func (output *tailOutput) Bytes() []byte {
 	output.mu.Lock()
 	defer output.mu.Unlock()
 	return append([]byte(nil), output.buffer...)
-}
-
-type boundedOutput struct {
-	buffer   bytes.Buffer
-	limit    int
-	overflow bool
-}
-
-func (output *boundedOutput) Write(data []byte) (int, error) {
-	size := len(data)
-	if remaining := output.limit - output.buffer.Len(); len(data) > remaining {
-		output.overflow = true
-		data = data[:remaining]
-	}
-	_, _ = output.buffer.Write(data)
-	return size, nil
 }
 
 func environment(entry executableFunction, input invocation, runtimeAPI string) []string {
@@ -136,13 +122,14 @@ func functionARN(entry executableFunction, input invocation) string {
 	return "arn:aws:lambda:" + region + ":" + account + ":function:" + input.name
 }
 
-func newCommand(ctx context.Context, entry executableFunction, input invocation, args []string, runtimeAPI string) *exec.Cmd {
+func newCommand(ctx context.Context, entry executableFunction, input invocation, args []string, runtimeAPI string) (*exec.Cmd, error) {
 	command := exec.CommandContext(ctx, entry.command[0], args...)
 	command.Dir = entry.workDir
 	command.Env = environment(entry, input, runtimeAPI)
-	command.WaitDelay = time.Second
-	ownProcessGroup(command)
-	return command
+	if err := localexec.Configure(command); err != nil {
+		return nil, err
+	}
+	return command, nil
 }
 
 func runCommand(ctx context.Context, entry executableFunction, input invocation) invocationResult {
@@ -153,10 +140,13 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation)
 	} else if entry.runtime == "python" {
 		arguments = append(arguments, "-c", pythonWrapper, entry.module, entry.exported)
 	}
-	command := newCommand(ctx, entry, input, arguments, "")
+	command, err := newCommand(ctx, entry, input, arguments, "")
+	if err != nil {
+		return failure("Runtime.InternalError", "Cannot own function process group")
+	}
 	command.Stdin = bytes.NewReader(input.payload)
 	logs := &tailOutput{limit: maxLogs}
-	resultOutput := &boundedOutput{limit: maxPayload}
+	resultOutput := localexec.NewBoundedOutput(maxPayload)
 	command.Stderr = logs
 	command.Stdout = resultOutput
 	var reader, writer *os.File
@@ -198,7 +188,7 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation)
 		return result
 	}
 	waitErr := command.Wait()
-	cleanupErr := stopProcessGroup(command)
+	cleanupErr := localexec.Cleanup(command)
 	if reader != nil {
 		// Grandchildren could retain fd3. Group termination happens before
 		// joining the result reader; closing it also bounds the failure path.
@@ -210,7 +200,7 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation)
 	switch {
 	case cleanupErr != nil:
 		result = failure("Runtime.InternalError", "Cannot stop function process group")
-	case resultOutput.overflow || len(reply) > maxWrapperResult:
+	case resultOutput.Overflowed() || len(reply) > maxWrapperResult:
 		result = failure("Function.ResponseSizeTooLarge", "Response exceeds the 6291456 byte limit")
 	case waitErr != nil && !(wrapped && errors.Is(waitErr, exec.ErrWaitDelay)):
 		result = failure("Runtime.ExitError", "Function process exited without a valid response")
@@ -221,11 +211,11 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation)
 			result = unwrapReply(reply)
 		}
 	default:
-		payload := resultOutput.buffer.Bytes()
+		payload := resultOutput.Bytes()
 		if !json.Valid(payload) {
 			result = failure("Runtime.InvalidResponse", "Command must return one JSON value on stdout")
 		} else {
-			result.payload = append([]byte(nil), payload...)
+			result.payload = payload
 		}
 	}
 	result.logs = logs.Bytes()

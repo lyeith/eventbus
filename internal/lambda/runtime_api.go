@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/lyeith/eventbus/internal/localexec"
 )
 
 const runtimePrefix = "/2018-06-01/runtime/"
@@ -43,7 +45,10 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 		}
 		<-serveDone
 	}()
-	command := newCommand(ctx, entry, input, entry.command[1:], listener.Addr().String())
+	command, err := newCommand(ctx, entry, input, entry.command[1:], listener.Addr().String())
+	if err != nil {
+		return failure("Runtime.InternalError", "Cannot own function process group")
+	}
 	logs := &tailOutput{limit: maxLogs}
 	command.Stdout, command.Stderr = logs, logs
 	if err := command.Start(); err != nil {
@@ -69,7 +74,7 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	case <-ctx.Done():
 		result = failure("Sandbox.Timedout", "Function invocation timed out")
 	}
-	cleanupErr := stopProcessGroup(command)
+	cleanupErr := localexec.Cleanup(command)
 	if !finished {
 		<-processDone
 	}

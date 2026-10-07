@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -212,25 +210,6 @@ key:process.env.AWS_ACCESS_KEY_ID,setting:process.env.APP_SETTING};return event;
 	require.Nil(t, environment["nodeOptions"])
 	require.Equal(t, "declared-key", environment["key"])
 	require.Equal(t, "declared-setting", environment["setting"])
-}
-
-func TestBoundedOutputConsumesBytesWithoutAcceptingTruncation(t *testing.T) {
-	copyOutput := &boundedOutput{limit: 3}
-	nCopied, errCopied := io.Copy(copyOutput, io.LimitReader(strings.NewReader("12345"), 5))
-	require.NoError(t, errCopied)
-	require.EqualValues(t, 5, nCopied)
-	require.Equal(t, "123", copyOutput.String())
-	require.True(t, copyOutput.overflow)
-	output := &boundedOutput{limit: 3}
-	n, err := output.Write([]byte("12345"))
-	require.NoError(t, err)
-	require.Equal(t, 5, n)
-	require.Equal(t, "123", output.String())
-	require.True(t, output.overflow)
-	n, err = output.Write([]byte("more"))
-	require.NoError(t, err)
-	require.Equal(t, 4, n)
-	require.Equal(t, "123", output.String())
 }
 
 func TestCloseCanceledCallerCanRejoinCleanup(t *testing.T) {
