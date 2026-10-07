@@ -237,6 +237,7 @@ func TestAdminRefreshAuth_InvalidExpiredRevokedAndForeignPool(t *testing.T) {
 	grant.AuthVersion = user.AuthVersion
 	expired, err := SignRefreshToken(t.Context(), store, "http://localhost:4100", adminAuthPool, adminAuthClient, user.Sub, grant, -time.Hour)
 	require.NoError(t, err)
+	require.NoError(t, store.UpsertPool(t.Context(), "foreign-pool", "us-east-1"))
 	foreign, err := SignRefreshToken(t.Context(), store, "http://localhost:4100", "foreign-pool", adminAuthClient, user.Sub, grant, time.Hour)
 	require.NoError(t, err)
 	for name, token := range map[string]string{"malformed": "not-a-token", "tampered": refresh[:len(refresh)-10] + strings.Repeat("A", 10), "expired": expired, "foreign-pool": foreign} {

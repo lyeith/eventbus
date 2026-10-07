@@ -27,9 +27,14 @@ const (
 // cryptographic JWT validation. Offline JWT validators deliberately do not
 // consult account state and continue to accept otherwise valid signed tokens.
 func (s *Handler) authorizeAccessToken(w http.ResponseWriter, r *http.Request, token, action string) (*CognitoUser, bool) {
-	refuse := func() (*CognitoUser, bool) {
+	user, _, ok := s.checkedAccessToken(w, r, token, action)
+	return user, ok
+}
+
+func (s *Handler) checkedAccessToken(w http.ResponseWriter, r *http.Request, token, action string) (*CognitoUser, map[string]interface{}, bool) {
+	refuse := func() (*CognitoUser, map[string]interface{}, bool) {
 		cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "Access Token has been revoked")
-		return nil, false
+		return nil, nil, false
 	}
 	claims, err := VerifyAccessToken(r.Context(), s.cognito, s.issuerBase, token)
 	if err != nil {
@@ -41,10 +46,10 @@ func (s *Handler) authorizeAccessToken(w http.ResponseWriter, r *http.Request, t
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			cognitoJSONError(w, http.StatusBadRequest, "UserNotFoundException", "User does not exist")
-			return nil, false
+			return nil, nil, false
 		}
 		authInternalError(w, err, action)
-		return nil, false
+		return nil, nil, false
 	}
 	version, err := authVersionOf(claims)
 	issuer, _ := claims["iss"].(string)
@@ -56,11 +61,11 @@ func (s *Handler) authorizeAccessToken(w http.ResponseWriter, r *http.Request, t
 	if err := s.cognito.checkNotRevoked(r.Context(), user, int64(authTime), originJTI); err != nil {
 		if !errors.Is(err, errTokenRevoked) {
 			authInternalError(w, err, action)
-			return nil, false
+			return nil, nil, false
 		}
 		return refuse()
 	}
-	return user, true
+	return user, claims, true
 }
 
 type initiateAuthRequest struct {
@@ -268,7 +273,7 @@ func (s *Handler) temporaryPasswordExpired(ctx context.Context, user *CognitoUse
 	if policy != nil && policy.TemporaryPasswordValidityDays > 0 {
 		validityDays = policy.TemporaryPasswordValidityDays
 	}
-	return !time.Now().Before(time.Unix(user.PasswordChangedAt, 0).Add(time.Duration(validityDays) * 24 * time.Hour)), nil
+	return !s.cognito.now().Before(time.Unix(user.PasswordChangedAt, 0).Add(time.Duration(validityDays) * 24 * time.Hour)), nil
 }
 
 // Every completed password/challenge authentication binds its account version
@@ -279,7 +284,7 @@ func (s *Handler) writeAuthenticated(w http.ResponseWriter, r *http.Request, poo
 	if !ok {
 		return
 	}
-	grant := newTokenGrant()
+	grant := tokenGrant{AuthTime: s.cognito.now(), OriginJTI: newJTI()}
 	grant.AuthVersion = current.AuthVersion
 	s.writeTokenResult(w, r, clientID, current, grant, true, action)
 }
@@ -301,19 +306,32 @@ func (s *Handler) currentAuthenticationUser(w http.ResponseWriter, r *http.Reque
 // using the original grant while leaving its refresh token unrotated.
 func (s *Handler) writeTokenResult(w http.ResponseWriter, r *http.Request, clientID string, user *CognitoUser, grant tokenGrant, includeRefresh bool, action string) {
 	ctx := r.Context()
-	access, err := SignAccessToken(ctx, s.cognito, s.issuerBase, user.PoolID, clientID, user.Sub, user.Email, grant, s.accessTokenTTL)
+	client, err := s.cognito.LookupClient(ctx, clientID)
+	if err != nil || client.PoolID != user.PoolID {
+		if err == nil {
+			err = errors.New("client does not belong to user pool")
+		}
+		authInternalError(w, err, action)
+		return
+	}
+	accessTTL, idTTL, refreshTTL, err := s.clientTokenDurations(client)
 	if err != nil {
 		authInternalError(w, err, action)
 		return
 	}
-	id, err := SignIDToken(ctx, s.cognito, s.issuerBase, user.PoolID, clientID, user, grant, s.accessTokenTTL)
+	access, err := SignAccessToken(ctx, s.cognito, s.issuerBase, user.PoolID, clientID, user.Sub, user.Email, grant, accessTTL)
 	if err != nil {
 		authInternalError(w, err, action)
 		return
 	}
-	result := map[string]interface{}{"AccessToken": access, "IdToken": id, "ExpiresIn": int(s.accessTokenTTL.Seconds()), "TokenType": "Bearer"}
+	id, err := SignIDToken(ctx, s.cognito, s.issuerBase, user.PoolID, clientID, user, grant, idTTL)
+	if err != nil {
+		authInternalError(w, err, action)
+		return
+	}
+	result := map[string]interface{}{"AccessToken": access, "IdToken": id, "ExpiresIn": int(accessTTL.Seconds()), "TokenType": "Bearer"}
 	if includeRefresh {
-		refresh, err := SignRefreshToken(ctx, s.cognito, s.issuerBase, user.PoolID, clientID, user.Sub, grant, s.refreshTokenTTL)
+		refresh, err := SignRefreshToken(ctx, s.cognito, s.issuerBase, user.PoolID, clientID, user.Sub, grant, refreshTTL)
 		if err != nil {
 			authInternalError(w, err, action)
 			return
@@ -398,4 +416,34 @@ func (s *Handler) handleInitiateAuthRefreshToken(w http.ResponseWriter, r *http.
 func authInternalError(w http.ResponseWriter, err error, action string) {
 	log.Error().Err(err).Str("action", action).Msg("Cognito authentication failed")
 	cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", "Authentication failed due to an internal error")
+}
+
+// authorizeClientAccessToken retains the authenticated client for native
+// attribute permissions. Administrator operations use their separate lookup.
+func (s *Handler) authorizeClientAccessToken(w http.ResponseWriter, r *http.Request, token, action string) (*CognitoUser, *CognitoClient, bool) {
+	user, claims, ok := s.checkedAccessToken(w, r, token, action)
+	if !ok {
+		return nil, nil, false
+	}
+	clientID, _ := claims["client_id"].(string)
+	client, err := s.cognito.LookupClient(r.Context(), clientID)
+	if err != nil || client.PoolID != user.PoolID {
+		cognitoJSONError(w, 400, "NotAuthorizedException", "App client is no longer valid")
+		return nil, nil, false
+	}
+	if client.Native && !containsScope(claims["scope"], "aws.cognito.signin.user.admin") {
+		cognitoJSONError(w, 400, "NotAuthorizedException", "Access Token does not have required scopes")
+		return nil, nil, false
+	}
+	return user, client, true
+}
+
+func containsScope(value any, required string) bool {
+	scope, _ := value.(string)
+	for _, item := range strings.Fields(scope) {
+		if item == required {
+			return true
+		}
+	}
+	return false
 }

@@ -66,14 +66,16 @@ func TestCreateUserPool_PasswordPolicyDefaultsAndCanonicalMembers(t *testing.T) 
 		},
 		{
 			name: "legacy flat alias",
-			fields: map[string]interface{}{"PasswordPolicy": map[string]interface{}{
+			// Snake-case aliases belong to an explicit development fixture pool.
+			fields: map[string]interface{}{"PoolId": "fixture-policy-flat", "PasswordPolicy": map[string]interface{}{
 				"min_length": 9, "require_uppercase": false, "require_digits": false, "require_symbols": false,
 			}},
 			want: PasswordPolicy{MinLength: 9, RequireLowercase: true, TemporaryPasswordValidityDays: 7},
 		},
 		{
 			name: "AWS members take precedence",
-			fields: map[string]interface{}{"Policies": map[string]interface{}{"PasswordPolicy": map[string]interface{}{
+			// Precedence tests mix fixture aliases with AWS spellings deliberately.
+			fields: map[string]interface{}{"PoolId": "fixture-policy-precedence", "Policies": map[string]interface{}{"PasswordPolicy": map[string]interface{}{
 				"min_length": 6, "MinimumLength": 13,
 				"require_digits": true, "RequireDigits": true, "RequireNumbers": false,
 			}}},
@@ -277,7 +279,7 @@ func TestCreateUserPoolClient_ExplicitConfiguration(t *testing.T) {
 		flows          []string
 		sessionMinutes int
 	}{
-		{"modern flows", []string{"ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_USER_PASSWORD_AUTH", "ALLOW_CUSTOM_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_AUTH"}, 15},
+		{"modern flows", []string{"ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_USER_PASSWORD_AUTH", "ALLOW_CUSTOM_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"}, 15},
 		{"legacy flows", []string{"ADMIN_NO_SRP_AUTH", "CUSTOM_AUTH_FLOW_ONLY", "USER_PASSWORD_AUTH"}, 3},
 		{"explicit empty flows", []string{}, 3},
 	} {

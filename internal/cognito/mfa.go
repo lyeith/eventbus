@@ -11,7 +11,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -115,7 +114,7 @@ func (s *Handler) handleVerifySoftwareToken(w http.ResponseWriter, r *http.Reque
 			"Software token MFA has not been associated")
 		return
 	}
-	if !isSixDigits(req.UserCode) || validateTOTPCode(user.PendingTOTPSecret, req.UserCode) != nil {
+	if !isSixDigits(req.UserCode) || validateTOTPCodeAt(user.PendingTOTPSecret, req.UserCode, s.cognito.now()) != nil {
 		// Cognito reports a wrong enrolment code as EnableSoftwareTokenMFAException.
 		cognitoJSONError(w, http.StatusBadRequest, "EnableSoftwareTokenMFAException", "Code mismatch")
 		return
@@ -186,7 +185,7 @@ func (s *Handler) handleGlobalSignOut(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.cognito.RevokeUserTokens(r.Context(), user.Sub, time.Now().Unix()); err != nil {
+	if err := s.cognito.RevokeUserTokens(r.Context(), user.Sub, s.cognito.now().Unix()); err != nil {
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		return
 	}
@@ -202,7 +201,7 @@ func (s *Handler) handleAdminUserGlobalSignOut(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	if err := s.cognito.RevokeUserTokens(r.Context(), user.Sub, time.Now().Unix()); err != nil {
+	if err := s.cognito.RevokeUserTokens(r.Context(), user.Sub, s.cognito.now().Unix()); err != nil {
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		return
 	}

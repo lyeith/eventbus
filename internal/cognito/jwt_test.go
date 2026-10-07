@@ -3,10 +3,12 @@ package cognito
 import (
 	"context"
 	"crypto/rsa"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"math"
 	"math/big"
+	"net/http"
 	"testing"
 	"time"
 
@@ -26,6 +28,7 @@ func TestEnsureSigningKey_PersistsAcrossRestart(t *testing.T) {
 	// First open: generate fresh key.
 	store1, err := OpenCognitoStore(dbPath)
 	require.NoError(t, err)
+	require.NoError(t, store1.UpsertPool(t.Context(), "pool-A", "us-east-1"))
 	key1, err := store1.EnsureSigningKey(context.Background(), "pool-A")
 	require.NoError(t, err)
 	require.NoError(t, store1.Close())
@@ -50,6 +53,8 @@ func TestEnsureSigningKey_PerPoolUnique(t *testing.T) {
 	store, _ := newCognitoTestStore(t)
 	ctx := context.Background()
 
+	require.NoError(t, store.UpsertPool(t.Context(), "pool-A", "us-east-1"))
+	require.NoError(t, store.UpsertPool(t.Context(), "pool-B", "us-east-1"))
 	a, err := store.EnsureSigningKey(ctx, "pool-A")
 	require.NoError(t, err)
 	b, err := store.EnsureSigningKey(ctx, "pool-B")
@@ -64,6 +69,7 @@ func TestEnsureSigningKey_PerPoolUnique(t *testing.T) {
 // MockProvider keeps working.
 func TestBuildJWKS_ShapeMatchesMockProvider(t *testing.T) {
 	store, _ := newCognitoTestStore(t)
+	require.NoError(t, store.UpsertPool(t.Context(), "local-pool-1", "us-east-1"))
 	body, err := store.BuildJWKS(context.Background(), "local-pool-1")
 	require.NoError(t, err)
 
@@ -107,6 +113,7 @@ func TestSignAndValidateAgainstJWKS(t *testing.T) {
 	ctx := context.Background()
 
 	const poolID = "local-pool-1"
+	require.NoError(t, store.UpsertPool(t.Context(), poolID, "us-east-1"))
 	signing, err := store.EnsureSigningKey(ctx, poolID)
 	require.NoError(t, err)
 
@@ -144,6 +151,7 @@ func TestSignAndValidateAgainstJWKS(t *testing.T) {
 	// And a token signed by a *different* key for a different pool must
 	// fail validation against the original pool's JWKS — guards against
 	// cross-pool key bleed.
+	require.NoError(t, store.UpsertPool(t.Context(), "other-pool", "us-east-1"))
 	otherKey, err := store.EnsureSigningKey(ctx, "other-pool")
 	require.NoError(t, err)
 	other := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -219,4 +227,63 @@ func TestSignIDToken_ReservedClaimsCannotBeOverwrittenByAttributes(t *testing.T)
 	assert.Equal(t, float64(user.AuthVersion), claims[authVersionClaim])
 	_, err = VerifyAccessToken(t.Context(), store, "http://localhost:4100", id)
 	require.Error(t, err)
+}
+
+func TestSigningKeysRequireExistingPoolAndDisappearWithParent(t *testing.T) {
+	store, _ := newCognitoTestStore(t)
+	const poolID = "eu-west-1_signing-parent"
+	key, err := store.EnsureSigningKey(t.Context(), poolID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	assert.Nil(t, key)
+	body, err := store.BuildJWKS(t.Context(), poolID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	assert.Empty(t, body)
+	for _, table := range []string{"pools", "clients", "signing_keys"} {
+		var count int
+		require.NoError(t, store.DB().QueryRow(`SELECT COUNT(*) FROM `+table).Scan(&count))
+		assert.Zero(t, count, "unknown key requests must not provision %s", table)
+	}
+
+	require.NoError(t, store.UpsertPool(t.Context(), poolID, "eu-west-1"))
+	key, err = store.EnsureSigningKey(t.Context(), poolID)
+	require.NoError(t, err)
+	require.NotNil(t, key)
+	body, err = store.BuildJWKS(t.Context(), poolID)
+	require.NoError(t, err)
+	var document JWKS
+	require.NoError(t, json.Unmarshal(body, &document))
+	require.Len(t, document.Keys, 1)
+	assert.Equal(t, key.Kid, document.Keys[0].Kid)
+	pool, err := store.LookupPool(t.Context(), poolID)
+	require.NoError(t, err)
+	assert.Equal(t, "eu-west-1", pool.Region, "key creation preserves the parent's region")
+
+	deleted, err := store.DeletePool(t.Context(), poolID)
+	require.NoError(t, err)
+	require.True(t, deleted)
+	_, err = store.LoadSigningKey(t.Context(), poolID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	_, err = store.EnsureSigningKey(t.Context(), poolID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	body, err = store.BuildJWKS(t.Context(), poolID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	assert.Empty(t, body)
+	for _, table := range []string{"pools", "signing_keys"} {
+		var count int
+		require.NoError(t, store.DB().QueryRow(`SELECT COUNT(*) FROM `+table).Scan(&count))
+		assert.Zero(t, count, "a deleted parent must not be recreated by its signing-key endpoint")
+	}
+}
+
+func TestServeJWKSUnknownPoolDoesNotProvisionResources(t *testing.T) {
+	_, server, store := newCognitoTestServer(t)
+	response, err := http.Get(server.URL + "/eu-west-1_unknown/.well-known/jwks.json")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	assert.Equal(t, http.StatusNotFound, response.StatusCode)
+	for _, table := range []string{"pools", "clients", "signing_keys"} {
+		var count int
+		require.NoError(t, store.DB().QueryRow(`SELECT COUNT(*) FROM `+table).Scan(&count))
+		assert.Zero(t, count, "unknown JWKS requests must not provision %s", table)
+	}
 }

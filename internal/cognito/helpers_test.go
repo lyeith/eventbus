@@ -32,7 +32,7 @@ func newCognitoTestServer(t *testing.T) (*Handler, *httptest.Server, *CognitoSto
 func newCognitoTestServerWithTTL(t *testing.T, accessTTL, refreshTTL time.Duration) (*Handler, *httptest.Server, *CognitoStore) {
 	t.Helper()
 	store, _ := newCognitoTestStore(t)
-	handler := NewHandler(store, Options{IssuerBase: "http://localhost:4100", AccessTokenTTL: accessTTL, RefreshTokenTTL: refreshTTL})
+	handler := NewHandler(store, Options{DevProfile: DevProfileLegacyFixtures, IssuerBase: "http://localhost:4100", AccessTokenTTL: accessTTL, RefreshTokenTTL: refreshTTL})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/.well-known/jwks.json") {
 			handler.ServeJWKS(w, r)
@@ -50,15 +50,20 @@ func newCognitoTestServerWithTTL(t *testing.T, accessTTL, refreshTTL time.Durati
 // httptest server can pin the URL it actually serves on.
 func signTestAccessToken(t *testing.T, store *CognitoStore, issuerBase, poolID, sub, email string, ttl time.Duration) string {
 	t.Helper()
+	require.NoError(t, store.UpsertPool(t.Context(), poolID, "us-east-1"))
 	signing, err := store.EnsureSigningKey(context.Background(), poolID)
 	require.NoError(t, err)
 
-	now := time.Now()
+	clientID := "test-client-" + poolID
+	require.NoError(t, store.UpsertClient(context.Background(), clientID, poolID, ""))
+	now := store.now()
 	claims := jwt.MapClaims{
 		"sub":       sub,
 		"email":     email,
 		"iss":       issuerBase + "/" + poolID,
-		"aud":       "test-client",
+		"aud":       clientID,
+		"client_id": clientID,
+		"scope":     "aws.cognito.signin.user.admin",
 		"iat":       now.Unix(),
 		"exp":       now.Add(ttl).Unix(),
 		"token_use": "access",

@@ -24,7 +24,7 @@ func TestEventBusBindFailureReleasesConstructedResources(t *testing.T) {
 	triggerClosed := false
 	listener := newEventBusListener(&http.Server{Addr: occupied.Addr().String()}, &eventBusLifecycle{store: store, triggers: contextCloseFunc(func(context.Context) error { triggerClosed = true; return nil })}, time.Second)
 	require.Error(t, listener.Run(context.Background()))
-	require.Error(t, store.DB().Ping(), "failed bind must close the unused SQLite store")
+	require.Error(t, readCognitoStore(context.Background(), store), "failed bind must close the unused SQLite store")
 	require.True(t, triggerClosed, "failed bind must close the unused trigger runtime")
 }
 
@@ -38,7 +38,7 @@ func TestEventBusPreCanceledRunDoesNotBind(t *testing.T) {
 	cancel()
 	listener := newEventBusListener(&http.Server{Addr: occupied.Addr().String()}, &eventBusLifecycle{store: store}, time.Second)
 	require.NoError(t, listener.Run(ctx), "canceled-before-start must not attempt the occupied address")
-	require.Error(t, store.DB().Ping())
+	require.Error(t, readCognitoStore(context.Background(), store))
 }
 
 func TestEventBusCancellationDrainsWithFreshBudget(t *testing.T) {
@@ -55,7 +55,7 @@ func TestEventBusCancellationDrainsWithFreshBudget(t *testing.T) {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			close(entered)
 			<-release
-			if err := store.DB().PingContext(r.Context()); err != nil {
+			if err := readCognitoStore(r.Context(), store); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -87,11 +87,11 @@ func TestEventBusCancellationDrainsWithFreshBudget(t *testing.T) {
 		t.Fatalf("cancellation skipped drain: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
-	require.NoError(t, store.DB().Ping(), "store must remain usable while the HTTP handler drains")
+	require.NoError(t, readCognitoStore(context.Background(), store), "store must remain usable while the HTTP handler drains")
 	close(release)
 	require.NoError(t, <-responseDone)
 	require.NoError(t, <-runDone)
-	require.Error(t, store.DB().Ping())
+	require.Error(t, readCognitoStore(context.Background(), store))
 }
 
 func TestEventBusConcurrentShutdownCanceledWaiterCannotStopCleanup(t *testing.T) {
@@ -116,7 +116,7 @@ func TestEventBusConcurrentShutdownCanceledWaiterCannotStopCleanup(t *testing.T)
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, listener.Shutdown(canceled), context.Canceled)
-	require.NoError(t, store.DB().Ping(), "canceled waiter must not release the owner's resource")
+	require.NoError(t, readCognitoStore(context.Background(), store), "canceled waiter must not release the owner's resource")
 	results := make(chan error, 8)
 	for range 8 {
 		go func() { results <- listener.Shutdown(context.Background()) }()
@@ -126,5 +126,5 @@ func TestEventBusConcurrentShutdownCanceledWaiterCannotStopCleanup(t *testing.T)
 	for range 8 {
 		require.NoError(t, <-results)
 	}
-	require.Error(t, store.DB().Ping())
+	require.Error(t, readCognitoStore(context.Background(), store))
 }

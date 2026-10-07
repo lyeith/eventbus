@@ -11,21 +11,25 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
 type createUserPoolRequest struct {
 	devCreateUserPoolFields
-	PoolName              string                           `json:"PoolName"`
-	Policies              *createPoolPoliciesEnv           `json:"Policies"`
-	UsernameAttributes    []string                         `json:"UsernameAttributes"`
-	AliasAttributes       []string                         `json:"AliasAttributes"`
-	UsernameConfiguration *createPoolUsernameConfiguration `json:"UsernameConfiguration"`
+	Schema                 []SchemaAttribute                `json:"Schema"`
+	AutoVerifiedAttributes []string                         `json:"AutoVerifiedAttributes"`
+	AccountRecoverySetting *AccountRecoverySetting          `json:"AccountRecoverySetting"`
+	AdminCreateUserConfig  *AdminCreateUserConfig           `json:"AdminCreateUserConfig"`
+	PoolName               string                           `json:"PoolName"`
+	Policies               *createPoolPoliciesEnv           `json:"Policies"`
+	UsernameAttributes     []string                         `json:"UsernameAttributes"`
+	AliasAttributes        []string                         `json:"AliasAttributes"`
+	UsernameConfiguration  *createPoolUsernameConfiguration `json:"UsernameConfiguration"`
 }
 
 type createPoolPoliciesEnv struct {
+	raw            json.RawMessage
 	PasswordPolicy json.RawMessage `json:"PasswordPolicy"`
 }
 
@@ -42,94 +46,88 @@ func (s *Handler) handleCreateUserPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.PoolName == "" {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "PoolName is required")
+		cognitoJSONError(w, 400, "InvalidParameterException", "PoolName is required")
+		return
+	}
+	if (req.PoolID != "" || hasJSONValue(req.PasswordPolicy)) && s.devProfile != DevProfileLegacyFixtures {
+		cognitoJSONError(w, 400, "InvalidParameterException", "PoolId and flat PasswordPolicy require the legacy-fixtures development profile")
 		return
 	}
 	signIn, err := createPoolSignInConfig(req)
 	if err != nil {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
 		return
 	}
 	rawPolicy := req.PasswordPolicy
 	if !hasJSONValue(rawPolicy) && req.Policies != nil {
 		rawPolicy = req.Policies.PasswordPolicy
 	}
+	if (req.PoolID == "" || s.devProfile != DevProfileLegacyFixtures) && hasJSONValue(rawPolicy) {
+		if err := validateNativeFields(rawPolicy, []string{"MinimumLength", "RequireUppercase", "RequireLowercase", "RequireNumbers", "RequireSymbols", "TemporaryPasswordValidityDays"}, nil); err != nil {
+			cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
+			return
+		}
+	}
 	policy, err := createPoolPasswordPolicy(rawPolicy)
 	if err != nil {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
 		return
+	}
+	if err = NormalizePoolWorkflowConfig(req.AutoVerifiedAttributes, req.AccountRecoverySetting, req.AdminCreateUserConfig); err != nil {
+		cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
+		return
+	}
+	var schema []SchemaAttribute
+	if req.PoolID == "" || req.Schema != nil {
+		schema, err = NormalizeSchema(req.Schema)
+		if err != nil {
+			cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
+			return
+		}
 	}
 	poolID := req.PoolID
 	if poolID == "" {
-		poolID = newPoolID()
+		poolID = s.region + "_" + randomHex(12)
 	}
-	ctx := r.Context()
-	exists, err := s.cognito.PoolExists(ctx, poolID)
-	if err != nil {
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+	p := &CognitoPool{ID: poolID, Name: req.PoolName, Region: s.region, AccountID: s.accountID, Native: req.PoolID == "", SignIn: signIn, PasswordPolicy: policy, SchemaAttributes: schema, AutoVerifiedAttributes: req.AutoVerifiedAttributes, AccountRecoverySetting: req.AccountRecoverySetting, AdminCreateUserConfig: req.AdminCreateUserConfig}
+	previous, err := s.cognito.LookupPool(r.Context(), poolID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		authInternalError(w, err, "CreateUserPool")
 		return
 	}
-	if exists {
-		previous, err := s.cognito.GetPoolSignInConfig(ctx, poolID)
-		if err != nil {
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-			return
-		}
+	if err == nil {
+		p.Region, p.AccountID, p.Native = previous.Region, previous.AccountID, previous.Native
 		if req.UsernameAttributes == nil && req.AliasAttributes == nil {
-			signIn.EmailAsUsername, signIn.EmailAlias = previous.EmailAsUsername, previous.EmailAlias
+			p.SignIn.EmailAsUsername, p.SignIn.EmailAlias = previous.SignIn.EmailAsUsername, previous.SignIn.EmailAlias
 		}
 		if req.UsernameConfiguration == nil {
-			signIn.CaseSensitive = previous.CaseSensitive
+			p.SignIn.CaseSensitive = previous.SignIn.CaseSensitive
 		}
 		if !hasJSONValue(rawPolicy) {
-			policy, err = loadPoolPasswordPolicy(ctx, s.cognito, poolID)
-			if err != nil {
-				cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-				return
-			}
+			p.PasswordPolicy = previous.PasswordPolicy
+		}
+		if req.Schema == nil {
+			p.SchemaAttributes = previous.SchemaAttributes
+		}
+		if req.AutoVerifiedAttributes == nil {
+			p.AutoVerifiedAttributes = previous.AutoVerifiedAttributes
+		}
+		if req.AccountRecoverySetting == nil {
+			p.AccountRecoverySetting = previous.AccountRecoverySetting
+		}
+		if req.AdminCreateUserConfig == nil {
+			p.AdminCreateUserConfig = previous.AdminCreateUserConfig
 		}
 	}
-	if err := s.cognito.UpsertPool(ctx, poolID, "us-east-1"); err != nil {
-		log.Error().Err(err).Msg("UpsertPool failed in CreateUserPool")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-		return
-	}
-	if err := s.cognito.SetPoolSignInConfig(ctx, poolID, signIn); err != nil {
+	if err = s.cognito.SavePool(r.Context(), p); err != nil {
 		if errors.Is(err, errPoolSignInConfigImmutable) {
-			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+			cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
 		} else {
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+			authInternalError(w, err, "CreateUserPool")
 		}
 		return
 	}
-	if policy != nil {
-		raw, err := json.Marshal(policy)
-		if err != nil {
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-			return
-		}
-		if err := s.cognito.SetPoolPasswordPolicy(ctx, poolID, string(raw)); err != nil {
-			log.Error().Err(err).Msg("SetPoolPasswordPolicy failed in CreateUserPool")
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-			return
-		}
-	}
-	now := float64(time.Now().Unix())
-	out := map[string]interface{}{
-		"Id": poolID, "Name": req.PoolName, "CreationDate": now,
-		"LastModifiedDate": now, "Status": "Enabled",
-		"UsernameConfiguration": map[string]interface{}{"CaseSensitive": signIn.CaseSensitive},
-	}
-	if signIn.EmailAsUsername {
-		out["UsernameAttributes"] = []string{"email"}
-	}
-	if signIn.EmailAlias {
-		out["AliasAttributes"] = []string{"email"}
-	}
-	if policy != nil {
-		out["Policies"] = map[string]interface{}{"PasswordPolicy": poolPasswordPolicyResponse(policy)}
-	}
-	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{"UserPool": out})
+	cognitoJSONResponse(w, 200, map[string]any{"UserPool": s.poolResponse(p)})
 }
 
 func createPoolSignInConfig(req createUserPoolRequest) (PoolSignInConfig, error) {
@@ -163,6 +161,9 @@ func createPoolPasswordPolicy(raw json.RawMessage) (*PasswordPolicy, error) {
 	}
 	if !hasJSONValue(raw) {
 		return policy, nil
+	}
+	if err := validateNativeFields(raw, []string{"MinimumLength", "RequireUppercase", "RequireLowercase", "RequireNumbers", "RequireDigits", "RequireSymbols", "TemporaryPasswordValidityDays", "min_length", "require_uppercase", "require_lowercase", "require_digits", "require_symbols", "temporary_password_validity_days"}, nil); err != nil {
+		return nil, err
 	}
 	var supplied PasswordPolicy
 	if err := json.Unmarshal(raw, &supplied); err != nil {
@@ -226,6 +227,10 @@ func poolPasswordPolicyResponse(policy *PasswordPolicy) map[string]interface{} {
 
 type createUserPoolClientRequest struct {
 	devCreateUserPoolClientFields
+	clientValidityRequest
+	ClientSecret        *string  `json:"ClientSecret"`
+	ReadAttributes      []string `json:"ReadAttributes"`
+	WriteAttributes     []string `json:"WriteAttributes"`
 	UserPoolID          string   `json:"UserPoolId"`
 	ClientName          string   `json:"ClientName"`
 	GenerateSecret      bool     `json:"GenerateSecret"`
@@ -239,66 +244,80 @@ func (s *Handler) handleCreateUserPoolClient(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if req.UserPoolID == "" || req.ClientName == "" {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "UserPoolId and ClientName are required")
+		cognitoJSONError(w, 400, "InvalidParameterException", "UserPoolId and ClientName are required")
 		return
 	}
-	flows, sessionMinutes, err := createClientAuthConfig(req)
+	if req.ClientID != "" && s.devProfile != DevProfileLegacyFixtures {
+		cognitoJSONError(w, 400, "InvalidParameterException", "ClientId requires the legacy-fixtures development profile")
+		return
+	}
+	flows, minutes, err := createClientAuthConfig(req)
 	if err != nil {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
 		return
 	}
-	ctx := r.Context()
-	exists, err := s.cognito.PoolExists(ctx, req.UserPoolID)
+	validity, err := normalizeClientValidity(req.clientValidityRequest)
 	if err != nil {
-		log.Error().Err(err).Msg("PoolExists failed in CreateUserPoolClient")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+		cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
 		return
 	}
-	if !exists {
-		cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", fmt.Sprintf("User pool %s does not exist", req.UserPoolID))
+	p, err := s.cognito.LookupPool(r.Context(), req.UserPoolID)
+	if errors.Is(err, sql.ErrNoRows) {
+		cognitoJSONError(w, 400, "ResourceNotFoundException", "User pool does not exist")
 		return
 	}
-	clientID := req.ClientID
-	if clientID == "" {
-		clientID = newClientID()
-	} else {
-		previous, err := s.cognito.LookupClient(ctx, clientID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+	if err != nil {
+		authInternalError(w, err, "CreateUserPoolClient")
+		return
+	}
+	schema := p.SchemaAttributes
+	if schema == nil {
+		schema, err = NormalizeSchema(nil)
+		if err != nil {
+			authInternalError(w, err, "CreateUserPoolClient")
 			return
 		}
-		if err == nil && previous.PoolID != req.UserPoolID {
-			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ClientId already belongs to another user pool")
-			return
-		}
+	}
+	reads, err := NormalizeClientAttributes(schema, req.ReadAttributes, false)
+	if err != nil {
+		cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
+		return
+	}
+	writes, err := NormalizeClientAttributes(schema, req.WriteAttributes, true)
+	if err != nil {
+		cognitoJSONError(w, 400, "InvalidParameterException", err.Error())
+		return
+	}
+	id := req.ClientID
+	if id == "" {
+		id = newClientID()
 	}
 	secret := ""
 	if req.GenerateSecret {
 		secret = newClientSecret()
 	}
-	if err := s.cognito.UpsertClient(ctx, clientID, req.UserPoolID, secret); err != nil {
+	if req.ClientSecret != nil {
+		if req.GenerateSecret || len(*req.ClientSecret) < 24 || len(*req.ClientSecret) > 64 || strings.ContainsFunc(*req.ClientSecret, func(r rune) bool {
+			return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '+')
+		}) {
+			cognitoJSONError(w, 400, "InvalidParameterException", "ClientSecret must contain 24 to 64 word or + characters and cannot be combined with GenerateSecret")
+			return
+		}
+		secret = *req.ClientSecret
+	}
+	c := &CognitoClient{ID: id, PoolID: req.UserPoolID, Name: req.ClientName, Secret: secret, ExplicitAuthFlows: flows, AuthSessionValidity: minutes, Native: req.ClientID == "", TokenValidity: validity, ReadAttributes: reads, WriteAttributes: writes}
+	if req.ClientID != "" && req.AccessTokenValidity == nil && req.IdTokenValidity == nil && req.RefreshTokenValidity == nil && req.TokenValidityUnits == nil {
+		c.TokenValidity = nil
+	}
+	if err = s.cognito.SaveClient(r.Context(), c); err != nil {
 		if errors.Is(err, errClientPoolConflict) {
-			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ClientId already belongs to another user pool")
+			cognitoJSONError(w, 400, "InvalidParameterException", "ClientId already belongs to another user pool")
 		} else {
-			log.Error().Err(err).Msg("UpsertClient failed in CreateUserPoolClient")
-			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+			authInternalError(w, err, "CreateUserPoolClient")
 		}
 		return
 	}
-	if err := s.cognito.SetClientAuthConfig(ctx, clientID, flows, sessionMinutes); err != nil {
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
-		return
-	}
-	now := float64(time.Now().Unix())
-	out := map[string]interface{}{
-		"UserPoolId": req.UserPoolID, "ClientId": clientID, "ClientName": req.ClientName,
-		"CreationDate": now, "LastModifiedDate": now,
-		"ExplicitAuthFlows": flows, "AuthSessionValidity": sessionMinutes,
-	}
-	if secret != "" {
-		out["ClientSecret"] = secret
-	}
-	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{"UserPoolClient": out})
+	cognitoJSONResponse(w, 200, map[string]any{"UserPoolClient": clientResponse(c)})
 }
 
 func createClientAuthConfig(req createUserPoolClientRequest) ([]string, int, error) {
@@ -312,7 +331,7 @@ func createClientAuthConfig(req createUserPoolClientRequest) ([]string, int, err
 		case "ADMIN_NO_SRP_AUTH", "CUSTOM_AUTH_FLOW_ONLY", "USER_PASSWORD_AUTH":
 			legacy = true
 		case "ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_CUSTOM_AUTH", "ALLOW_USER_PASSWORD_AUTH",
-			"ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_AUTH":
+			"ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH":
 			modern = true
 		default:
 			return nil, 0, fmt.Errorf("invalid ExplicitAuthFlows value %q", flow)
@@ -352,6 +371,18 @@ func (s *Handler) handleDeleteUserPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	if _, err := s.cognito.LookupPool(ctx, req.UserPoolID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) && s.devProfile == DevProfileLegacyFixtures {
+			cognitoJSONResponse(w, 200, map[string]any{})
+			return
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			cognitoJSONError(w, 400, "ResourceNotFoundException", "User pool does not exist")
+		} else {
+			authInternalError(w, err, "DeleteUserPool")
+		}
+		return
+	}
 	if _, err := s.cognito.DeletePool(ctx, req.UserPoolID); err != nil {
 		log.Error().Err(err).Msg("DeletePool failed")
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
@@ -381,6 +412,31 @@ func (s *Handler) handleDeleteUserPoolClient(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	ctx := r.Context()
+	client, err := s.cognito.LookupClient(ctx, req.ClientID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) && s.devProfile == DevProfileLegacyFixtures {
+			cognitoJSONResponse(w, 200, map[string]any{})
+			return
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			cognitoJSONError(w, 400, "ResourceNotFoundException", "App client does not exist")
+		} else {
+			authInternalError(w, err, "DeleteUserPoolClient")
+		}
+		return
+	}
+	if client.PoolID != req.UserPoolID {
+		cognitoJSONError(w, 400, "ResourceNotFoundException", "App client does not exist in the user pool")
+		return
+	}
+	if _, err = s.cognito.LookupPool(ctx, req.UserPoolID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			cognitoJSONError(w, 400, "ResourceNotFoundException", "User pool does not exist")
+		} else {
+			authInternalError(w, err, "DeleteUserPoolClient")
+		}
+		return
+	}
 	if _, err := s.cognito.DeleteClient(ctx, req.UserPoolID, req.ClientID); err != nil {
 		log.Error().Err(err).Msg("DeleteClient failed")
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())

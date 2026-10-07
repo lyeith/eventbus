@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
+	"strings"
 )
 
 var supportedChallenges = map[string]bool{
@@ -108,7 +108,7 @@ func (s *Handler) respondToAuthChallenge(w http.ResponseWriter, r *http.Request,
 		invalidChallengeSession(w)
 		return
 	}
-	if row.ExpiresAt <= time.Now().Unix() {
+	if row.ExpiresAt <= s.cognito.now().Unix() {
 		if row.StateJSON != "" {
 			invalidChallengeSession(w)
 		} else {
@@ -151,12 +151,12 @@ func (s *Handler) respondToAuthChallenge(w http.ResponseWriter, r *http.Request,
 	switch req.ChallengeName {
 	case "SOFTWARE_TOKEN_MFA":
 		code := req.ChallengeResponses["SOFTWARE_TOKEN_MFA_CODE"]
-		if err := validateTOTPCode(user.TOTPSecret, code); err != nil && (!errors.Is(err, errFallbackToAnyDigits) || !isSixDigits(code)) {
+		if err := validateTOTPCodeAt(user.TOTPSecret, code, s.cognito.now()); err != nil && (!errors.Is(err, errFallbackToAnyDigits) || !s.allowLegacyFixtureAuth(client) || !isSixDigits(code)) {
 			cognitoJSONError(w, http.StatusBadRequest, "CodeMismatchException", "Invalid code")
 			return
 		}
 	case "SMS_MFA":
-		if !isSixDigits(req.ChallengeResponses["SMS_MFA_CODE"]) {
+		if !s.allowLegacyFixtureAuth(client) || !isSixDigits(req.ChallengeResponses["SMS_MFA_CODE"]) {
 			cognitoJSONError(w, http.StatusBadRequest, "CodeMismatchException", "Invalid code")
 			return
 		}
@@ -227,20 +227,28 @@ func (s *Handler) respondNewPassword(w http.ResponseWriter, r *http.Request, req
 			return
 		}
 	}
-	if !s.consumeChallenge(w, r, row) {
+	pool, err := s.cognito.LookupPool(r.Context(), user.PoolID)
+	if err != nil {
+		authInternalError(w, err, "RespondToAuthChallenge")
 		return
 	}
+	updates := map[string]string{}
+	for name, value := range req.ChallengeResponses {
+		if strings.HasPrefix(name, "userAttributes.") {
+			updates[strings.TrimPrefix(name, "userAttributes.")] = value
+		}
+	}
 	completedVersion := user.AuthVersion + 1
-	if err := s.cognito.SetUserPasswordAtVersion(r.Context(), user.Sub, password, "CONFIRMED", user.AuthVersion); err != nil {
+	user, err = s.cognito.completeNewPassword(r.Context(), user, row, password, updates, pool, client)
+	if err != nil {
 		if errors.Is(err, errTokenRevoked) {
 			invalidChallengeSession(w)
 		} else {
-			authInternalError(w, err, "RespondToAuthChallenge")
+			writeWorkflowError(w, err)
 		}
 		return
 	}
-	user, err = s.cognito.LookupUserBySub(r.Context(), user.Sub)
-	if err != nil || !user.Enabled || user.AuthVersion != completedVersion {
+	if !user.Enabled || user.AuthVersion != completedVersion {
 		invalidChallengeSession(w)
 		return
 	}

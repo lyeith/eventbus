@@ -23,7 +23,9 @@ const (
 
 // CognitoStore is the SQLite-backed store for the local Cognito dev service.
 type CognitoStore struct {
-	db *sql.DB
+	db      *sql.DB
+	clockMu sync.RWMutex
+	clock   func() time.Time
 	// mu serialises read-modify-write paths (e.g. ensure-signing-key).
 	// Plain reads/writes go through the WAL-enabled connection pool directly.
 	mu sync.Mutex
@@ -60,11 +62,6 @@ func (s *CognitoStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
-}
-
-// DB exposes the underlying handle for tests and lower-level callers.
-func (s *CognitoStore) DB() *sql.DB {
-	return s.db
 }
 
 // bootstrap creates the current schema and adds columns missing from existing stores.
@@ -148,6 +145,10 @@ func (s *CognitoStore) bootstrap() error {
 	// is idempotent when re-run on a fresh-from-CREATE-TABLE schema.
 	migrations := []string{
 		`ALTER TABLE pools ADD COLUMN password_policy TEXT`,
+		`ALTER TABLE pools ADD COLUMN metadata TEXT`,
+		`ALTER TABLE pools ADD COLUMN last_modified_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE clients ADD COLUMN metadata TEXT`,
+		`ALTER TABLE clients ADD COLUMN last_modified_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE users ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''`,
 		// Software-token enrolment (AssociateSoftwareToken → VerifySoftwareToken
 		// → SetUserMFAPreference) and global sign-out.
@@ -181,7 +182,10 @@ func (s *CognitoStore) bootstrap() error {
 		}
 	}
 
-	return s.migrateUserIdentity(ctx)
+	if err := s.migrateUserIdentity(ctx); err != nil {
+		return err
+	}
+	return s.bootstrapVerification(ctx)
 }
 
 // --- Pool / Client CRUD --------------------------------------------------
@@ -198,7 +202,7 @@ func (s *CognitoStore) UpsertPool(ctx context.Context, id, region string) error 
 		INSERT INTO pools (id, region, created_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(id) DO NOTHING
-	`, id, region, time.Now().Unix())
+	`, id, region, s.now().Unix())
 	return err
 }
 
@@ -242,6 +246,8 @@ func (s *CognitoStore) GetPoolPasswordPolicy(ctx context.Context, poolID string)
 // signing_keys are NOT FK-bound (intentional — they're maintained
 // independently for ergonomics), so this helper deletes them explicitly.
 func (s *CognitoStore) DeletePool(ctx context.Context, poolID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if poolID == "" {
 		return false, errors.New("pool id required")
 	}
@@ -317,7 +323,7 @@ func (s *CognitoStore) UpsertClient(ctx context.Context, id, poolID, secret stri
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET secret = excluded.secret
 		WHERE clients.pool_id = excluded.pool_id
-	`, id, poolID, secret, time.Now().Unix())
+	`, id, poolID, secret, s.now().Unix())
 	if err != nil {
 		return err
 	}
@@ -333,6 +339,13 @@ func (s *CognitoStore) UpsertClient(ctx context.Context, id, poolID, secret stri
 
 // CognitoClient is a thin row representation of the clients table.
 type CognitoClient struct {
+	Name                string
+	CreatedAt           int64
+	ModifiedAt          int64
+	Native              bool
+	TokenValidity       *ClientTokenValidity
+	ReadAttributes      []string
+	WriteAttributes     []string
 	ID                  string
 	PoolID              string
 	Secret              string
@@ -344,12 +357,23 @@ type CognitoClient struct {
 // no such client exists. Used by InitiateAuth to resolve `ClientId` → pool.
 func (s *CognitoStore) LookupClient(ctx context.Context, id string) (*CognitoClient, error) {
 	var c CognitoClient
-	var flows sql.NullString
+	var flows, metadata sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, pool_id, secret,explicit_auth_flows,auth_session_validity FROM clients WHERE id = ?
-	`, id).Scan(&c.ID, &c.PoolID, &c.Secret, &flows, &c.AuthSessionValidity)
+		SELECT id, pool_id, secret,explicit_auth_flows,auth_session_validity,created_at,last_modified_at,metadata FROM clients WHERE id = ?
+	`, id).Scan(&c.ID, &c.PoolID, &c.Secret, &flows, &c.AuthSessionValidity, &c.CreatedAt, &c.ModifiedAt, &metadata)
 	if err != nil {
 		return nil, err
+	}
+	if metadata.Valid {
+		var config CognitoClient
+		if err := json.Unmarshal([]byte(metadata.String), &config); err != nil {
+			return nil, err
+		}
+		config.ID, config.PoolID, config.Secret, config.ExplicitAuthFlows, config.AuthSessionValidity, config.CreatedAt, config.ModifiedAt = c.ID, c.PoolID, c.Secret, c.ExplicitAuthFlows, c.AuthSessionValidity, c.CreatedAt, c.ModifiedAt
+		c = config
+	}
+	if c.ModifiedAt == 0 {
+		c.ModifiedAt = c.CreatedAt
 	}
 	if flows.Valid {
 		if err := json.Unmarshal([]byte(flows.String), &c.ExplicitAuthFlows); err != nil {
@@ -507,7 +531,7 @@ func (s *CognitoStore) RevokeRefreshToken(ctx context.Context, jti string) error
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO revoked_refresh_tokens (jti, revoked_at) VALUES (?, ?)
 		ON CONFLICT(jti) DO NOTHING
-	`, jti, time.Now().Unix())
+	`, jti, s.now().Unix())
 	return err
 }
 
@@ -545,7 +569,7 @@ func (s *CognitoStore) CreateUser(ctx context.Context, sub, poolID, email, passw
 		return err
 	}
 	username := normalizeSignIn(email, config)
-	now := time.Now().Unix()
+	now := s.now().Unix()
 	_, err = s.db.ExecContext(ctx, `INSERT INTO users
 		(sub,pool_id,username,username_key,email,password_hash,mfa_enabled,status,created_at,updated_at,password_changed_at)
 		VALUES (?,?,?,?,?,?,?,'CONFIRMED',?,?,?)`, sub, poolID, username, username, email, passwordHash, boolToInt(mfaEnabled), now, now, now)
@@ -662,7 +686,7 @@ func (s *CognitoStore) SetUserAttribute(ctx context.Context, sub, name, value st
 		}
 	}
 	if changed != 0 {
-		if _, err = tx.ExecContext(ctx, `UPDATE users SET updated_at=MAX(updated_at,?) WHERE sub=?`, time.Now().Unix(), sub); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE users SET updated_at=MAX(updated_at,?) WHERE sub=?`, s.now().Unix(), sub); err != nil {
 			return err
 		}
 	}
@@ -724,7 +748,7 @@ func (s *CognitoStore) CreateChallengeSessionWithState(ctx context.Context, sess
 	if stateJSON != "" && !json.Valid([]byte(stateJSON)) {
 		return errors.New("session state must be JSON")
 	}
-	now := time.Now().Unix()
+	now := s.now().Unix()
 	result, err := s.db.ExecContext(ctx, `INSERT INTO challenge_sessions
 		(session,sub,pool_id,client_id,challenge_name,used,created_at,expires_at,state_json,auth_version)
 		SELECT ?,sub,pool_id,?,?,0,?,?,?,auth_version FROM users WHERE sub=? AND pool_id=? AND enabled=1`, sessionID, clientID, challengeName, now, now+int64(ttl.Seconds()), stateJSON, sub, poolID)

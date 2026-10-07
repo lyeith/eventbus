@@ -23,7 +23,7 @@ func TestEventBusFailedHTTPDrainRetainsSQLite(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(entered)
 		<-release
-		handlerResult <- store.DB().PingContext(r.Context())
+		handlerResult <- readCognitoStore(r.Context(), store)
 		w.WriteHeader(http.StatusOK)
 	}))
 	clientDone := make(chan struct{})
@@ -47,7 +47,7 @@ func TestEventBusFailedHTTPDrainRetainsSQLite(t *testing.T) {
 	manager := newEventBusListener(server.Config, owned, 40*time.Millisecond)
 	require.ErrorIs(t, manager.Shutdown(context.Background()), errHTTPNotDrained)
 	require.ErrorIs(t, manager.Shutdown(context.Background()), errHTTPNotDrained, "failed drain must remain terminal")
-	require.NoError(t, store.DB().Ping(), "shutdown timeout must not close SQLite underneath a live handler")
+	require.NoError(t, readCognitoStore(context.Background(), store), "shutdown timeout must not close SQLite underneath a live handler")
 	require.False(t, triggerClosed, "failed HTTP drain must retain the trigger runtime")
 }
 
@@ -68,7 +68,7 @@ func TestEventBusJoinsBackgroundUsersBeforeClosingSQLite(t *testing.T) {
 	default:
 		t.Fatal("requeue not joined")
 	}
-	require.Error(t, store.DB().Ping(), "completed close must actually release the native SQLite connection")
+	require.Error(t, readCognitoStore(context.Background(), store), "completed close must actually release the native SQLite connection")
 	require.NoError(t, owned.Close(context.Background()))
 }
 
@@ -81,7 +81,7 @@ func TestEventBusFailedBackgroundJoinWithholdsStoreClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, owned.Close(ctx), context.DeadlineExceeded)
-	require.NoError(t, store.DB().Ping())
+	require.NoError(t, readCognitoStore(context.Background(), store))
 	close(notDone)
 	require.ErrorIs(t, owned.Close(context.Background()), context.DeadlineExceeded, "failed close must not turn into a success claim")
 }
@@ -97,7 +97,7 @@ func TestFirehoseFlushErrorDoesNotPreventIndependentSQLiteRelease(t *testing.T) 
 	owned := &eventBusLifecycle{store: store, firehose: fm}
 	err = owned.Close(context.Background())
 	require.Error(t, err)
-	require.Error(t, store.DB().Ping())
+	require.Error(t, readCognitoStore(context.Background(), store))
 	require.True(t, errors.Is(owned.Close(context.Background()), err))
 }
 
@@ -140,7 +140,7 @@ func TestTriggerLifecycleJoinsBeforeReleasingStoresAndCapture(t *testing.T) {
 			default:
 				return errors.New("worker not joined")
 			}
-			if err := store.DB().PingContext(ctx); err != nil {
+			if err := readCognitoStore(ctx, store); err != nil {
 				return err
 			}
 			close(entered)
@@ -156,11 +156,11 @@ func TestTriggerLifecycleJoinsBeforeReleasingStoresAndCapture(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- owned.Close(t.Context()) }()
 	<-entered
-	require.NoError(t, store.DB().Ping())
+	require.NoError(t, readCognitoStore(context.Background(), store))
 	require.False(t, captureClosed)
 	close(release)
 	require.NoError(t, <-result)
-	require.Error(t, store.DB().Ping())
+	require.Error(t, readCognitoStore(context.Background(), store))
 	require.True(t, captureClosed)
 	require.NoError(t, owned.Close(t.Context()))
 }
@@ -178,7 +178,7 @@ func TestFailedTriggerJoinRetainsStoresAndCapture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, owned.Close(ctx), context.DeadlineExceeded)
-	require.NoError(t, store.DB().Ping())
+	require.NoError(t, readCognitoStore(context.Background(), store))
 	require.False(t, captureClosed)
 	require.ErrorIs(t, owned.Close(t.Context()), context.DeadlineExceeded, "failed lifetime join must remain terminal")
 }
@@ -192,4 +192,10 @@ func TestSNSCaptureClosesWhenSESCloseFails(t *testing.T) {
 	}
 	require.ErrorIs(t, owned.Close(context.Background()), expected)
 	require.True(t, snsClosed)
+}
+
+// A domain read proves store lifetime without exporting its SQL handle.
+func readCognitoStore(ctx context.Context, store *cognito.CognitoStore) error {
+	_, err := store.PoolExists(ctx, "lifecycle-probe")
+	return err
 }

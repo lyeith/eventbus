@@ -4,10 +4,10 @@ package cognito
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"time"
 )
 
 const (
@@ -63,7 +63,7 @@ func (s *Handler) beginSRP(w http.ResponseWriter, r *http.Request, client *Cogni
 		cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", "SRP credentials are unavailable; provision or reset the user's password")
 		return
 	}
-	srp, err := newSRPChallenge(client.PoolID, user.Username, user.SRPSalt, user.SRPVerifier, a)
+	srp, err := newSRPChallengeWithEntropy(client.PoolID, user.Username, user.SRPSalt, user.SRPVerifier, a, rand.Reader, s.cognito.now().UTC())
 	if err != nil {
 		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "Invalid SRP_A")
 		return
@@ -280,7 +280,7 @@ func (s *Handler) respondStateChallenge(w http.ResponseWriter, r *http.Request, 
 	switch req.ChallengeName {
 	case "PASSWORD_VERIFIER":
 		responses := req.ChallengeResponses
-		if state.SRP == nil || state.SRP.Verify(responses["PASSWORD_CLAIM_SIGNATURE"], responses["PASSWORD_CLAIM_SECRET_BLOCK"], responses["TIMESTAMP"], time.Now()) != nil {
+		if state.SRP == nil || state.SRP.Verify(responses["PASSWORD_CLAIM_SIGNATURE"], responses["PASSWORD_CLAIM_SECRET_BLOCK"], responses["TIMESTAMP"], s.cognito.now()) != nil {
 			if state.Mode == "custom" {
 				state.History = append(state.History, challengeResult{Name: "PASSWORD_VERIFIER", Result: false})
 				s.advanceCustomAuth(w, r, client, user, state, req.ClientMetadata)
@@ -316,7 +316,12 @@ func (s *Handler) respondStateChallenge(w http.ResponseWriter, r *http.Request, 
 					return
 				}
 			}
-			s.issueStateChallenge(w, r, client, user, "NEW_PASSWORD_REQUIRED", newPasswordParameters(user), &state)
+			parameters, err := s.newPasswordParameters(r.Context(), user, client)
+			if err != nil {
+				authInternalError(w, err, "RespondToAuthChallenge")
+				return
+			}
+			s.issueStateChallenge(w, r, client, user, "NEW_PASSWORD_REQUIRED", parameters, &state)
 			return
 		}
 		if user.MFAEnabled {

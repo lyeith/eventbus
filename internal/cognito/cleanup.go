@@ -20,7 +20,7 @@ func StartChallengeCleanup(ctx context.Context, store *CognitoStore, interval ti
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				count, err := store.DeleteExpiredChallengeSessions(ctx, time.Now().Unix())
+				count, err := store.DeleteExpiredChallengeSessions(ctx, store.now().Unix())
 				if err != nil && ctx.Err() == nil {
 					log.Warn().Err(err).Msg("challenge_sessions cleanup failed")
 				} else if count > 0 {

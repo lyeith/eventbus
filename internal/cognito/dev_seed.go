@@ -5,6 +5,7 @@ package cognito
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,13 +39,18 @@ type CognitoSeedSignIn struct {
 }
 
 type CognitoSeedClient struct {
-	ID     string `yaml:"id"`
-	Secret string `yaml:"secret"`
+	ID                   string              `yaml:"id"`
+	Secret               string              `yaml:"secret"`
+	AccessTokenValidity  *int                `yaml:"access_token_validity"`
+	IdTokenValidity      *int                `yaml:"id_token_validity"`
+	RefreshTokenValidity *int                `yaml:"refresh_token_validity"`
+	TokenValidityUnits   *TokenValidityUnits `yaml:"token_validity_units"`
 }
 
 // CognitoSeedUser can supply a deterministic base32 TOTP secret. With a
 // secret, SOFTWARE_TOKEN_MFA validates real codes. Legacy fixtures without
-// one retain six-digit-code acceptance; custom auth requires enrolled TOTP.
+// one accept six-digit fixture codes only under the explicit legacy-fixtures
+// development profile; custom auth requires enrolled TOTP.
 type CognitoSeedUser struct {
 	Username   string            `yaml:"username"`
 	Enabled    *bool             `yaml:"enabled"`
@@ -131,7 +137,30 @@ func ApplyCognitoSeed(ctx context.Context, store *CognitoStore, seed *CognitoSee
 			if c.ID == "" {
 				return fmt.Errorf("pool %q: client id is required", pool.ID)
 			}
-			if err := store.UpsertClient(ctx, c.ID, pool.ID, c.Secret); err != nil {
+			request := clientValidityRequest{AccessTokenValidity: c.AccessTokenValidity, IdTokenValidity: c.IdTokenValidity, RefreshTokenValidity: c.RefreshTokenValidity, TokenValidityUnits: c.TokenValidityUnits}
+			var validity *ClientTokenValidity
+			if c.AccessTokenValidity != nil || c.IdTokenValidity != nil || c.RefreshTokenValidity != nil || c.TokenValidityUnits != nil {
+				var err error
+				validity, err = normalizeClientValidity(request)
+				if err != nil {
+					return fmt.Errorf("client %q token validity: %w", c.ID, err)
+				}
+			}
+			client, err := store.LookupClient(ctx, c.ID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("lookup client %q: %w", c.ID, err)
+			}
+			if client == nil {
+				client = &CognitoClient{ID: c.ID, PoolID: pool.ID, AuthSessionValidity: 3}
+			}
+			if client.PoolID != pool.ID {
+				return fmt.Errorf("client %q: %w", c.ID, errClientPoolConflict)
+			}
+			client.Secret = c.Secret
+			if validity != nil {
+				client.TokenValidity = validity
+			}
+			if err := store.SaveClient(ctx, client); err != nil {
 				return fmt.Errorf("upsert client %q: %w", c.ID, err)
 			}
 		}

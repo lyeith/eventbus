@@ -59,9 +59,8 @@ type JWKS struct {
 // EnsureSigningKey returns the existing pool key if one is persisted, else
 // generates and stores a new RSA-2048 pair atomically. The mutex on
 // CognitoStore protects against two concurrent first-use callers generating
-// duplicate keys for the same pool. The function also ensures the pool row
-// exists (creating it with a default region if absent) so signing works even
-// when an operator has not pre-seeded any pools.
+// duplicate keys for the same pool and against pool deletion. Key generation
+// never provisions resources; the native API or development seed owns pools.
 func (s *CognitoStore) EnsureSigningKey(ctx context.Context, poolID string) (*SigningKey, error) {
 	if poolID == "" {
 		return nil, errors.New("pool id required")
@@ -69,20 +68,14 @@ func (s *CognitoStore) EnsureSigningKey(ctx context.Context, poolID string) (*Si
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var parent string
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM pools WHERE id=?`, poolID).Scan(&parent); err != nil {
+		return nil, err
+	}
 	if key, err := s.loadSigningKeyLocked(ctx, poolID); err == nil {
 		return key, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
-	}
-
-	// Make sure the pool exists for the FK on signing_keys-adjacent flows
-	// (signing_keys itself has no FK, but downstream tables do).
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO pools (id, region, created_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(id) DO NOTHING
-	`, poolID, "us-east-1", time.Now().Unix()); err != nil {
-		return nil, fmt.Errorf("ensure pool row: %w", err)
 	}
 
 	priv, err := rsa.GenerateKey(rand.Reader, rsaKeySize)
@@ -105,7 +98,7 @@ func (s *CognitoStore) EnsureSigningKey(ctx context.Context, poolID string) (*Si
 		return nil, err
 	}
 
-	now := time.Now().Unix()
+	now := s.now().Unix()
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO signing_keys (pool_id, kid, private_pem, public_pem, created_at)
 		VALUES (?, ?, ?, ?, ?)
@@ -320,6 +313,7 @@ func VerifyAccessToken(ctx context.Context, store *CognitoStore, issuerBase, tok
 		func(t *jwt.Token) (interface{}, error) { return signing.Public, nil },
 		jwt.WithValidMethods([]string{"RS256"}),
 		jwt.WithIssuer(issRaw),
+		jwt.WithTimeFunc(store.now),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("verify: %w", err)
@@ -387,11 +381,6 @@ func (grant tokenGrant) valid() error {
 	return nil
 }
 
-// newTokenGrant starts a grant for an authentication happening now.
-func newTokenGrant() tokenGrant {
-	return tokenGrant{AuthTime: time.Now(), OriginJTI: newJTI()}
-}
-
 // SignAccessToken mints an RS256 access token for the given user/client. The
 // `iss` claim is `<issuerBase>/<poolID>` (matches what the JWKS path implies)
 // and `aud` is the client id the SDK called with. Required claims for the
@@ -429,7 +418,7 @@ func SignAccessToken(
 	if err != nil {
 		return "", fmt.Errorf("ensure signing key: %w", err)
 	}
-	now := time.Now()
+	now := store.now()
 	claims := jwt.MapClaims{
 		"sub":            sub,
 		"email":          user.Email,
@@ -444,6 +433,18 @@ func SignAccessToken(
 		"origin_jti":     grant.OriginJTI,
 		"jti":            newJTI(),
 		authVersionClaim: grant.AuthVersion,
+	}
+	client, err := store.LookupClient(ctx, clientID)
+	if err != nil {
+		return "", fmt.Errorf("load access token client: %w", err)
+	}
+	if client.PoolID != poolID {
+		return "", errors.New("client does not belong to token pool")
+	}
+	claims["scope"] = "aws.cognito.signin.user.admin"
+	if client.Native {
+		delete(claims, "email")
+		delete(claims, "aud")
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = signing.Kid
@@ -471,6 +472,21 @@ func SignIDToken(ctx context.Context, store *CognitoStore, issuerBase, poolID, c
 	if err != nil {
 		return "", fmt.Errorf("load ID token attributes: %w", err)
 	}
+	client, err := store.LookupClient(ctx, clientID)
+	if err != nil {
+		return "", fmt.Errorf("load ID token client: %w", err)
+	}
+	if client.PoolID != poolID {
+		return "", errors.New("client does not belong to token pool")
+	}
+	projected := client.Native || client.ReadAttributes != nil
+	if projected {
+		pool, err := store.LookupPool(ctx, poolID)
+		if err != nil {
+			return "", err
+		}
+		attributes = FilterClientReadAttributes(pool.SchemaAttributes, client.ReadAttributes, attributes)
+	}
 	signing, err := store.EnsureSigningKey(ctx, poolID)
 	if err != nil {
 		return "", fmt.Errorf("ensure signing key: %w", err)
@@ -486,10 +502,10 @@ func SignIDToken(ctx context.Context, store *CognitoStore, issuerBase, poolID, c
 			claims[name] = value
 		}
 	}
-	if user.Email != "" {
+	if user.Email != "" && !projected {
 		claims["email"] = user.Email
 	}
-	now := time.Now()
+	now := store.now()
 	for name, value := range (jwt.MapClaims{
 		"sub":              user.Sub,
 		"iss":              strings.TrimRight(issuerBase, "/") + "/" + poolID,
@@ -541,7 +557,7 @@ func SignRefreshToken(
 	if err != nil {
 		return "", fmt.Errorf("ensure signing key: %w", err)
 	}
-	now := time.Now()
+	now := store.now()
 	claims := jwt.MapClaims{
 		"sub":            sub,
 		"iss":            strings.TrimRight(issuerBase, "/") + "/" + poolID,
@@ -615,6 +631,7 @@ func VerifyRefreshToken(
 		func(t *jwt.Token) (interface{}, error) { return signing.Public, nil },
 		jwt.WithValidMethods([]string{"RS256"}),
 		jwt.WithIssuer(issRaw),
+		jwt.WithTimeFunc(store.now),
 		jwt.WithAudience(expectedClientID),
 	)
 	if err != nil {

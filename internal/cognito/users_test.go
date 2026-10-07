@@ -383,6 +383,7 @@ func TestGetUser_UserDeleted(t *testing.T) {
 func TestGetUser_WrongTokenUse(t *testing.T) {
 	_, ts, store := newCognitoTestServer(t)
 	const poolID = "local-pool-1"
+	require.NoError(t, store.UpsertPool(t.Context(), poolID, "us-east-1"))
 	signing, err := store.EnsureSigningKey(context.Background(), poolID)
 	require.NoError(t, err)
 

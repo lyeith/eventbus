@@ -3,6 +3,8 @@ package cognito
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -25,6 +27,11 @@ type TriggerInvoker interface {
 // Options configures token issuance. Non-positive TTLs use the service defaults.
 // Issuers are the trimmed base URL followed by the pool ID.
 type Options struct {
+	Region          string
+	AccountID       string
+	DevProfile      string
+	Clock           func() time.Time
+	Notifications   NotificationSink
 	IssuerBase      string
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
@@ -35,6 +42,10 @@ type Options struct {
 // The application drains HTTP and joins cleanup workers before closing the store.
 type Handler struct {
 	cognito         *CognitoStore
+	region          string
+	accountID       string
+	devProfile      string
+	notifications   NotificationSink
 	issuerBase      string
 	accessTokenTTL  time.Duration
 	refreshTokenTTL time.Duration
@@ -50,7 +61,19 @@ func NewHandler(store *CognitoStore, options Options) *Handler {
 	if options.RefreshTokenTTL <= 0 {
 		options.RefreshTokenTTL = defaultRefreshTokenTTL
 	}
+	if options.Region == "" {
+		options.Region = "us-east-1"
+	}
+	if options.AccountID == "" {
+		options.AccountID = "000000000000"
+	}
+	if store != nil && options.Clock != nil {
+		store.clockMu.Lock()
+		store.clock = options.Clock
+		store.clockMu.Unlock()
+	}
 	return &Handler{
+		region: options.Region, accountID: options.AccountID, devProfile: options.DevProfile, notifications: options.Notifications,
 		cognito:         store,
 		issuerBase:      strings.TrimRight(options.IssuerBase, "/"),
 		accessTokenTTL:  options.AccessTokenTTL,
@@ -78,6 +101,10 @@ func (s *Handler) ServeJWKS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := s.cognito.BuildJWKS(r.Context(), poolID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
 	if err != nil {
 		log.Error().Err(err).Str("pool", poolID).Msg("Failed to build JWKS")
 		http.Error(w, "failed to build JWKS", http.StatusInternalServerError)

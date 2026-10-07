@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,6 +71,7 @@ type javascriptFixture struct {
 	store                                           *cognito.CognitoStore
 	triggers                                        *cognitotrigger.Runner
 	capture                                         *ses.SESManager
+	clockOffset                                     atomic.Int64
 }
 
 func newJavascriptFixture(t *testing.T, node string) *javascriptFixture {
@@ -118,7 +120,7 @@ func (fixture *javascriptFixture) start(t *testing.T, defineModule string) {
 	require.NoError(t, err)
 	fixture.triggers = triggers
 	fixture.serving.Config.Handler = server.New(server.Services{
-		Cognito:     cognito.NewHandler(store, cognito.Options{IssuerBase: fixture.endpoint, Triggers: triggers}),
+		Cognito:     cognito.NewHandler(store, cognito.Options{DevProfile: cognito.DevProfileLegacyFixtures, IssuerBase: fixture.endpoint, Triggers: triggers, Clock: func() time.Time { return time.Now().Add(time.Duration(fixture.clockOffset.Load()) * time.Second) }}),
 		CognitoURLs: &server.CognitoURLs{Issuer: fixture.endpoint, JWKS: fixture.endpoint},
 		SES:         ses.NewHandler(fixture.capture),
 	})
@@ -173,14 +175,11 @@ func TestCognitoJavascriptSDKSmoke(t *testing.T) {
 			fixture.run(t, "lifecycle.mjs", "exercise")
 			fixture.run(t, "custom_auth.mjs", "exercise")
 			fixture.run(t, "custom_auth.mjs", "prepare-expiry")
-			result, err := fixture.store.DB().ExecContext(t.Context(),
-				`UPDATE challenge_sessions SET expires_at=? WHERE challenge_name='CUSTOM_CHALLENGE' AND used=0`,
-				time.Now().Add(-time.Minute).Unix())
-			require.NoError(t, err)
-			count, err := result.RowsAffected()
-			require.NoError(t, err)
-			require.Positive(t, count, "the fixture must expire an actual pending custom challenge")
+			// Advance the owned service clock beyond the native/legacy challenge
+			// lifetime; the SDK still submits the real pending signed session.
+			fixture.clockOffset.Store(6 * 60)
 			fixture.run(t, "custom_auth.mjs", "assert-expiry")
+			fixture.clockOffset.Store(0)
 			fixture.run(t, "custom_auth.mjs", "prepare-restart")
 			fixture.close(t)
 			fixture.start(t, "define.mjs")

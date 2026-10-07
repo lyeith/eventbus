@@ -57,3 +57,9 @@ func newOpaqueID() string {
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
+
+// DB exposes storage only to same-package tests. Production callers use domain operations.
+func (s *CognitoStore) DB() *sql.DB { return s.db }
+
+// Fixture grants use wall time; production issuance uses the store clock.
+func newTokenGrant() tokenGrant { return tokenGrant{AuthTime: time.Now(), OriginJTI: newJTI()} }

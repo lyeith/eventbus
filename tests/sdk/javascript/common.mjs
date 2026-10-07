@@ -57,7 +57,8 @@ export async function verifyTokens(result, state, { refresh = true } = {}) {
     assert.equal(claims.iss, `${endpoint}/${poolID}`);
     assert.equal(claims.sub, state.sub);
     assert.equal(claims.token_use, use);
-    assert.equal(claims.email, state.email);
+    if (use === "id") assert.equal(claims.email, state.email);
+    else assert.equal(claims.scope, "aws.cognito.signin.user.admin");
     assert.equal(use === "id" ? claims["cognito:username"] : claims.username, state.username);
     assert.equal(use === "id" ? claims.aud : claims.client_id, state.clientID);
     assert(claims.exp > Math.floor(Date.now() / 1000));

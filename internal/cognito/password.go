@@ -83,7 +83,7 @@ func (s *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	now := time.Now()
+	now := s.cognito.now()
 	if user.PasswordLockedUntil > now.Unix() {
 		cognitoJSONError(w, http.StatusBadRequest, "LimitExceededException",
 			"Attempt limit exceeded, please try after some time.")

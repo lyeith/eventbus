@@ -158,7 +158,7 @@ func (s *CognitoStore) CreateUserIdentity(ctx context.Context, poolID, username,
 	if poolID == "" || username == "" || plaintext == "" {
 		return nil, errors.New("pool, username and password required")
 	}
-	if status != "CONFIRMED" && status != "FORCE_CHANGE_PASSWORD" {
+	if status != "CONFIRMED" && status != "FORCE_CHANGE_PASSWORD" && status != "UNCONFIRMED" {
 		return nil, errors.New("unsupported user status")
 	}
 	config, err := s.GetPoolSignInConfig(ctx, poolID)
@@ -207,7 +207,7 @@ func (s *CognitoStore) CreateUserIdentity(ctx context.Context, poolID, username,
 			return nil, errEmailAliasExists
 		}
 	}
-	now := time.Now().Unix()
+	now := s.now().Unix()
 	_, err = tx.ExecContext(ctx, `INSERT INTO users(sub,pool_id,username,username_key,email,password_hash,status,created_at,updated_at,password_changed_at,srp_salt,srp_verifier)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, sub, poolID, username, username, email, hash, status, now, now, now, salt, verifier)
 	if err != nil {
@@ -265,7 +265,7 @@ func (s *CognitoStore) replaceUserPassword(ctx context.Context, sub, plaintext, 
 	}
 	query := `UPDATE users SET password_hash=?,srp_salt=?,srp_verifier=?,status=?,updated_at=MAX(updated_at,?),password_changed_at=?,
 	password_failures=0,password_locked_until=0,auth_version=auth_version+? WHERE sub=?`
-	arguments := []interface{}{hash, salt, verifier, status, time.Now().Unix(), time.Now().Unix(), revision, sub}
+	arguments := []interface{}{hash, salt, verifier, status, s.now().Unix(), s.now().Unix(), revision, sub}
 	if expectedVersion != nil {
 		query += ` AND enabled=1 AND auth_version=?`
 		arguments = append(arguments, *expectedVersion)
@@ -327,7 +327,7 @@ func (s *CognitoStore) SetUserEnabled(ctx context.Context, sub string, enabled b
 	if !enabled {
 		revision = 1
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE users SET enabled=?,updated_at=MAX(updated_at,?),auth_version=auth_version+? WHERE sub=?`, boolToInt(enabled), time.Now().Unix(), revision, sub); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET enabled=?,updated_at=MAX(updated_at,?),auth_version=auth_version+? WHERE sub=?`, boolToInt(enabled), s.now().Unix(), revision, sub); err != nil {
 		return err
 	}
 	if !enabled {
@@ -392,13 +392,13 @@ func (s *CognitoStore) ListPoolUsers(ctx context.Context, poolID string, options
 	if limit < 0 || limit > 60 {
 		return nil, "", &invalidUserListParameter{"Limit must be between 0 and 60"}
 	}
-	cursor := userListCursor{Version: 1, PoolID: poolID, Filter: options.Filter, Attributes: strings.Join(options.AttributesToGet, "\x00"), Limit: limit, Expires: time.Now().Add(time.Hour).Unix()}
+	cursor := userListCursor{Version: 1, PoolID: poolID, Filter: options.Filter, Attributes: strings.Join(options.AttributesToGet, "\x00"), Limit: limit, Expires: s.now().Add(time.Hour).Unix()}
 	if options.PaginationToken != "" {
 		data, err := base64.RawURLEncoding.DecodeString(options.PaginationToken)
 		if err != nil {
 			return nil, "", &invalidUserListParameter{"invalid pagination token"}
 		}
-		if err = json.Unmarshal(data, &cursor); err != nil || cursor.Version != 1 || cursor.PoolID != poolID || cursor.Filter != options.Filter || cursor.Attributes != strings.Join(options.AttributesToGet, "\x00") || cursor.Limit != limit || cursor.Expires < time.Now().Unix() {
+		if err = json.Unmarshal(data, &cursor); err != nil || cursor.Version != 1 || cursor.PoolID != poolID || cursor.Filter != options.Filter || cursor.Attributes != strings.Join(options.AttributesToGet, "\x00") || cursor.Limit != limit || cursor.Expires < s.now().Unix() {
 			return nil, "", &invalidUserListParameter{"invalid pagination token"}
 		}
 	}
@@ -455,7 +455,7 @@ func (s *CognitoStore) ListPoolUsers(ctx context.Context, poolID string, options
 func (s *CognitoStore) ConsumeChallengeSession(ctx context.Context, sessionID string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `UPDATE challenge_sessions SET used=1 WHERE session=? AND used=0 AND expires_at>?
 		AND EXISTS(SELECT 1 FROM users WHERE users.sub=challenge_sessions.sub AND users.pool_id=challenge_sessions.pool_id
-			AND users.enabled=1 AND users.auth_version=challenge_sessions.auth_version)`, sessionID, time.Now().Unix())
+			AND users.enabled=1 AND users.auth_version=challenge_sessions.auth_version)`, sessionID, s.now().Unix())
 	if err != nil {
 		return false, err
 	}

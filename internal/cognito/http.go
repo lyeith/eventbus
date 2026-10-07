@@ -3,6 +3,7 @@ package cognito
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -64,6 +65,30 @@ func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action str
 		handler = s.handleRespondToAuthChallenge
 	case "AdminInitiateAuth":
 		handler = s.handleAdminInitiateAuth
+	case "DescribeUserPool":
+		handler = s.handleDescribeUserPool
+	case "DescribeUserPoolClient":
+		handler = s.handleDescribeUserPoolClient
+	case "SignUp":
+		handler = s.handleSignUp
+	case "ConfirmSignUp":
+		handler = s.handleConfirmSignUp
+	case "AdminConfirmSignUp":
+		handler = s.handleAdminConfirmSignUp
+	case "ResendConfirmationCode":
+		handler = s.handleResendConfirmationCode
+	case "ForgotPassword":
+		handler = s.handleForgotPassword
+	case "ConfirmForgotPassword":
+		handler = s.handleConfirmForgotPassword
+	case "GetUserAttributeVerificationCode":
+		handler = s.handleGetUserAttributeVerificationCode
+	case "VerifyUserAttribute":
+		handler = s.handleVerifyUserAttribute
+	case "UpdateUserAttributes":
+		handler = s.handleUpdateUserAttributes
+	case "AdminUpdateUserAttributes":
+		handler = s.handleAdminUpdateUserAttributes
 	case "CreateUserPool":
 		handler = s.handleCreateUserPool
 	case "CreateUserPoolClient":
@@ -140,7 +165,12 @@ func readCognitoJSON(w http.ResponseWriter, r *http.Request, dst interface{}) bo
 		return true
 	}
 	if err := json.Unmarshal(body, dst); err != nil {
-		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "malformed JSON request body")
+		var capability *CapabilityError
+		if errors.As(err, &capability) {
+			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", capability.Error())
+		} else {
+			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "malformed JSON request body")
+		}
 		return false
 	}
 	return true

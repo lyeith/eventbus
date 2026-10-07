@@ -21,12 +21,13 @@ type cognitoAttribute struct {
 }
 
 type adminCreateUserRequest struct {
-	UserPoolID         string             `json:"UserPoolId"`
-	Username           string             `json:"Username"`
-	UserAttributes     []cognitoAttribute `json:"UserAttributes"`
-	MessageAction      string             `json:"MessageAction"`
-	TemporaryPassword  string             `json:"TemporaryPassword"`
-	ForceAliasCreation bool               `json:"ForceAliasCreation"`
+	UserPoolID             string             `json:"UserPoolId"`
+	Username               string             `json:"Username"`
+	UserAttributes         []cognitoAttribute `json:"UserAttributes"`
+	MessageAction          string             `json:"MessageAction"`
+	TemporaryPassword      string             `json:"TemporaryPassword"`
+	DesiredDeliveryMediums []string           `json:"DesiredDeliveryMediums"`
+	ForceAliasCreation     bool               `json:"ForceAliasCreation"`
 }
 
 type adminDeleteUserRequest struct {
@@ -98,6 +99,52 @@ func (s *Handler) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) 
 		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "ForceAliasCreation is not implemented by the local emulator")
 		return
 	}
+	pool, err := s.cognito.LookupPool(r.Context(), req.UserPoolID)
+	if err != nil {
+		authInternalError(w, err, "AdminCreateUser")
+		return
+	}
+	if pool.SchemaAttributes != nil {
+		if err = ValidateUserAttributes(pool.SchemaAttributes, nil, attributes, false, true, true); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+	}
+	if pool.Native || !s.allowLegacyFixturePool(pool) {
+		if err := validateInvitationMediums(req.DesiredDeliveryMediums); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+	}
+	deliver := req.MessageAction != "SUPPRESS" && (pool.Native || !s.allowLegacyFixturePool(pool))
+	var resendUser *CognitoUser
+	if deliver {
+		deliveryAttributes := attributes
+		if req.MessageAction == "RESEND" {
+			resendUser, err = s.cognito.LookupPoolUser(r.Context(), req.UserPoolID, req.Username)
+			if errors.Is(err, sql.ErrNoRows) {
+				cognitoJSONError(w, 400, "UserNotFoundException", "User does not exist")
+				return
+			}
+			if err != nil {
+				authInternalError(w, err, "AdminCreateUser")
+				return
+			}
+			deliveryAttributes, err = s.cognito.LoadUserAttributes(r.Context(), resendUser.Sub)
+			if err != nil {
+				authInternalError(w, err, "AdminCreateUser")
+				return
+			}
+		}
+		if err = validateInvitationDelivery(deliveryAttributes, req.DesiredDeliveryMediums); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		if s.notifications == nil {
+			writeWorkflowError(w, workflowCodeError("CodeDeliveryFailureException", "Invitation notification capture failed"))
+			return
+		}
+	}
 	policy, err := loadPoolPasswordPolicy(r.Context(), s.cognito, req.UserPoolID)
 	if err != nil {
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
@@ -117,7 +164,10 @@ func (s *Handler) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) 
 	}
 	var user *CognitoUser
 	if req.MessageAction == "RESEND" {
-		user, err = s.cognito.LookupPoolUser(r.Context(), req.UserPoolID, req.Username)
+		user = resendUser
+		if user == nil {
+			user, err = s.cognito.LookupPoolUser(r.Context(), req.UserPoolID, req.Username)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			cognitoJSONError(w, http.StatusBadRequest, "UserNotFoundException", "User does not exist")
 			return
@@ -148,8 +198,12 @@ func (s *Handler) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) 
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		return
 	}
-	// The emulator does not deliver Cognito invitation notifications; SUPPRESS
-	// therefore has no external or capture effect. Apps own their mail scenarios.
+	if deliver {
+		if err = s.deliverInvitation(r.Context(), "", user, password, req.DesiredDeliveryMediums); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+	}
 	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{"User": body})
 }
 
@@ -183,7 +237,7 @@ func (s *Handler) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	if !readCognitoJSON(w, r, &req) {
 		return
 	}
-	user, ok := s.authorizeAccessToken(w, r, req.AccessToken, "GetUser")
+	user, client, ok := s.authorizeClientAccessToken(w, r, req.AccessToken, "GetUser")
 	if !ok {
 		return
 	}
@@ -191,6 +245,14 @@ func (s *Handler) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		return
+	}
+	if client.Native || client.ReadAttributes != nil {
+		pool, err := s.cognito.LookupPool(r.Context(), user.PoolID)
+		if err != nil {
+			authInternalError(w, err, "GetUser")
+			return
+		}
+		attributes = FilterClientReadAttributes(pool.SchemaAttributes, client.ReadAttributes, attributes)
 	}
 	body := map[string]interface{}{"Username": user.Username, "UserAttributes": orderedAttributes(attributes)}
 	if user.MFAEnabled {

@@ -246,6 +246,8 @@ func TestRespondToAuthChallenge_NewPasswordRequired_HappyPath(t *testing.T) {
 	sub, err := store.UpsertUser(ctx, poolID, email, string(hash), false)
 	require.NoError(t, err)
 
+	// A NEW_PASSWORD_REQUIRED session belongs to an invited account.
+	require.NoError(t, store.SetUserPassword(ctx, sub, oldPassword, "FORCE_CHANGE_PASSWORD"))
 	// Pre-populate a NEW_PASSWORD_REQUIRED session row.
 	session := seedSessionRow(t, store, sub, poolID, clientID, "NEW_PASSWORD_REQUIRED", time.Minute)
 

@@ -19,11 +19,13 @@ import (
 // If `secret` is empty, returns errFallbackToAnyDigits — caller should
 // degrade to the "any 6 digits" path for the cheap dev case where no
 // totp_secret is enrolled.
-func validateTOTPCode(secret, code string) error {
+func validateTOTPCode(secret, code string) error { return validateTOTPCodeAt(secret, code, time.Now()) }
+
+func validateTOTPCodeAt(secret, code string, now time.Time) error {
 	if secret == "" {
 		return errFallbackToAnyDigits
 	}
-	ok, err := totp.ValidateCustom(code, secret, time.Now(), totp.ValidateOpts{
+	ok, err := totp.ValidateCustom(code, secret, now, totp.ValidateOpts{
 		Period:    30,
 		Skew:      1,
 		Digits:    otp.DigitsSix,

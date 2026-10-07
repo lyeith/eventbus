@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 )
 
 // UpsertSeedUser preserves identity and lifecycle state when reapplying the
@@ -63,7 +62,7 @@ func (s *CognitoStore) UpsertSeedUser(ctx context.Context, poolID, username, ema
 			return "", err
 		}
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE users SET mfa_enabled=?,updated_at=MAX(updated_at,?) WHERE sub=? AND mfa_enabled!=?`, boolToInt(mfaEnabled), time.Now().Unix(), user.Sub, boolToInt(mfaEnabled))
+	_, err = s.db.ExecContext(ctx, `UPDATE users SET mfa_enabled=?,updated_at=MAX(updated_at,?) WHERE sub=? AND mfa_enabled!=?`, boolToInt(mfaEnabled), s.now().Unix(), user.Sub, boolToInt(mfaEnabled))
 
 	return user.Sub, err
 }
