@@ -245,6 +245,16 @@ func (m *SESManager) sendV1(action string, input map[string]any) (sesSendResult,
 		if apiErr != nil {
 			return sesSendResult{}, apiErr
 		}
+		configurationSet := sesString(input["ConfigurationSetName"])
+		// SendRawEmail's API selector takes precedence over the MIME header.
+		// Select from parsed headers without rewriting the submitted request.
+		// https://aws.amazon.com/blogs/messaging-and-targeting/introducing-sending-metrics/
+		if _, provided := input["ConfigurationSetName"]; !provided {
+			configurationSet = sesString(metadata["configuration_set"])
+			if apiErr := m.checkConfigurationSet("v1", configurationSet); apiErr != nil {
+				return sesSendResult{}, apiErr
+			}
+		}
 		source := sesString(input["Source"])
 		if source == "" {
 			source = sesString(metadata["from"])
@@ -266,6 +276,7 @@ func (m *SESManager) sendV1(action string, input map[string]any) (sesSendResult,
 		email["from"] = source
 		email["subject"] = metadata["subject"]
 		email["headers"] = metadata["headers"]
+		email["configuration_set"] = configurationSet
 		email["request_content_path"] = "RawMessage.Data"
 		return sesV1Success(email), nil
 	case "SendTemplatedEmail":

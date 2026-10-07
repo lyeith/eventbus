@@ -82,7 +82,7 @@ func sesValidateRaw(api, encoded string, limit int64) (map[string]any, *sesAPIEr
 	if decoded, err := (&mime.WordDecoder{}).DecodeHeader(subject); err == nil {
 		subject = decoded
 	}
-	return map[string]any{"from": from.Address, "destination": destination, "subject": subject, "headers": headers}, nil
+	return map[string]any{"from": from.Address, "destination": destination, "subject": subject, "headers": headers, "configuration_set": message.Header.Get("X-SES-CONFIGURATION-SET")}, nil
 }
 
 type sesUnsupportedAttachmentError string

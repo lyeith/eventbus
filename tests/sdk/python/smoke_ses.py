@@ -99,6 +99,8 @@ def invoke(client, api: str, operation: str, params: dict, *, error: str | None 
         result = getattr(client, name)(**params)
     except ClientError as exc:
         assert error is not None, (api, operation, exc.response)
+        if error == "ConfigurationSetDoesNotExist":
+            assert isinstance(exc, client.exceptions.ConfigurationSetDoesNotExistException), type(exc)
         result = exc.response
         assert result["Error"]["Code"] == error, result
         assert result["ResponseMetadata"]["HTTPStatusCode"] == status, result
@@ -136,6 +138,37 @@ def invoke(client, api: str, operation: str, params: dict, *, error: str | None 
     return result, record
 
 
+def raw_configuration_suite(v1):
+    # Real frozen boto3 bytes serialization, with no application/header rewrite.
+    # The API selector wins when both selectors are supplied (AWS SES team):
+    # https://aws.amazon.com/blogs/messaging-and-targeting/introducing-sending-metrics/
+    cases = [
+        (b"X-SES-CONFIGURATION-SET: sdk-header-config\r\n", {}, "sdk-header-config", None),
+        (b"x-sEs-cOnFiGuRaTiOn-SeT: sdk-header-config\r\n", {}, "sdk-header-config", None),
+        (b"X-SES-CONFIGURATION-SET:\r\n\tsdk-header-config\r\n", {}, "sdk-header-config", None),
+        (b"", {}, "", None),
+        (b"", {"ConfigurationSetName": "sdk-config"}, "sdk-config", None),
+        (b"X-SES-CONFIGURATION-SET: sdk-header-config\r\n", {"ConfigurationSetName": "sdk-config"}, "sdk-config", None),
+        (b"X-SES-CONFIGURATION-SET: absent-header\r\n", {"ConfigurationSetName": "sdk-config"}, "sdk-config", None),
+        (b"X-SES-CONFIGURATION-SET: absent-header\r\n", {}, None, "ConfigurationSetDoesNotExist"),
+        (b"X-SES-CONFIGURATION-SET: sdk-header-config\r\n", {"ConfigurationSetName": "absent-api"}, None, "ConfigurationSetDoesNotExist"),
+    ]
+    for header, selector, effective, error in cases:
+        submitted = header + RAW
+        params = {"RawMessage": {"Data": submitted}, **selector}
+        _, record = invoke(v1, "ses", "SendRawEmail", params, error=error)
+        assert base64.b64decode(record["request"]["RawMessage"]["Data"]) == submitted, record
+        assert ("ConfigurationSetName" in record["request"]) == ("ConfigurationSetName" in selector), record
+        if error:
+            assert not record["emails"], record
+        else:
+            email = record["emails"][0]
+            assert email["configuration_set"] == effective, record
+            assert email["request_content_path"] == "RawMessage.Data", record
+            if header:
+                assert email["headers"]["X-Ses-Configuration-Set"], record
+
+
 def full_suite(v1, v2):
     simple = {
         "Source": SENDER,
@@ -169,6 +202,8 @@ def full_suite(v1, v2):
     }
     _, record = invoke(v1, "ses", "SendRawEmail", raw_params)
     assert base64.b64decode(record["request"]["RawMessage"]["Data"]) == RAW
+    assert record["emails"][0]["configuration_set"] == "sdk-config", record
+    raw_configuration_suite(v1)
     template = {key: item for key, item in simple.items() if key != "Message"}
     template.update(Template="welcome", TemplateArn=TEMPLATE_ARN, TemplateData=json.dumps({"name": "A \u03c0 & B"}))
     invoke(v1, "ses", "SendTemplatedEmail", template)

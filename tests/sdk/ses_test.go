@@ -22,9 +22,6 @@ func TestSESSDKSmoke(t *testing.T) {
 			capturePath := filepath.Join(t.TempDir(), "ses.jsonl")
 			capture, err := ses.OpenSESCapture(capturePath)
 			require.NoError(t, err)
-			t.Cleanup(func() {
-				require.NoError(t, capture.Close())
-			})
 			enabled := mode != "disabled"
 			fixtures := ses.SESFixtures{
 				Templates: map[string]ses.SESTemplate{
@@ -39,7 +36,7 @@ func TestSESSDKSmoke(t *testing.T) {
 						FailureRedirectionURL: "https://example.test/failure",
 					},
 				},
-				ConfigurationSets:         []string{"sdk-config"},
+				ConfigurationSets:         []string{"sdk-config", "sdk-header-config"},
 				VerifiedIdentities:        []string{"example.test"},
 				RequireVerifiedIdentities: true,
 				SendingEnabled:            &enabled,
@@ -56,7 +53,12 @@ func TestSESSDKSmoke(t *testing.T) {
 					},
 				},
 			}
-			router := server.New(server.Services{SES: ses.NewHandler(ses.NewSESManager(fixtures, capture)), QueryBodyLimit: ses.QueryBodyLimit})
+			manager := ses.NewSESManager(fixtures, capture)
+			// Cleanup runs in reverse order: the HTTP listener drains first and
+			// the SES owner then joins/syncs its capture. The SDK process is joined
+			// before these cleanup callbacks run.
+			t.Cleanup(func() { require.NoError(t, manager.Close()) })
+			router := server.New(server.Services{SES: ses.NewHandler(manager), QueryBodyLimit: ses.QueryBodyLimit})
 			serving := httptest.NewServer(router)
 			t.Cleanup(serving.Close)
 
