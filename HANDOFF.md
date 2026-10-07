@@ -1,8 +1,10 @@
 # Handoff
 
-Tickets #13–#15 are implemented and reviewed; preparing v0.6.0.
+Tickets #13–#15 are implemented, reviewed, closed and published in v0.6.0:
+https://github.com/lyeith/eventbus/releases/tag/v0.6.0
+Release source/tag: 32142a3f23c312e3eb972b5fe9cc1235d5e4d39c.
 Canonical checkout: SSD /home/spite/Projects/eventbus, main.
-Latest public release remains v0.5.1 until publication verification finishes.
+Public/latest release: v0.6.0, 2026-10-07, nine assets.
 No developer stack, Plans pin or identity database changed.
 
 #13: SNS uses its LambdaDelivery port, app adapts the registered Lambda Admit
@@ -34,14 +36,25 @@ Verification logs under SSD /tmp, governed by existing finite retention:
 - eventbus-mappings-final-core-race.log: final mappings pass (1.062s).
 - eventbus-mappings-final-sdk-race.log: final actual mapping proof PASS (11.909s);
   ssd-dev finalization hit transient EAGAIN after the successful child exit. Exact
-  run b6139df94ec046ecb90dcbc6615b8c64 inspected inactive/quiescent; owned cleanup
-  is pending release finishing. No rerun is needed to reinterpret the test result.
+  run b6139df94ec046ecb90dcbc6615b8c64 inspected inactive/quiescent; its empty
+  owned scratch was removed. The test output and resource barrier are verified.
 - eventbus-eventsource-agent-concurrent-close-race.log: full suite x50 (2.612s).
 - eventbus-delivery-final-vet.log and eventbus-delivery-sdk-fixtures.log pass.
 - npm ci passed with exact approved test-only Express/Swagger locks.
 Read-only final ownership review found no remaining issues.
 
-Next: publish both service/gateway for Linux/macOS amd64/arm64 + SHA256SUMS;
-verify native Linux/macOS artifacts and downloaded manifest before making release
-latest, clean staging and record actual source/tag/publication.
-Other targets will be cross-built, not executed. Service guides state all limits.
+Release verification completed:
+- scripts/build-release.sh built eight CGO-free artifacts from clean v0.6.0.
+  All embed the tag version, source revision and correct target metadata.
+- Packaged Linux amd64 and macOS arm64 passed actual SNS alias/SQS mapping
+  side effects and acknowledgment, SQLite create/describe, gateway 1.0/2.0
+  slash/query/assets/binary/private routing/readiness and collision refusal.
+  Other targets were cross-built, not executed. Simple artifact fixtures supplement
+  the unchanged Express/Swagger source proof, without a live AWS parity claim.
+- Downloaded all nine GitHub assets, verified SHA256SUMS and exact manifest before
+  publication. Public/latest, non-draft, nine assets and source/tag verified.
+- Source/main pushed; GitHub has no open issues. Release/download/laptop staging,
+  temporary smoke scripts and owned fixture state/processes removed. No hold.
+Logs: eventbus-v0.6.0-{build,artifact-smoke,macos-artifact-smoke,metadata}.log
+and eventbus-v0.6.0-publication.json, governed by finite SSD /tmp retention.
+Next: consuming-application acceptance; guides state exact remaining limits.

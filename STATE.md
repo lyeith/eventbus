@@ -2,7 +2,9 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD, main.
 Public MIT repository: https://github.com/lyeith/eventbus.
-Latest public release is v0.5.1; v0.6.0 is prepared for publication.
+Latest public release: v0.6.0, published 2026-10-07.
+Source/tag: 32142a3f23c312e3eb972b5fe9cc1235d5e4d39c.
+Nine assets: service/gateway Linux/macOS amd64/arm64 and SHA256SUMS.
 Plans pins and developer stacks remain untouched.
 
 Tickets #13–#15 are implemented and verified on main:
@@ -33,9 +35,15 @@ Read-only ownership review has no remaining bounded findings.
 Approved test-only Express 5.2.1 and swagger-ui-express 5.0.1 are pinned in the
 existing npm lane. No emulator dependency added. Ordinary tests need no SDK deps.
 
-Next: publish v0.6.0 from clean source, verify packaged Linux amd64/macOS arm64
-and downloaded release checksums, remove owned artifact/fixture staging, then
-record actual publication. Other architectures are cross-built only.
+Packaged Linux amd64 and macOS arm64 passed native delivery/SQLite plus gateway
+slash/query/assets/private-route/readiness checks. Other targets are cross-built.
+All eight clean artifact identities and all downloaded GitHub checksums verified;
+release is public/latest, #13–#15 are closed, main is pushed. Artifact staging,
+fixture scripts/state and processes are cleaned on both hosts. The transient
+ssd-dev finalization failure had no live owner; its empty scratch was removed.
+Evidence follows existing finite SSD /tmp retention. No temporary resource held.
+
+Next: consuming-application acceptance. Service guides state supported limits.
 Native mappings are single-record/in-memory/local-only; broader batching,
 List/Update/filter/concurrency/partial responses remain unsupported and explicit.
 SNS production admission retry infrastructure and durable async recovery remain
