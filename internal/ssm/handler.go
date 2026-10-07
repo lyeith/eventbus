@@ -1,158 +1,210 @@
 package ssm
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/lyeith/eventbus/internal/awsprotocol"
+	"github.com/rs/zerolog/log"
 )
 
-// maxJSONRequestBytes retains this adapter's existing local transport budget.
+// The transport budget is separate from Standard parameters' 4 KiB values.
+// Escaped JSON can be larger than the decoded native value.
 const maxJSONRequestBytes int64 = 1 << 20
 
-// Handler owns the Parameter Store AWS JSON adapter.
-type Handler struct {
-	ssm *SSMStore
-}
+type Handler struct{ ssm *SSMStore }
 
-func NewHandler(store *SSMStore) *Handler {
-	return &Handler{ssm: store}
-}
+func NewHandler(store *SSMStore) *Handler { return &Handler{ssm: store} }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.ServeAction(w, r, awsprotocol.TargetAction(r.Header.Get("X-Amz-Target")))
+	prefix, action, found := strings.Cut(r.Header.Get("X-Amz-Target"), ".")
+	if !found || prefix != "AmazonSSM" || action == "" {
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "UnknownOperationException", "Unknown Systems Manager target")
+		return
+	}
+	h.ServeAction(w, r, action)
 }
 
-func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action string) {
+func (h *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action string) {
 	log.Debug().Str("action", action).Msg("SSM JSON API request")
-
 	switch action {
 	case "PutParameter":
-		s.handleSSMPutParameter(w, r)
+		h.putParameter(w, r)
 	case "GetParameter":
-		s.handleSSMGetParameter(w, r)
+		h.getParameter(w, r)
 	case "GetParametersByPath":
-		s.handleSSMGetParametersByPath(w, r)
+		h.getParametersByPath(w, r)
 	case "DeleteParameter":
-		s.handleSSMDeleteParameter(w, r)
+		h.deleteParameter(w, r)
 	default:
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidAction", fmt.Sprintf("Unknown SSM action: %s", action))
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "UnknownOperationException", fmt.Sprintf("Unknown SSM action: %s", action))
 	}
 }
 
-func (s *Handler) handleSSMPutParameter(w http.ResponseWriter, r *http.Request) {
+// ReadJSONBody owns the bounded read and object requirement. Typed request
+// decoding rejects wrong option types rather than silently treating them as zero.
+func readRequest(w http.ResponseWriter, r *http.Request, request interface{}) bool {
 	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
+	if err == nil {
+		var encoded []byte
+		encoded, err = json.Marshal(data)
+		if err == nil {
+			err = json.Unmarshal(encoded, request)
+		}
+	}
 	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
+		awsprotocol.JSON11.Error(w, http.StatusBadRequest, "SerializationException", "Invalid JSON request body")
+		return false
+	}
+	return true
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	code, message := parameterErrorCode(err)
+	status := http.StatusBadRequest
+	if code == "InternalServerError" {
+		status = http.StatusInternalServerError
+	}
+	awsprotocol.JSON11.Error(w, status, code, message)
+}
+
+type putParameterRequest struct {
+	Name           string
+	Value          string
+	Type           string
+	Overwrite      bool
+	Description    *string
+	AllowedPattern string
+	KeyID          string `json:"KeyId"`
+	DataType       string
+	Tier           string
+	Policies       string
+	Tags           []json.RawMessage
+}
+
+func (h *Handler) putParameter(w http.ResponseWriter, r *http.Request) {
+	var request putParameterRequest
+	if !readRequest(w, r, &request) {
 		return
 	}
-
-	name, _ := data["Name"].(string)
-	value, _ := data["Value"].(string)
-	paramType, _ := data["Type"].(string)
-	overwrite, _ := data["Overwrite"].(bool)
-
-	if name == "" || value == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "Name and Value are required")
+	if request.AllowedPattern != "" || request.KeyID != "" && request.KeyID != "alias/aws/ssm" ||
+		request.DataType != "" && request.DataType != "text" || request.Tier != "" && request.Tier != "Standard" ||
+		request.Policies != "" && strings.TrimSpace(request.Policies) != "[]" || len(request.Tags) > 0 {
+		writeError(w, newParameterError("ValidationException", "AllowedPattern, custom KMS keys, non-text DataType, advanced tiers, parameter policies and tags are not supported"))
 		return
 	}
-	if paramType == "" {
-		paramType = "String"
-	}
-
-	err = s.ssm.PutParameter(name, value, paramType, overwrite)
+	parameter := SSMParameter{Name: request.Name, Value: request.Value, Type: request.Type, DataType: request.DataType}
+	result, err := h.ssm.putParameterValue(parameter, request.Overwrite, request.Description)
 	if err != nil {
-		if strings.Contains(err.Error(), "ParameterAlreadyExists") {
-			awsprotocol.JSONError(w, http.StatusBadRequest, "ParameterAlreadyExists", "Parameter already exists: "+name)
+		writeError(w, err)
+		return
+	}
+	log.Debug().Str("name", result.Name).Msg("SSM parameter stored")
+	awsprotocol.JSON11.Response(w, http.StatusOK, map[string]interface{}{"Version": result.Version, "Tier": "Standard"})
+}
+
+type getParameterRequest struct {
+	Name           string
+	WithDecryption bool
+}
+
+func (h *Handler) getParameter(w http.ResponseWriter, r *http.Request) {
+	var request getParameterRequest
+	if !readRequest(w, r, &request) {
+		return
+	}
+	name, version, selector, err := parameterSelector(request.Name)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	parameter, err := h.ssm.GetParameterValue(name, version, request.WithDecryption)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := parameterResponse(parameter)
+	if selector != "" {
+		out["Selector"] = selector
+	}
+	awsprotocol.JSON11.Response(w, http.StatusOK, map[string]interface{}{"Parameter": out})
+}
+
+type getParametersByPathRequest struct {
+	Path             string
+	Recursive        bool
+	WithDecryption   bool
+	MaxResults       *int
+	NextToken        string
+	ParameterFilters []json.RawMessage
+}
+
+func (h *Handler) getParametersByPath(w http.ResponseWriter, r *http.Request) {
+	var request getParametersByPathRequest
+	if !readRequest(w, r, &request) {
+		return
+	}
+	path := strings.TrimSpace(request.Path)
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
+		writeError(w, newParameterError("ValidationException", "Path must begin with /"))
+		return
+	}
+	path = canonicalPath(path)
+	if path != "/" {
+		if _, err := validateParameterName(path); err != nil {
+			writeError(w, err)
 			return
 		}
-		awsprotocol.JSONError(w, http.StatusInternalServerError, "InternalError", err.Error())
+	}
+	if len(request.ParameterFilters) > 0 {
+		writeError(w, newParameterError("ValidationException", "ParameterFilters are not supported"))
 		return
 	}
-
-	log.Debug().Str("name", name).Msg("SSM parameter stored")
-
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{
-		"Version": 1,
-		"Tier":    "Standard",
-	})
+	maxResults := 10
+	if request.MaxResults != nil {
+		maxResults = *request.MaxResults
+	}
+	parameters, token, err := h.ssm.ListParametersByPath(path, request.Recursive, request.WithDecryption, maxResults, request.NextToken)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	list := make([]map[string]interface{}, 0, len(parameters))
+	for _, parameter := range parameters {
+		list = append(list, parameterResponse(parameter))
+	}
+	out := map[string]interface{}{"Parameters": list}
+	if token != "" {
+		out["NextToken"] = token
+	}
+	awsprotocol.JSON11.Response(w, http.StatusOK, out)
 }
 
-func (s *Handler) handleSSMGetParameter(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
-		return
+func parameterResponse(parameter *SSMParameter) map[string]interface{} {
+	return map[string]interface{}{
+		"Name": parameter.Name, "Value": parameter.Value, "Type": parameter.Type,
+		"Version": parameter.Version, "DataType": parameter.DataType,
+		"LastModifiedDate": float64(parameter.LastModifiedDate.UnixMicro()) / 1e6,
 	}
-
-	name, _ := data["Name"].(string)
-	if name == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "Name is required")
-		return
-	}
-
-	param, err := s.ssm.GetParameter(name)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "ParameterNotFound", "Parameter not found: "+name)
-		return
-	}
-
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{
-		"Parameter": map[string]interface{}{
-			"Name":    param.Name,
-			"Type":    param.Type,
-			"Value":   param.Value,
-			"Version": 1,
-		},
-	})
 }
 
-func (s *Handler) handleSSMGetParametersByPath(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
+type deleteParameterRequest struct{ Name string }
+
+func (h *Handler) deleteParameter(w http.ResponseWriter, r *http.Request) {
+	var request deleteParameterRequest
+	if !readRequest(w, r, &request) {
+		return
+	}
+	name, err := validateParameterName(request.Name)
 	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
+		writeError(w, err)
 		return
 	}
-
-	path, _ := data["Path"].(string)
-	if path == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "Path is required")
+	if !h.ssm.DeleteParameterIfExists(name) {
+		writeError(w, errParameterNotFound)
 		return
 	}
-
-	params := s.ssm.GetParametersByPath(path)
-
-	paramList := make([]map[string]interface{}, 0, len(params))
-	for _, p := range params {
-		paramList = append(paramList, map[string]interface{}{
-			"Name":    p.Name,
-			"Type":    p.Type,
-			"Value":   p.Value,
-			"Version": 1,
-		})
-	}
-
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{
-		"Parameters": paramList,
-	})
-}
-
-func (s *Handler) handleSSMDeleteParameter(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
-	if err != nil {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
-		return
-	}
-
-	name, _ := data["Name"].(string)
-	if name == "" {
-		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidParameter", "Name is required")
-		return
-	}
-
-	s.ssm.DeleteParameter(name)
-	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{})
+	awsprotocol.JSON11.Response(w, http.StatusOK, map[string]interface{}{})
 }

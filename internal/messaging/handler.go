@@ -32,6 +32,7 @@ func (s *Handler) ServeQuery(w http.ResponseWriter, r *http.Request, action stri
 		return
 	}
 	if !s.serveSNSQuery(w, r, action) {
-		awsprotocol.XMLError(w, http.StatusBadRequest, "InvalidAction", fmt.Sprintf("Unknown action: %s", action))
+		namespace, _ := awsprotocol.QueryNamespace(version)
+		awsprotocol.QueryError(w, http.StatusBadRequest, namespace, "InvalidAction", fmt.Sprintf("Unknown action: %s", action))
 	}
 }

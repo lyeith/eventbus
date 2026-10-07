@@ -37,7 +37,7 @@ func (s *Handler) serveSQSQuery(w http.ResponseWriter, r *http.Request, action s
 		encodeSQSXMLMap(&body, result, action)
 		fmt.Fprintf(&body, "</%sResult>", action)
 	}
-	fmt.Fprintf(&body, "<ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></%sResponse>", awsprotocol.RequestID(), action)
+	fmt.Fprintf(&body, "<ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></%sResponse>", awsprotocol.EnsureRequestID(w), action)
 	awsprotocol.XMLResponse(w, http.StatusOK, body.String())
 }
 func parseSQSQuery(form url.Values, action string) (sqsRequest, *sqsError) {
