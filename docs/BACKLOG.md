@@ -2,7 +2,7 @@
 
 ## Completed ticket scope
 
-Tickets #2–#17 and recorded ownership-review findings have
+Tickets #2–#23 and recorded ownership-review findings have
 accepted implementations with race, SDK and native delivery evidence.
 [Issue triage](ISSUE-TRIAGE.md) records bounded scope, owners and dependencies.
 The service guides state supported contracts and remaining capability limits.
@@ -24,7 +24,7 @@ retains dirty state. No automatic reset or application cleanup is included.
 [HANDOFF](../HANDOFF.md) records the combined race and real SDK acceptance.
 The completed native #2–#16 scope remains separate.
 
-## Accepted, awaiting publication: full retained application owners
+## Released in v0.8.0: full retained application owners
 
 [#18](https://github.com/lyeith/eventbus/issues/18) extends the [retained profile](RETAINED-OWNER.md)
 to native mapping custody, Scheduler, Cognito runners, Firehose and shared gateway
@@ -33,35 +33,35 @@ another explicit join before fixture assertions/resume. Native resources are
 paused/reused, not recreated; auth settings and payloads stay unchanged.
 Applications own cleanup effects.
 Implemented in commit `973e5f1`, with app and native SDK/RustFS race acceptance.
-Publication is pending; [HANDOFF](../HANDOFF.md) records verification.
+Released in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0); [HANDOFF](../HANDOFF.md) records verification.
 Actual consuming-application cleanup acceptance belongs in that application's tests.
 
-## Accepted, awaiting publication: handler-issued SQS deletion and mapping ACK
+## Released in v0.8.0: handler-issued SQS deletion and mapping ACK
 
 [#20](https://github.com/lyeith/eventbus/issues/20) corrects mapping completion after
 native handler deletion, using queue-owned proof of actual original-receipt
 settlement. Whole-batch execution/join and stale-lease safety remain unchanged;
 see [Messaging](MESSAGING.md#native-mapping-receipt-settlement). Native SDK acceptance
 passed, including mixed batch-five settlement, FIFO, durable SQLite effects and
-real queue recreation. Publication is pending; [HANDOFF](../HANDOFF.md) records
+real queue recreation. Released in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0); [HANDOFF](../HANDOFF.md) records
 verification.
 
-## SDK accepted, awaiting publication: native delivery evidence and diagnostics
+## Released in v0.8.0: native delivery evidence and diagnostics
 
 [#21](https://github.com/lyeith/eventbus/issues/21) adds [correlated SQS delivery](EVENT-SOURCES.md#correlated-delivery-evidence);
 [#22](https://github.com/lyeith/eventbus/issues/22) retains [private Lambda diagnostics](LAMBDA.md#private-invocation-diagnostics).
 The actual SDK normal/race and tagged vet lane passed: HTTP producer/native
 consumer lineage, manual deletion followed by blocked child work, same-mapping
 second suite, retries/timeouts, sentinels and caught business failures with
-successful runtime terminals. Publication and final verification
+successful runtime terminals. Release v0.8.0 and final verification
 are recorded in [HANDOFF](../HANDOFF.md).
 
-## Accepted, awaiting publication: raw SES configuration-set header
+## Released in v0.8.0: raw SES configuration-set header
 
 [#23](https://github.com/lyeith/eventbus/issues/23) fixes native header-only
 `SendRawEmail` selection/validation, API precedence and truthful effective
 capture while preserving original MIME submission. See [SES](SES.md#raw-configuration-set-selection).
-Focused protocol, full SES race/vet and unchanged SDK proofs passed; publication is pending; [HANDOFF](../HANDOFF.md)
+Focused protocol, full SES race/vet and unchanged SDK proofs passed; released in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0); [HANDOFF](../HANDOFF.md)
 records acceptance.
 
 ## Low priority: remaining SES APIs

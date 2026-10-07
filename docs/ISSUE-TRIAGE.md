@@ -61,7 +61,7 @@ receipt-settlement proof; app/SDK adapters delegate its native ACK operation.
 `eventsource` still waits for successful whole-batch execution and actual child join.
 Stale HTTP delete success alone never proves settlement; native wire rules remain
 unchanged. [Messaging](MESSAGING.md#native-mapping-receipt-settlement) states the
-contract. Native SDK verification is accepted, awaiting publication;
+contract. Native SDK verification passed; released in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0);
 [HANDOFF](../HANDOFF.md) records verification.
 
 ## Native delivery evidence and private diagnostics
@@ -75,7 +75,7 @@ events, wire results, retry policy and redacted async metadata. Runtime success
 does not prove business success; uncertainty never becomes a completion attestation.
 See [SQS evidence](EVENT-SOURCES.md#correlated-delivery-evidence) and
 [private diagnostics](LAMBDA.md#private-invocation-diagnostics). Native SDK
-acceptance passed, awaiting publication; [HANDOFF](../HANDOFF.md) records final
+acceptance passed; released in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0); [HANDOFF](../HANDOFF.md) records final
 verification.
 
 ## Raw SES configuration-set selection: native core
@@ -84,7 +84,7 @@ verification.
 validation: header-only `SendRawEmail`, API-parameter precedence and effective
 normalized capture, preserving submitted MIME bytes and existing typed errors.
 [SES](SES.md#raw-configuration-set-selection) states the contract. Final protocol
-proof passed; publication is pending; [HANDOFF](../HANDOFF.md) records acceptance.
+proof passed; released in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0); [HANDOFF](../HANDOFF.md) records acceptance.
 
 ## Retained-suite recovery: development harness
 

@@ -46,10 +46,10 @@ for redirects, assets, original paths and protected/default-route boundaries.
 SDK deletion plus durable SQLite effects, mixed manual/mapping settlement of
 batch-five records, FIFO, stale/expired leases and joined teardown.
 [Receipt settlement](../../docs/MESSAGING.md#native-mapping-receipt-settlement)
-defines the native contract. Publication is pending;
+defines the native contract. Released in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0);
 [HANDOFF](../../HANDOFF.md) records verification.
 
-`TestNativeEvidencePythonSDKSmoke` is accepted for #21/#22, awaiting publication.
+`TestNativeEvidencePythonSDKSmoke` passed for #21/#22 and shipped in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0).
 An actual HTTP producer and native handlers prove exact message/request lineage,
 joined terminals after manual deletion/blocked child work, visibility retries,
 timeout, a second suite on the same mapping and foreign-message sentinels.
