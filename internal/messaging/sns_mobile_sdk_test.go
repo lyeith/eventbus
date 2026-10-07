@@ -15,7 +15,7 @@ import (
 func TestSNSMobileAWSQuerySDK(t *testing.T) {
 	broker, _, client, _ := setupTestServer(t)
 	var capture bytes.Buffer
-	broker.SetSNSCapture(&SNSCapture{writer: &capture})
+	broker.SetSNSCapture(NewSNSCapture(&capture))
 	ctx := context.Background()
 	application, err := client.CreatePlatformApplication(ctx, &sns.CreatePlatformApplicationInput{
 		Name: aws.String("sdk-mobile"), Platform: aws.String("GCM"), Attributes: map[string]string{"PlatformCredential": "local-credential"},

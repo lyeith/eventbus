@@ -160,7 +160,7 @@ func TestSNSSMSSandboxLimitsAndCaptureRollback(t *testing.T) {
 	handler := NewHandler(broker)
 	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
 	smsSetTestTime(broker, now)
-	broker.SetSNSCapture(&SNSCapture{writer: smsFailWriter{}})
+	broker.SetSNSCapture(NewSNSCapture(smsFailWriter{}))
 	response := smsTestQuery(t, handler, "CreateSMSSandboxPhoneNumber", url.Values{"PhoneNumber": {"+12065550100"}})
 	require.Equal(t, http.StatusInternalServerError, response.Code)
 	state := broker.snsState()
@@ -200,7 +200,7 @@ func TestSNSSMSSandboxLimitsAndCaptureRollback(t *testing.T) {
 	state.mu.Lock()
 	state.sms.sandbox["+12065550100"].status = "Verified"
 	state.mu.Unlock()
-	broker.SetSNSCapture(&SNSCapture{writer: smsFailWriter{}})
+	broker.SetSNSCapture(NewSNSCapture(smsFailWriter{}))
 	_, err = broker.publishSMS(SNSPublishInput{PhoneNumber: "+12065550100", Message: "not recorded"})
 	require.Error(t, err)
 	var serviceError *snsError

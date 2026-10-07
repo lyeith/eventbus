@@ -1,14 +1,11 @@
 package messaging
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
+
+	"github.com/lyeith/eventbus/internal/devcapture"
 )
 
 // SNSCaptureRecord is the agent-readable local intent for a send or sandbox OTP.
@@ -40,103 +37,44 @@ type SNSCaptureDelivery struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// SNSCapture appends synchronously. A failed write is terminal: another record
-// cannot turn a partial write into a syntactically misleading JSON Lines stream.
+// SNSCapture owns the SNS record schema and delegates durable append/close to
+// the shared harness sink. SNS acceptance and fanout ordering stay with SNS.
 type SNSCapture struct {
-	mu        sync.Mutex
-	writer    io.Writer
-	syncFile  func() error
-	closeFile func() error
-	failure   error
-	closeErr  error
-	closed    bool
+	sink *devcapture.Sink
 }
 
 func OpenSNSCapture(path string) (*SNSCapture, error) {
-	if path == "-" {
-		return &SNSCapture{writer: os.Stdout}, nil
-	}
-	if path == "" {
-		return nil, errors.New("SNS log path must not be empty")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0600)
+	sink, err := devcapture.Open(path, "SNS")
 	if err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
-	if err == nil && !info.Mode().IsRegular() {
-		err = errors.New("SNS log must be a regular file; use '-' for stdout")
-	}
-	if err == nil && info.Size() > 0 {
-		last := make([]byte, 1)
-		_, err = file.ReadAt(last, info.Size()-1)
-		if err == nil && last[0] != '\n' {
-			err = errors.New("SNS log ends with an incomplete record; repair it or select a new log")
-		}
-	}
-	if err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	return &SNSCapture{writer: file, syncFile: file.Sync, closeFile: file.Close}, nil
+	return &SNSCapture{sink: sink}, nil
+}
+
+// NewSNSCapture borrows writer for embedded hosts; Close leaves writer open.
+func NewSNSCapture(writer io.Writer) *SNSCapture {
+	return &SNSCapture{sink: devcapture.NewWriter(writer, "SNS")}
 }
 
 func (capture *SNSCapture) Append(record SNSCaptureRecord) error {
 	if capture == nil {
 		return errors.New("SNS capture is not configured")
 	}
+	if capture.sink == nil {
+		return errors.New("SNS capture writer is not configured")
+	}
 	record.SchemaVersion = "eventbus.sns.capture.v1"
 	if record.CapturedAt.IsZero() {
 		record.CapturedAt = time.Now().UTC()
 	}
-	encoded, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	encoded = append(encoded, '\n')
-	capture.mu.Lock()
-	defer capture.mu.Unlock()
-	if capture.closed {
-		return errors.New("SNS capture is closed")
-	}
-	if capture.failure != nil {
-		return capture.failure
-	}
-	if capture.writer == nil {
-		return errors.New("SNS capture writer is not configured")
-	}
-	written, err := capture.writer.Write(encoded)
-	if err == nil && written != len(encoded) {
-		err = io.ErrShortWrite
-	}
-	if err == nil && capture.syncFile != nil {
-		err = capture.syncFile()
-	}
-	if err != nil {
-		capture.failure = fmt.Errorf("append SNS capture: %w", err)
-	}
-	return capture.failure
+	return capture.sink.Append(record)
 }
 
 func (capture *SNSCapture) Close() error {
 	if capture == nil {
 		return nil
 	}
-	capture.mu.Lock()
-	defer capture.mu.Unlock()
-	if capture.closed {
-		return capture.closeErr
-	}
-	capture.closed = true
-	var err error
-	if capture.closeFile != nil {
-		err = capture.closeFile()
-	}
-	capture.closeErr = errors.Join(capture.failure, err)
-	return capture.closeErr
+	return capture.sink.Close()
 }
 
 func (b *Broker) SetSNSCapture(capture *SNSCapture) {

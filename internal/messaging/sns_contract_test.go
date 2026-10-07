@@ -219,7 +219,7 @@ func TestSNSTerminalOutcomeCapturePreservesAcceptedPublish(t *testing.T) {
 	_, err = broker.subscribeSNS(topic.ARN, "sqs", "arn:aws:sqs:us-east-1:000000000000:missing", nil, "")
 	require.NoError(t, err)
 	writer := &snsAcceptedThenFailWriter{}
-	broker.SetSNSCapture(&SNSCapture{writer: writer})
+	broker.SetSNSCapture(NewSNSCapture(writer))
 	result, err := broker.PublishSNS(SNSPublishInput{TopicARN: topic.ARN, Message: "accepted"})
 	require.NoError(t, err)
 	require.NotEmpty(t, result.MessageID)

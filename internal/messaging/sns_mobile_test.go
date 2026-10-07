@@ -189,7 +189,7 @@ func TestSNSMobileEndpointIdempotencyAndAtomicUpdates(t *testing.T) {
 func TestSNSMobileDirectPublishCapture(t *testing.T) {
 	broker := NewBroker("", "", 4100)
 	var buffer bytes.Buffer
-	broker.SetSNSCapture(&SNSCapture{writer: &buffer})
+	broker.SetSNSCapture(NewSNSCapture(&buffer))
 	application := mobileTestApplication(t, broker, "capture", nil)
 	endpoint := mobileTestEndpoint(t, broker, application, "token")
 	message := `{"default":"fallback","GCM":"{\"notification\":{\"body\":\"hello\"}}"}`
@@ -220,7 +220,7 @@ func TestSNSMobileDirectPublishCapture(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(buffer.Bytes()), &record); err != nil || record.Details["resolved_message"] != "fallback" {
 		t.Fatalf("non-string platform key must fall back: %#v, %v", record, err)
 	}
-	broker.SetSNSCapture(&SNSCapture{writer: mobileFailWriter{}})
+	broker.SetSNSCapture(NewSNSCapture(mobileFailWriter{}))
 	_, err = broker.publishMobile(SNSPublishInput{TargetARN: endpoint, Message: "cannot capture"})
 	mobileTestErrorCode(t, err, "InternalError")
 	broker.SetSNSCapture(nil)
@@ -322,7 +322,7 @@ func TestSNSMobileEventCaptureFailureDoesNotMutateEndpoint(t *testing.T) {
 	broker := NewBroker("", "", 4100)
 	topic := broker.CreateTopic("mobile-events")
 	application := mobileTestApplication(t, broker, "events", map[string]string{"EventEndpointCreated": topic.ARN, "EventEndpointUpdated": topic.ARN, "EventEndpointDeleted": topic.ARN})
-	broker.SetSNSCapture(&SNSCapture{writer: mobileFailWriter{}})
+	broker.SetSNSCapture(NewSNSCapture(mobileFailWriter{}))
 	_, err := broker.mobileCreateEndpoint(application, "token", nil, nil)
 	mobileTestErrorCode(t, err, "InternalError")
 	state := broker.snsState()
@@ -334,7 +334,7 @@ func TestSNSMobileEventCaptureFailureDoesNotMutateEndpoint(t *testing.T) {
 	}
 	broker.SetSNSCapture(nil)
 	endpoint := mobileTestEndpoint(t, broker, application, "token")
-	broker.SetSNSCapture(&SNSCapture{writer: mobileFailWriter{}})
+	broker.SetSNSCapture(NewSNSCapture(mobileFailWriter{}))
 	err = broker.mobileSetEndpointAttributes(endpoint, map[string]string{"Enabled": "false"})
 	mobileTestErrorCode(t, err, "InternalError")
 	attributes, _ := broker.mobileGetEndpointAttributes(endpoint)
@@ -351,7 +351,7 @@ func TestSNSMobileEventCaptureFailureDoesNotMutateEndpoint(t *testing.T) {
 func TestSNSMobileApplicationEventsFanOutToSQS(t *testing.T) {
 	broker := NewBroker("", "", 4100)
 	var capture bytes.Buffer
-	broker.SetSNSCapture(&SNSCapture{writer: &capture})
+	broker.SetSNSCapture(NewSNSCapture(&capture))
 	topic := broker.CreateTopic("mobile-events")
 	queue := broker.CreateQueue("mobile-events", 0, 0)
 	if _, err := broker.Subscribe(topic.ARN, "sqs", queue.ARN, nil); err != nil {
@@ -396,7 +396,7 @@ func TestSNSMobileApplicationEventsFanOutToSQS(t *testing.T) {
 func TestSNSMobileEventFanoutFailureDoesNotUndoPrimaryState(t *testing.T) {
 	broker := NewBroker("", "", 4100)
 	var capture bytes.Buffer
-	broker.SetSNSCapture(&SNSCapture{writer: &capture})
+	broker.SetSNSCapture(NewSNSCapture(&capture))
 	topic := broker.CreateTopic("disappearing-events")
 	application := mobileTestApplication(t, broker, "failedfanout", map[string]string{"EventEndpointCreated": topic.ARN})
 	broker.DeleteTopic(topic.ARN)

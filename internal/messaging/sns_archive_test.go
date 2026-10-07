@@ -133,7 +133,7 @@ func TestSNSArchiveCapRejectsBeforeDiscardingRetainedRecords(t *testing.T) {
 func TestSNSArchiveReplayPreservesPublicationAndBypassesQueueDedup(t *testing.T) {
 	broker := NewBroker("", "", 4100)
 	var capture bytes.Buffer
-	broker.SetSNSCapture(&SNSCapture{writer: &capture})
+	broker.SetSNSCapture(NewSNSCapture(&capture))
 	topic, err := broker.CreateTopicWithAttributes("replay.fifo", map[string]string{"FifoTopic": "true", "ArchivePolicy": `{"MessageRetentionPeriod":"1"}`}, nil, "")
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func TestSNSArchiveReplayCaptureFailureHasNoQueueSideEffect(t *testing.T) {
 	topic.publishMu.Lock()
 	snsCommitArchive(topic, SNSPublishInput{TopicARN: topic.ARN, Message: "atomic", MessageGroupID: "group"}, SNSPublishResult{MessageID: "id"}, publishedAt)
 	topic.publishMu.Unlock()
-	broker.SetSNSCapture(&SNSCapture{writer: snsArchiveFailWriter{}})
+	broker.SetSNSCapture(NewSNSCapture(snsArchiveFailWriter{}))
 	policy := fmt.Sprintf(`{"PointType":"Timestamp","StartingPoint":%q}`, publishedAt.Add(-time.Second).Format(time.RFC3339Nano))
 	topic.controlMu.Lock()
 	topic.publishMu.Lock()

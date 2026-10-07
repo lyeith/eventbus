@@ -1,59 +1,44 @@
 package messaging
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
-	"os"
-	"path/filepath"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestSNSCaptureConcurrentAppendAndRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "notifications.jsonl")
-	capture, err := OpenSNSCapture(path)
-	require.NoError(t, err)
-	var callers sync.WaitGroup
-	failures := make(chan error, 32)
-	for i := 0; i < 32; i++ {
-		callers.Add(1)
-		go func() {
-			defer callers.Done()
-			failures <- capture.Append(SNSCaptureRecord{Operation: "Publish", PhoneNumber: "+12025550123", Message: "local request"})
-		}()
-	}
-	callers.Wait()
-	close(failures)
-	for err := range failures {
-		require.NoError(t, err)
-	}
+func TestSNSCaptureOwnsSchemaAndTimestamp(t *testing.T) {
+	var output bytes.Buffer
+	capture := NewSNSCapture(&output)
+	before := time.Now().UTC()
+	require.NoError(t, capture.Append(SNSCaptureRecord{
+		SchemaVersion: "caller-provided", Operation: "Publish", PhoneNumber: "+12025550123", Message: "local request",
+		MessageAttributes: map[string]MessageAttribute{"binary": {DataType: "Binary", BinaryValue: []byte{0, 1, 127}}},
+	}))
+	explicitTime := time.Date(2020, time.January, 2, 3, 4, 5, 0, time.UTC)
+	require.NoError(t, capture.Append(SNSCaptureRecord{
+		Operation: "CreateSMSSandboxPhoneNumber", CapturedAt: explicitTime, Details: map[string]any{"otp": "123456"},
+	}))
 	require.NoError(t, capture.Close())
-	require.NoError(t, capture.Close())
-	capture, err = OpenSNSCapture(path)
-	require.NoError(t, err)
-	require.NoError(t, capture.Append(SNSCaptureRecord{Operation: "CreateSMSSandboxPhoneNumber", Details: map[string]any{"otp": "123456"}}))
-	require.NoError(t, capture.Close())
-	file, err := os.Open(path)
-	require.NoError(t, err)
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	count := 0
-	for scanner.Scan() {
-		var record SNSCaptureRecord
-		require.NoError(t, json.Unmarshal(scanner.Bytes(), &record))
-		require.Equal(t, "eventbus.sns.capture.v1", record.SchemaVersion)
-		require.False(t, record.CapturedAt.IsZero())
-		count++
-	}
-	require.NoError(t, scanner.Err())
-	require.Equal(t, 33, count)
-	info, err := file.Stat()
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	records := bytes.Split(bytes.TrimSpace(output.Bytes()), []byte{'\n'})
+	require.Len(t, records, 2)
+	var first, second SNSCaptureRecord
+	require.NoError(t, json.Unmarshal(records[0], &first))
+	require.Equal(t, "eventbus.sns.capture.v1", first.SchemaVersion)
+	require.Equal(t, "Publish", first.Operation)
+	require.Equal(t, "+12025550123", first.PhoneNumber)
+	require.Equal(t, "local request", first.Message)
+	require.False(t, first.CapturedAt.Before(before))
+	require.False(t, first.CapturedAt.After(time.Now().UTC()))
+	require.Equal(t, time.UTC, first.CapturedAt.Location())
+	require.Equal(t, []byte{0, 1, 127}, first.MessageAttributes["binary"].BinaryValue)
+	require.NoError(t, json.Unmarshal(records[1], &second))
+	require.Equal(t, "eventbus.sns.capture.v1", second.SchemaVersion)
+	require.Equal(t, explicitTime, second.CapturedAt)
+	require.Equal(t, "123456", second.Details["otp"])
 }
 
 type snsFailingWriter struct {
@@ -66,39 +51,25 @@ func (writer *snsFailingWriter) Write(data []byte) (int, error) {
 	return 1, writer.failure
 }
 
-func TestSNSCaptureFailedAppendIsTerminal(t *testing.T) {
-	for _, failure := range []error{nil, errors.New("storage unavailable")} {
-		writer := &snsFailingWriter{failure: failure}
-		capture := &SNSCapture{writer: writer}
-		first := capture.Append(SNSCaptureRecord{Operation: "Publish", Message: "body"})
-		require.Error(t, first)
-		if failure == nil {
-			require.ErrorIs(t, first, io.ErrShortWrite)
-		} else {
-			require.ErrorIs(t, first, failure)
-		}
-		require.Equal(t, first, capture.Append(SNSCaptureRecord{Operation: "Publish"}))
-		require.Equal(t, 1, writer.calls)
-		closeErr := capture.Close()
-		require.ErrorIs(t, closeErr, first)
-		require.Equal(t, closeErr, capture.Close(), "close is idempotent")
-	}
-}
-
-func TestSNSCaptureRefusesIncompleteFileAndClosedAppend(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "partial.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(`{"operation":"Publish"}`), 0600))
-	_, err := OpenSNSCapture(path)
-	require.ErrorContains(t, err, "incomplete record")
-	capture, err := OpenSNSCapture(filepath.Join(t.TempDir(), "complete.jsonl"))
-	require.NoError(t, err)
-	require.NoError(t, capture.Close())
-	require.ErrorContains(t, capture.Append(SNSCaptureRecord{Operation: "Publish"}), "closed")
-}
-
 func TestBrokerUsesConfiguredSNSCapture(t *testing.T) {
-	writer := &snsFailingWriter{failure: errors.New("disk full")}
+	failure := errors.New("disk full")
+	writer := &snsFailingWriter{failure: failure}
 	broker := newTestBroker()
-	broker.SetSNSCapture(&SNSCapture{writer: writer})
-	require.ErrorContains(t, broker.CaptureSNS(SNSCaptureRecord{Operation: "Publish"}), "disk full")
+	capture := NewSNSCapture(writer)
+	broker.SetSNSCapture(capture)
+	err := broker.CaptureSNS(SNSCaptureRecord{Operation: "Publish"})
+	require.ErrorIs(t, err, failure)
+	require.EqualError(t, err, "append SNS capture: disk full")
+	require.ErrorIs(t, capture.Close(), failure)
+}
+
+func TestSNSCaptureMissingAndClosedWriterErrors(t *testing.T) {
+	var missing *SNSCapture
+	require.EqualError(t, missing.Append(SNSCaptureRecord{}), "SNS capture is not configured")
+	require.NoError(t, missing.Close())
+	require.EqualError(t, (&SNSCapture{}).Append(SNSCaptureRecord{}), "SNS capture writer is not configured")
+	capture := NewSNSCapture(nil)
+	require.EqualError(t, capture.Append(SNSCaptureRecord{}), "SNS capture writer is not configured")
+	require.NoError(t, capture.Close())
+	require.EqualError(t, capture.Append(SNSCaptureRecord{}), "SNS capture is closed")
 }
