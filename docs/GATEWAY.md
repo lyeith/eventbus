@@ -9,7 +9,7 @@ imported by the gateway.
 ```sh
 go build -o eventbus-gateway ./cmd/gateway
 ./eventbus-gateway -config gateway.yaml -port 14180
-curl -fsS http://localhost:14180/health
+curl -fsS http://localhost:14180/.eventbus/ready
 ```
 
 ## Local recipe
@@ -21,6 +21,7 @@ account_id: "000000000000"
 api_id: local
 stage: $default
 base_path: /local
+dev_health_path: /.eventbus/ready
 authorizers:
   app:
     type: REQUEST
@@ -53,6 +54,28 @@ Authorizer and integration formats are independent. Omitting authorizer
 `1.0` or `2.0` chooses the corresponding HTTP API authorizer contract. Integrations
 select `AWS_PROXY` with explicit `1.0`/`2.0`, or existing `HTTP_PROXY` with `uri`.
 The Invoke URL resolves registered function names/ARNs and aliases.
+
+## Development readiness
+
+`dev_health_path` defaults to `/health`; choose `/.eventbus/ready` when the
+application owns `/health`. It is an absolute listener path, independent of
+`base_path`. GET there returns `{"status":"healthy","service":"eventbus-gateway"}`
+without calling an authorizer or integration. This is an unauthenticated harness
+endpoint on the same listener. Queries do not change readiness matching; other
+methods and trailing slashes follow application routing. Closed gateways return
+503, and all requests pass canonical path validation before readiness matching.
+
+Startup rejects readiness collisions with GET/ANY literal or non-greedy parameter
+routes, after applying the API mapping. For example, readiness `/local/health`
+conflicts with application `/health` under `base_path: /local`. Greedy routes
+(including prefixed `{proxy+}` routes) and `$default` retain the selected GET
+readiness path as an explicit reservation. Select a deeper readiness path if a
+parameter route such as `/{id}` overlaps the default.
+
+With readiness at `/.eventbus/ready`, application GET `/health` uses its real
+REQUEST authorizer and integration, including through a protected `$default`.
+No harness prefix is added: AWS_PROXY 1.0 receives its original `path` and 2.0 its
+original `rawPath`, subject only to the documented API mapping above.
 
 ## Authorization
 

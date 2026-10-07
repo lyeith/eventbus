@@ -86,7 +86,9 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
 
 ## Inspect and finish
 
-- Check `/health` for readiness, then exercise the application's normal flows.
+- Check the AWS listener's `/health` for readiness, then exercise application flows.
+  The separate gateway uses `dev_health_path` (default `/health`); select a private
+  path when the application owns `/health`. See [Gateway readiness](GATEWAY.md#development-readiness).
   Assert SDK responses, queue/DLQ outcomes and application state.
 - Read operational logs on stderr. Add `--debug` to see captured handler
   diagnostics and batch settlement. Consumer stdout is the JSON result.

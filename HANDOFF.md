@@ -1,73 +1,40 @@
 # Handoff
 
-Completed all ten triaged ticket scopes #2–#11 plus ownership-review findings on
-SSD main, after cleanup baseline 063e6966. Verified release source/tag is
-1f770c9 (v0.5.0), published 2026-10-07 as latest:
-https://github.com/lyeith/eventbus/releases/tag/v0.5.0
-Eight service/gateway binaries (Linux/macOS amd64/arm64) plus SHA256SUMS.
-Plans pins and live stacks remain unchanged.
+Gateway ticket #12 is implemented on SSD main; preparing v0.5.1 publication.
+Latest published release is v0.5.0 until upload verification completes. Plans pins
+and running stacks are unchanged. Prior #2–#11 scopes shipped in v0.5.0; its
+pinned HANDOFF and service guides retain detailed verification/capability limits.
 
-Owners: Cognito persists metadata/schema/permissions/token policy and workflows;
-Secrets owns immutable versions/stages/rotation; Lambda owns execution/Event queue;
-gateway owns independent authorizer/integration formats; SNS owns its Firehose
-port and Firehose owns processing/buffers/S3 retries; Scheduler owns time/state
-and target admission. App adapts typed Lambda ports and owns staged shutdown.
-Common capture/process/wire mechanics remain devcapture/localexec/awsprotocol.
-Consumer Go/Python execution policy consolidated; production Cognito DB() removed.
+Cause: gateway hard-coded GET /health returned before canonical validation,
+route matching and REQUEST authorization, shadowing application health routes.
+Config.DevHealthPath / YAML dev_health_path now selects the absolute listener
+readiness path, default /health. gateway/dev_health.go owns its validation and
+response. Gateway routing calls that dev adapter after canonical path validation;
+native authorizer/integration event builders and API mappings are unchanged.
 
-Quiesce stops producers while the AWS listener/sync invocation stay usable by
-accepted rotation/Event SDK handlers. All independent owners drain even after a
-peer fails. HTTP then drains, final owners close, and failed prerequisite barriers
-retain stores/captures. Deadline aborts cancel/join children and retain errors.
-Reviews fixed transactional NPR immutable-first-value/contact verification,
-retired Firehose references/ARN limits and final admission/cancellation races.
+GET/ANY literal and non-greedy parameter-route collisions fail startup after
+applying base_path. Greedy routes (including prefixed greedy routes) and $default
+reserve only the selected readiness GET. Queries do not affect matching; other
+methods/trailing slashes follow routes. A private name is an unauthenticated
+endpoint on the same listener, not a separate management listener.
+Select dev_health_path: /.eventbus/ready to keep application /health protected
+and preserve its original AWS_PROXY 1.0/2.0 path. Parameter routes like /{id}
+that overlap default readiness must choose a deeper path. No dependencies added.
 
-Approved: pinned gojq v0.12.19 (+timefmt-go v0.1.8), test-only JS Scheduler
-SDK 3.1146.0. Frozen npm ci and go mod tidy completed. No jq binary/framework.
-Go jq implements the documented tested profile, not literal jq 1.6 equivalence.
+Verification, full logs retained under /tmp through existing finite SSD GC:
+- go test -race -count=1 ./internal/gateway -run '^TestDevHealth': passed 1.128s;
+  default/query/method/canonical/closed behavior, YAML/ownership/idempotency,
+  mapping/collision validation and 3 authorizer × 2 integration × explicit/default
+  protected-health scenarios; refused requests never invoke integration.
+- go test -race -count=1 -timeout 5m ./internal/gateway ./cmd/gateway: passed
+  40.747s / 1.057s, including real Go/Python/Node Lambda handlers, both proxy
+  formats, configured readiness/protected /health, HTTP/upgraded/drain lifetime.
+- go vet ./internal/gateway ./cmd/gateway: passed.
+- Read-only review found no implementation/acceptance/ownership gaps. Corrected
+  guide startup curl to use its configured readiness path. Diffcheck passed.
+Logs: eventbus-issue-12-{focused,gateway-race,gateway-vet}.log.
+Tests own state/listeners and join children; no live stack/database reset.
 
-Verification (SSD tests/builds use ssd-dev):
-- go test -race -count=1 -p 3 ./...: every package except Cognito passed.
-  Cognito (355.267s) failed exactly two old legacy policy input fixtures; all other
-  cases passed. Those fixtures lacked explicit PoolId despite legacy aliases.
-  Fixture-only repair, then targeted race of policy/default/precedence and native
-  unsupported-setting refusal passed (2.92s). No production change after full run;
-  these runs together cover every package/test in the final source.
-- Full frozen SDK race suite passed (133.224s) (tests/sdk, sdksmoke, timeout 8m):
-  existing Cognito/SRP/custom/SES/messaging plus native provisioning/restart,
-  real Python Secrets rotation, Lambda Event and real JS Scheduler/Node alias.
-- go vet ./... passed. All affected Go files are gofmt-clean; diffcheck and local
-  documentation links passed. Focused fixes also have colocated race checks.
-- Native Go SNS/Firehose SDK→owned RustFS pipeline race suite passed, including
-  filters/raw/envelope, partitions/GZIP/errors, failed delivery recovery and drain.
-  Later backing-reference/ARN guard fixes passed focused Firehose race/vet.
-- Darwin arm64 and Windows amd64 CGO-free runner/Scheduler/app/server tests
-  compile with -exec=true; Windows target execution was not performed.
-- Existing build-release.sh built all eight clean tagged v0.5.0 CGO-free artifacts.
-  Exact source revision and target architecture verified in every Go build record.
-  Downloaded all GitHub assets and verified SHA256SUMS before public publication.
-- Linux amd64 packaged service/gateway: real Node HTTP 2.0 authorizer/AWS_PROXY,
-  native Cognito signup/code capture/confirmation, SES v2 JSONL, Lambda Event
-  completion, Scheduler Create/Get/one-time execution/delete and shutdown passed.
-- macOS arm64: both CLI startups, service health/native Cognito SQLite write and
-  shutdown passed; macOS amd64/Linux arm64 were cross-built, not executed.
-
-Evidence under /tmp on SSD, governed by existing finite retention:
- eventbus-plate-final-{race,sdk,vet}-20261007.log
- eventbus-cognito-policy-fixture-race.log
- eventbus-firehose-agent-verified.txt / eventbus-firehose-ownership-verified.txt
- eventbus-background-drain-race-20261007.log
- eventbus-plate-{darwin,windows}-compile-20261007.log
- eventbus-v0.5.0-{build,artifact-smoke}.log / eventbus-v0.5.0-publication.json
-
-All fixtures owned listeners/state/processes; no live stack reset. RustFS 40955
-and its task volume are gone; staging/probes/bytecode removed, no worktrees.
-Canonical frozen SDK environments remain reusable. Failed managed allocations
-are quiescent/unpinned and expire through SSD GC; no receipts were rewritten.
-STATE.md and service guides record current truth and explicit unsupported limits.
-
-Owned release/download/laptop artifact directories and smoke state/processes are
-removed. Latest public release, nine uploaded assets and GitHub tag source verified.
-Next: consuming-app acceptance. Low-priority SES
-management. Do not imply all management APIs, production IAM/KMS or durable
-async/schedule recovery are present. Preserve developer identity SQLite data.
+Next: build all eight v0.5.1 service/gateway assets with build-release.sh, smoke
+packaged gateway readiness/routing, verify source/architecture/checksums and
+uploaded assets, then publish, remove owned scratch and record release state.

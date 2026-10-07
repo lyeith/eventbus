@@ -1,11 +1,11 @@
 # Issue triage: AWS core and development harness
 
 Reviewed 7 October 2026 against v0.4.0/main and current AWS documentation.
-All ten open tickets describe AWS capability or correctness gaps. Their local
+The original ten tickets describe AWS capability or correctness gaps. Their local
 fixture, execution and evidence adapters are still required, with separate owners.
 The bounded scopes below are implemented and accepted on main, including the
-recorded ownership-review findings. Published v0.4.0 does not contain these
-changes. HANDOFF.md records verification; the service guides state exact limits.
+recorded ownership-review findings, published in v0.5.0. HANDOFF.md records
+verification; the service guides state exact limits.
 
 P1 fixes misleading successful results or establishes the configuration needed
 to verify them. P2 adds documented missing capabilities. P2 work remains needed;
@@ -29,6 +29,16 @@ The #11 unsupported-setting guard can start earlier. In the capability lane,
 #7 enables #8; #5/#6 coordinate without coupling their format choices; #2 is
 independent; #4 follows stage correctness. Crosscutting labels identify multiple
 service owners or a persisted policy that affects several authentication flows.
+
+## Readiness follow-up
+
+[#12](https://github.com/lyeith/eventbus/issues/12) is a development routing defect,
+owned by gateway `dev_health.go`. `dev_health_path` keeps readiness separate from
+application authorization/integration semantics, defaults to `/health`, validates
+concrete route collisions and lets protected application `/health` retain its
+original native event paths. Greedy routes and `$default` reserve only the chosen
+readiness GET endpoint. This fix follows v0.5.0; native gateway management parity
+is outside scope. [Gateway guide](GATEWAY.md) states the recipe and collision rules.
 
 ## Core versus harness code
 

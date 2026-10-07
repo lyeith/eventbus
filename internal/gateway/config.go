@@ -22,6 +22,7 @@ type Config struct {
 	APIID          string                      `yaml:"api_id"`
 	Stage          string                      `yaml:"stage"`
 	BasePath       string                      `yaml:"base_path"`
+	DevHealthPath  string                      `yaml:"dev_health_path"` // Local readiness reservation, not an AWS route.
 	StageVariables map[string]string           `yaml:"stage_variables"`
 	Authorizers    map[string]AuthorizerConfig `yaml:"authorizers"`
 	Routes         []RouteConfig               `yaml:"routes"`
@@ -248,7 +249,7 @@ func (cfg *Config) Validate() error {
 			return fmt.Errorf("invalid log_redactions path: %w", err)
 		}
 	}
-	return nil
+	return cfg.validateDevHealth()
 }
 
 func endpointPath(endpoint *url.URL) string {

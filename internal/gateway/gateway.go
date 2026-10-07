@@ -145,13 +145,12 @@ func (gateway *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		gateway.options.Logger.Info().Str("request_id", requestID).Str("method", r.Method).Str("route", routeLabel).Dur("duration", time.Since(started)).Msg("Gateway request")
 	}()
-	if r.URL.Path == "/health" && r.Method == http.MethodGet {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"status":"healthy","service":"eventbus-gateway"}`)
-		return
-	}
 	if !canonicalRequestPath(r.URL) {
 		writeGatewayError(w, http.StatusBadRequest)
+		return
+	}
+	if gateway.serveDevHealth(w, r) {
+		routeLabel = "{readiness}"
 		return
 	}
 	routingPath, mapped := apiPath(gateway.config.BasePath, r.URL.Path)

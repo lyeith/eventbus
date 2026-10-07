@@ -36,7 +36,8 @@ formats are examples. Local lifecycle limits must be stated explicitly.
 
 Put YAML/file loading and compatibility fixture extensions in `dev_*.go` files.
 `cognito/dev_seed.go` and `dev_provisioning.go`, `gateway/dev_config.go` and
-`lambda/dev_config.go` identify existing adapters without changing their contracts.
+`lambda/dev_config.go` identify fixture loading. Gateway `dev_health.go` owns the
+configurable listener readiness reservation and application collision validation.
 The `consumer` package already owns harness polling/process recipes. App composition
 injects local endpoints, function runners, recorders and clocks through real ports.
 Any future agent-control HTTP API gets a distinct harness namespace; it does not

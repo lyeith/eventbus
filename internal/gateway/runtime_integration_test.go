@@ -144,8 +144,9 @@ def handler(event, context):
 			t.Run(runtime+"/"+version, func(t *testing.T) {
 				zero := 0
 				integration := gateway.IntegrationConfig{Type: "AWS_PROXY", InvokeURL: aws.URL + "/2015-03-31/functions/" + runtime + "-app/invocations?Qualifier=live", PayloadFormatVersion: version, Timeout: 5 * time.Second}
-				cfg := gateway.Config{Stage: "$default", Authorizers: map[string]gateway.AuthorizerConfig{"auth": {Type: "REQUEST", InvokeURL: aws.URL + "/2015-03-31/functions/" + runtime + "-auth/invocations", TTL: &zero, PayloadFormatVersion: "2.0", IdentitySources: []string{"$request.header.Authorization"}, Timeout: 5 * time.Second}}, Routes: []gateway.RouteConfig{
+				cfg := gateway.Config{Stage: "$default", DevHealthPath: "/.eventbus/ready", Authorizers: map[string]gateway.AuthorizerConfig{"auth": {Type: "REQUEST", InvokeURL: aws.URL + "/2015-03-31/functions/" + runtime + "-auth/invocations", TTL: &zero, PayloadFormatVersion: "2.0", IdentitySources: []string{"$request.header.Authorization"}, Timeout: 5 * time.Second}}, Routes: []gateway.RouteConfig{
 					{Path: "/private/{id}", Method: "POST", Authorizer: "auth", Integration: integration}, {Path: "/public/{id}", Method: "POST", Integration: integration},
+					{Path: "/health", Method: "GET", Authorizer: "auth", Integration: integration},
 				}}
 				edge, err := gateway.New(cfg, gateway.Options{Logger: zerolog.Nop()})
 				if err != nil {
@@ -206,6 +207,44 @@ def handler(event, context):
 					} else {
 						if len(event["multiValueQueryStringParameters"].(map[string]any)["x"].([]any)) != 2 {
 							t.Fatal("native v1 repeated values lost")
+						}
+					}
+				}
+				readiness, err := client.Get(frontend.URL + "/.eventbus/ready")
+				if err != nil {
+					t.Fatal(err)
+				}
+				readyBody, _ := io.ReadAll(readiness.Body)
+				readiness.Body.Close()
+				if readiness.StatusCode != 200 || !strings.Contains(string(readyBody), "eventbus-gateway") {
+					t.Fatalf("management readiness changed: %d %s", readiness.StatusCode, readyBody)
+				}
+				for _, tc := range []struct {
+					credential string
+					status     int
+				}{{"", 401}, {"invalid", 403}, {"Bearer owned", 200}} {
+					request, _ := http.NewRequest("GET", frontend.URL+"/health?original=1", nil)
+					request.Header.Set("Authorization", tc.credential)
+					response, err := client.Do(request)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, _ := io.ReadAll(response.Body)
+					response.Body.Close()
+					if response.StatusCode != tc.status {
+						t.Fatalf("application health with credential %q: %d %s", tc.credential, response.StatusCode, data)
+					}
+					if tc.status == 200 {
+						var event map[string]any
+						if err := json.Unmarshal(data, &event); err != nil {
+							t.Fatal(err)
+						}
+						pathKey := "path"
+						if version == "2.0" {
+							pathKey = "rawPath"
+						}
+						if event["version"] != version || event[pathKey] != "/health" {
+							t.Fatalf("real runtime health path changed: %v", event)
 						}
 					}
 				}
