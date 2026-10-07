@@ -2,28 +2,33 @@ package app
 
 import (
 	"flag"
+	"fmt"
 	"time"
 )
 
 type config struct {
-	port            int
-	region          string
-	accountID       string
-	s3Endpoint      string
-	consumersFile   string
-	lambdaFunctions string
-	workDir         string
-	issuerBase      string
-	jwksBase        string
-	cognitoPools    string
-	cognitoTriggers string
-	cognitoDB       string
-	accessTokenTTL  time.Duration
-	refreshTokenTTL time.Duration
-	snsLog          string
-	sesLog          string
-	sesConfig       string
-	debug           bool
+	port                  int
+	region                string
+	accountID             string
+	s3Endpoint            string
+	consumersFile         string
+	lambdaFunctions       string
+	workDir               string
+	issuerBase            string
+	jwksBase              string
+	cognitoPools          string
+	cognitoTriggers       string
+	cognitoDB             string
+	cognitoProfile        string
+	cognitoLog            string
+	schedulerGroups       string
+	schedulerExactSeconds bool
+	accessTokenTTL        time.Duration
+	refreshTokenTTL       time.Duration
+	snsLog                string
+	sesLog                string
+	sesConfig             string
+	debug                 bool
 }
 
 // readConfig accepts an owned FlagSet so CLI parsing does not mutate Go's
@@ -45,10 +50,14 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	cognitoPools := flags.String("cognito-pools", "", "Path to cognito_pools.yaml (optional seed file)")
 	cognitoTriggers := flags.String("cognito-triggers", "", "Application-owned Cognito custom trigger YAML (relative to --work-dir)")
 	cognitoDB := flags.String("cognito-db", "/tmp/cognito-dev.db", "SQLite path for the local Cognito dev store")
+	cognitoProfile := flags.String("cognito-profile", "", "Cognito fixture profile (empty for native; legacy-fixtures for legacy seeded MFA)")
+	cognitoLog := flags.String("cognito-log", "-", "Cognito notification JSON Lines capture path (no email/SMS delivery)")
+	schedulerGroups := flags.String("scheduler-groups", "", "Comma-separated local Scheduler group fixtures (default group always exists)")
+	schedulerExactSeconds := flags.Bool("scheduler-exact-seconds", false, "Development override: execute one-time schedules at exact seconds instead of native minute precision")
 	// Token TTLs default to 1h access / 24h refresh; refresh authentication
 	// preserves the original refresh token.
-	accessTokenTTL := flags.Duration("access-token-ttl", time.Hour, "TTL for issued access tokens (e.g. 1h, 30m)")
-	refreshTokenTTL := flags.Duration("refresh-token-ttl", 24*time.Hour, "TTL for issued refresh tokens (e.g. 24h, 7d)")
+	accessTokenTTL := flags.Duration("access-token-ttl", time.Hour, "Legacy seeded-client access/ID token TTL (native app clients own token validity)")
+	refreshTokenTTL := flags.Duration("refresh-token-ttl", 24*time.Hour, "Legacy seeded-client refresh TTL (native app clients own token validity)")
 	snsLog := flags.String("sns-log", "-", "SNS JSON Lines capture path (external deliveries stay local)")
 	sesLog := flags.String("ses-log", "-", "SES JSON Lines capture path ('-' for stdout; no email delivery)")
 	sesConfig := flags.String("ses-config", "", "Optional SES sending fixtures (templates, identities, configuration sets, received messages)")
@@ -57,24 +66,31 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
+	if *cognitoProfile != "" && *cognitoProfile != "legacy-fixtures" {
+		return config{}, fmt.Errorf("unknown Cognito fixture profile %q", *cognitoProfile)
+	}
 	return config{
-		port:            *port,
-		region:          *region,
-		accountID:       *accountID,
-		s3Endpoint:      *s3Endpoint,
-		consumersFile:   *consumersFile,
-		lambdaFunctions: *lambdaFunctions,
-		workDir:         *workDir,
-		issuerBase:      *issuerBase,
-		jwksBase:        *jwksBase,
-		cognitoPools:    *cognitoPools,
-		cognitoTriggers: *cognitoTriggers,
-		cognitoDB:       *cognitoDB,
-		accessTokenTTL:  *accessTokenTTL,
-		refreshTokenTTL: *refreshTokenTTL,
-		snsLog:          *snsLog,
-		sesLog:          *sesLog,
-		sesConfig:       *sesConfig,
-		debug:           *debug,
+		port:                  *port,
+		region:                *region,
+		accountID:             *accountID,
+		s3Endpoint:            *s3Endpoint,
+		consumersFile:         *consumersFile,
+		lambdaFunctions:       *lambdaFunctions,
+		workDir:               *workDir,
+		issuerBase:            *issuerBase,
+		jwksBase:              *jwksBase,
+		cognitoPools:          *cognitoPools,
+		cognitoTriggers:       *cognitoTriggers,
+		cognitoDB:             *cognitoDB,
+		cognitoProfile:        *cognitoProfile,
+		cognitoLog:            *cognitoLog,
+		schedulerGroups:       *schedulerGroups,
+		schedulerExactSeconds: *schedulerExactSeconds,
+		accessTokenTTL:        *accessTokenTTL,
+		refreshTokenTTL:       *refreshTokenTTL,
+		snsLog:                *snsLog,
+		sesLog:                *sesLog,
+		sesConfig:             *sesConfig,
+		debug:                 *debug,
 	}, nil
 }

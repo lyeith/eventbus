@@ -15,6 +15,7 @@ import (
 	"github.com/lyeith/eventbus/internal/firehose"
 	lambdaservice "github.com/lyeith/eventbus/internal/lambda"
 	"github.com/lyeith/eventbus/internal/messaging"
+	"github.com/lyeith/eventbus/internal/scheduler"
 	"github.com/lyeith/eventbus/internal/secrets"
 	"github.com/lyeith/eventbus/internal/server"
 	"github.com/lyeith/eventbus/internal/ses"
@@ -43,6 +44,10 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 
 	broker := messaging.NewBroker(cfg.region, cfg.accountID, cfg.port)
 	firehoseManager := firehose.NewFirehoseManager(cfg.region, cfg.accountID, cfg.s3Endpoint, "test", "testtest123")
+	if err := firehoseManager.SetMetadataExtractor(firehose.NewGoJQMetadataExtractor()); err != nil {
+		return fmt.Errorf("failed to configure Firehose metadata extraction: %w", err)
+	}
+	broker.SetFirehoseDelivery(firehoseManager)
 	ssmStore := ssm.NewSSMStore()
 	secretsStore := secrets.NewSecretsStore(cfg.region, cfg.accountID)
 
@@ -86,7 +91,8 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if projectRoot == "" {
 		projectRoot = findProjectRoot(".")
 	}
-	var functions http.Handler
+	var functions *lambdaservice.Service
+	var functionHandler http.Handler
 	if cfg.lambdaFunctions != "" {
 		runner, configureErr := lambdaservice.New(cfg.lambdaFunctions, projectRoot)
 		functions, err = runner, configureErr
@@ -94,26 +100,64 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 			return fmt.Errorf("failed to configure Lambda functions: %w", err)
 		}
 		owned.functions = runner
+		functionHandler = runner
 	}
 	triggers, err := loadCognitoTriggers(cfg.cognitoTriggers, projectRoot)
 	if err != nil {
 		return fmt.Errorf("failed to configure Cognito triggers: %w", err)
 	}
-	cognitoOptions := cognito.Options{IssuerBase: cfg.issuerBase, AccessTokenTTL: cfg.accessTokenTTL, RefreshTokenTTL: cfg.refreshTokenTTL}
 	if triggers != nil {
 		owned.triggers = triggers
+	}
+	cognitoLog := cfg.cognitoLog
+	if cognitoLog == "" {
+		cognitoLog = "-"
+	}
+	notifications, err := cognito.OpenNotificationCapture(cognitoLog)
+	if err != nil {
+		return fmt.Errorf("failed to open Cognito notification capture: %w", err)
+	}
+	owned.notifications = notifications
+	cognitoOptions := cognito.Options{Region: cfg.region, AccountID: cfg.accountID, DevProfile: cfg.cognitoProfile, Notifications: notifications, IssuerBase: cfg.issuerBase, AccessTokenTTL: cfg.accessTokenTTL, RefreshTokenTTL: cfg.refreshTokenTTL}
+	if triggers != nil {
 		cognitoOptions.Triggers = triggers
 	}
 	jwksURL := cfg.jwksBase
 	if jwksURL == "" {
 		jwksURL = cfg.issuerBase
 	}
+	var rotationInvoker secrets.RotationInvoker
+	var schedulerInvoker scheduler.TargetInvoker
+	if functions != nil {
+		rotationInvoker = rotationLambdaInvoker{runtime: functions}
+		schedulerInvoker = schedulerLambdaInvoker{runtime: functions}
+	}
+	rotation := secrets.NewRotationService(secretsStore, rotationInvoker, secrets.RotationOptions{})
+	owned.rotation = rotation
+	var groups []string
+	if cfg.schedulerGroups != "" {
+		groups = strings.Split(cfg.schedulerGroups, ",")
+		for i := range groups {
+			groups[i] = strings.TrimSpace(groups[i])
+		}
+	}
+	schedules, err := scheduler.New(scheduler.Options{Region: cfg.region, AccountID: cfg.accountID, Dev: scheduler.DevOptions{
+		Groups: groups, ExactSeconds: cfg.schedulerExactSeconds,
+		Observe: func(outcome scheduler.Outcome) {
+			log.Info().Str("schedule_arn", outcome.ScheduleARN).Str("status", outcome.Status).Str("code", outcome.Code).Int("attempts", outcome.Attempts).Msg("Scheduler target admission completed")
+		},
+	}}, schedulerInvoker)
+	if err != nil {
+		return fmt.Errorf("failed to configure Scheduler: %w", err)
+	}
+	owned.scheduler = schedules
 	router := server.New(server.Services{
 		Messaging:      messaging.NewHandler(broker),
-		Lambda:         functions,
+		Lambda:         functionHandler,
+		Scheduler:      scheduler.NewHandler(schedules),
 		Firehose:       firehose.NewHandler(firehoseManager),
 		SSM:            ssm.NewHandler(ssmStore),
-		Secrets:        secrets.NewHandler(secretsStore),
+		Secrets:        secrets.NewHandler(secretsStore, rotation),
 		Cognito:        cognito.NewHandler(cognitoStore, cognitoOptions),
 		SES:            ses.NewHandler(sesManager),
 		CognitoURLs:    &server.CognitoURLs{Issuer: strings.TrimRight(cfg.issuerBase, "/"), JWKS: strings.TrimRight(jwksURL, "/")},

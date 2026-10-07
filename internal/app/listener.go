@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// HTTP draining is the barrier before stopping workers and releasing their stores.
+// HTTP draining is the barrier before releasing stores. Background SDK callers
+// quiesce first, while this listener remains available.
 var errHTTPNotDrained = errors.New("HTTP listener did not drain; resource cleanup withheld")
 
 // eventBusListener owns the single HTTP listener and its existing resource owner.
@@ -73,11 +74,15 @@ func (listener *eventBusListener) close(ctx context.Context) (resultErr error) {
 	}
 	deadline, cancel := context.WithTimeout(ctx, listener.timeout)
 	defer cancel()
+	quiesceErr := listener.owned.Quiesce(deadline)
 	if err := listener.server.Shutdown(deadline); err != nil {
-		return errors.Join(errHTTPNotDrained, fmt.Errorf("drain HTTP listener: %w", err))
+		return errors.Join(quiesceErr, errHTTPNotDrained, fmt.Errorf("drain HTTP listener: %w", err))
 	}
 	if err := deadline.Err(); err != nil {
-		return fmt.Errorf("cleanup budget expired: %w", err)
+		return errors.Join(quiesceErr, fmt.Errorf("cleanup budget expired: %w", err))
+	}
+	if quiesceErr != nil {
+		return quiesceErr
 	}
 	return errors.Join(listener.owned.Close(deadline), deadline.Err())
 }
