@@ -12,6 +12,7 @@ import (
 
 	"github.com/lyeith/eventbus/internal/cognito"
 	"github.com/lyeith/eventbus/internal/consumer"
+	"github.com/lyeith/eventbus/internal/devquiescence"
 	"github.com/lyeith/eventbus/internal/eventsource"
 	"github.com/lyeith/eventbus/internal/firehose"
 	lambdaservice "github.com/lyeith/eventbus/internal/lambda"
@@ -34,6 +35,9 @@ func Run() error {
 }
 
 func run(ctx context.Context, cfg config) (resultErr error) {
+	if err := validateRetainedConfig(cfg); err != nil {
+		return err
+	}
 	// Configure zerolog
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	if cfg.debug {
@@ -48,7 +52,9 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if err := firehoseManager.SetMetadataExtractor(firehose.NewGoJQMetadataExtractor()); err != nil {
 		return fmt.Errorf("failed to configure Firehose metadata extraction: %w", err)
 	}
-	broker.SetFirehoseDelivery(firehoseManager)
+	if cfg.retainedCallbackPort == 0 {
+		broker.SetFirehoseDelivery(firehoseManager)
+	}
 	ssmStore := ssm.NewSSMStore()
 	secretsStore := secrets.NewSecretsStore(cfg.region, cfg.accountID)
 
@@ -75,6 +81,10 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	}
 	owned.sns = snsCapture
 	broker.SetSNSCapture(snsCapture)
+	var retained *devquiescence.Coordinator
+	if cfg.retainedCallbackPort != 0 {
+		retained = devquiescence.New(snsCapture.Err)
+	}
 	var sesFixtures ses.SESFixtures
 	if cfg.sesConfig != "" {
 		sesFixtures, err = ses.LoadSESFixtures(cfg.sesConfig)
@@ -95,7 +105,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	var functions *lambdaservice.Service
 	var functionHandler http.Handler
 	if cfg.lambdaFunctions != "" {
-		runner, configureErr := lambdaservice.New(cfg.lambdaFunctions, projectRoot)
+		runner, configureErr := loadRetainedFunctions(cfg.lambdaFunctions, projectRoot, retained)
 		functions, err = runner, configureErr
 		if err != nil {
 			return fmt.Errorf("failed to configure Lambda functions: %w", err)
@@ -162,7 +172,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		return fmt.Errorf("failed to configure Scheduler: %w", err)
 	}
 	owned.scheduler = schedules
-	router := server.New(server.Services{
+	services := server.Services{
 		Messaging:      messaging.NewHandler(broker),
 		Lambda:         functionHandler,
 		EventSources:   eventsource.NewHandler(mappings),
@@ -174,7 +184,11 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		SES:            ses.NewHandler(sesManager),
 		CognitoURLs:    &server.CognitoURLs{Issuer: strings.TrimRight(cfg.issuerBase, "/"), JWKS: strings.TrimRight(jwksURL, "/")},
 		QueryBodyLimit: ses.QueryBodyLimit,
-	})
+	}
+	if retained != nil {
+		services = retainedServices(services)
+	}
+	var router http.Handler = server.New(services)
 	if cfg.cognitoPools != "" {
 		seed, err := cognito.LoadCognitoSeed(cfg.cognitoPools)
 		if err != nil {
@@ -215,7 +229,14 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		MaxHeaderBytes: 1 << 16,
 	}
 
+	var devHTTP *devRetainedHTTP
+	if retained != nil {
+		httpServer.Addr = fmt.Sprintf("127.0.0.1:%d", cfg.port)
+		httpServer.WriteTimeout = 0 // Controls use their explicit bounded deadline, up to five minutes.
+		httpServer.Handler, devHTTP = newRetainedHTTP(retained, router, cfg.retainedCallbackPort)
+	}
 	shutdown := newEventBusListener(httpServer, owned, 30*time.Second)
+	shutdown.devRetained = devHTTP
 	listenerOwns = true
 	return shutdown.Run(ctx)
 }

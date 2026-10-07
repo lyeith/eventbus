@@ -2,7 +2,7 @@
 
 ## Completed ticket scope
 
-Tickets #2–#16 and recorded ownership-review findings have
+Tickets #2–#17 and recorded ownership-review findings have
 accepted implementations with race, SDK and native delivery evidence.
 [Issue triage](ISSUE-TRIAGE.md) records bounded scope, owners and dependencies.
 The service guides state supported contracts and remaining capability limits.
@@ -12,6 +12,17 @@ versions/namespaces/budgets. SSM snapshots/hierarchies/versioning and Firehose
 batch validation/delivery ownership are corrected. Consumer execution policy is
 consolidated; Cognito no longer exports its raw SQL connection in production.
 These findings are implementation work, not deferred dev conveniences.
+
+## Completed: retained-suite ownership recovery
+
+[#17](https://github.com/lyeith/eventbus/issues/17) adds the opt-in development
+[retained-owner contract](RETAINED-OWNER.md): fence suite sources, join accepted
+native callback/retry work, permit exact fixture cleanup while held and resume.
+The process must have one exclusive operator; sentinel fixtures may coexist,
+but unrelated active callback callers may not. Timeout/incomplete evidence
+retains dirty state. No automatic reset or application cleanup is included.
+[HANDOFF](../HANDOFF.md) records the combined race and real SDK acceptance.
+The completed native #2–#16 scope remains separate.
 
 ## Low priority: remaining SES APIs
 

@@ -53,6 +53,17 @@ These are AWS core gaps. Registration, local capacity/evidence and dev recipe
 consumers remain named harness adapters. See [Messaging](MESSAGING.md),
 [Mappings](EVENT-SOURCES.md) and [Gateway](GATEWAY.md) for exact limits.
 
+## Retained-suite recovery: development harness
+
+[#17](https://github.com/lyeith/eventbus/issues/17) adds an opt-in, process-exclusive
+ownership barrier in `devquiescence`, composed by app `dev_retained_owner.go` with
+Lambda's `dev_lifecycle.go` seam. It fences source HTTP before parsing/capture,
+joins accepted callback/async-retry/native-child activity, permits exact fixture
+cleanup while held and resumes by generation. It is a development control
+contract, not an AWS API or a change to #16. Autonomous owners outside the first
+profile are explicitly refused; [Retained owner](RETAINED-OWNER.md) states endpoint,
+failure and cleanup boundaries. [HANDOFF](../HANDOFF.md) records current verification.
+
 ## Core versus harness code
 
 | Concern | Owner |
@@ -62,7 +73,8 @@ consumers remain named harness adapters. See [Messaging](MESSAGING.md),
 | Authorizer payload format versus integration payload format | Independent gateway core configuration, even when provisioned through YAML |
 | Async acceptance/retries, rotation steps, scheduled target dispatch, SNS Firehose delivery | Respective AWS service core with consumer-owned typed ports |
 | YAML loading, deterministic fixture IDs/aliases, fixture profiles, local executable/endpoint selection | Explicit `dev_*.go` adapters; composition in `internal/app` |
-| Captures, agent wait/reset/inspection controls, fault injection and accelerated clocks | Development harness adapters; any future HTTP controls use a distinct namespace |
+| Captures, agent wait/reset/inspection controls, fault injection and accelerated clocks | Development harness adapters; HTTP controls use a distinct namespace |
+| Retained-suite fence, safe held proof and resume | `devquiescence`; EventBus app owns listener/profile composition, Lambda reports joined lifetimes, consuming applications own exact cleanup |
 | Consumer polling/process recipes, frontend hosting and private application mappings | Existing harness owners; never substitute for missing AWS operations |
 
 Development adapters translate into validated core configuration and operations.

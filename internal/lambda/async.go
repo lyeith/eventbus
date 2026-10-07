@@ -31,10 +31,12 @@ type AsyncRecord struct {
 	ErrorType     string    `json:"error_type,omitempty"`
 }
 type asyncTask struct {
-	entry   executableFunction
-	input   invocation
-	record  AsyncRecord
-	readyAt time.Time
+	entry        executableFunction
+	input        invocation
+	record       AsyncRecord
+	readyAt      time.Time
+	release      func(error)
+	ownershipErr error
 }
 
 // Admit transfers a private copy into this instance's bounded in-memory queue.
@@ -70,10 +72,18 @@ func (service *Service) Admit(ctx context.Context, input InvokeInput) (Admission
 	if service.asyncOutstanding >= service.asyncCapacity {
 		return Admission{}, invocationError(http.StatusTooManyRequests, "TooManyRequestsException", "Lambda async queue capacity is exhausted")
 	}
+	release, err := service.beginActivityLocked("lambda_async", requestID)
+	if err != nil {
+		return Admission{}, err
+	}
+	task.release = release
 	// The small evidence append and publication are atomic with service closing.
 	// Capture writers are owned file/stdio sinks, never application callbacks.
 	if err := service.asyncCapture.Append(task.record); err != nil {
 		service.asyncEvidenceErr = err
+		if task.release != nil {
+			task.release(err)
+		}
 		return Admission{}, invocationError(http.StatusInternalServerError, "ServiceException", "Cannot capture Lambda async admission")
 	}
 	service.asyncOutstanding++
@@ -129,6 +139,10 @@ func (service *Service) finishAsyncLocked(task *asyncTask, state, errorType stri
 		service.asyncHistory = service.asyncHistory[:service.asyncHistoryLimit]
 	}
 	service.wakeAsyncLocked()
+	if task.release != nil {
+		task.release(errors.Join(task.ownershipErr, service.asyncEvidenceErr))
+		task.release = nil
+	}
 }
 
 func (service *Service) takeAsync() *asyncTask {
@@ -207,6 +221,7 @@ func (service *Service) asyncWorker() {
 		}
 		result, err := service.invokeOwned(service.asyncContext, task.entry, task.input, true)
 		service.mu.Lock()
+		task.ownershipErr = errors.Join(task.ownershipErr, result.ownershipErr)
 		switch {
 		case service.asyncAborted || errors.Is(err, context.Canceled):
 			service.finishAsyncLocked(task, "canceled", "ServiceShutdown")

@@ -73,6 +73,18 @@ func (capture *SNSCapture) Append(record SNSCaptureRecord) error {
 	return capture.sink.Append(record)
 }
 
+// Err exposes retained evidence failures without closing capture, so a
+// retained-owner barrier can refuse unsafe cleanup while its sinks stay live.
+func (capture *SNSCapture) Err() error {
+	if capture == nil {
+		return errors.New("SNS capture is not configured")
+	}
+	if capture.sink == nil {
+		return errors.New("SNS capture writer is not configured")
+	}
+	return capture.sink.Err()
+}
+
 func (capture *SNSCapture) Close() error {
 	if capture == nil {
 		return nil

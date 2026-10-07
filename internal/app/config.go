@@ -8,6 +8,7 @@ import (
 
 type config struct {
 	port                  int
+	retainedCallbackPort  int
 	region                string
 	accountID             string
 	s3Endpoint            string
@@ -35,6 +36,7 @@ type config struct {
 // process-global flags. The CLI uses ExitOnError to preserve exit behavior.
 func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	port := flags.Int("port", 4100, "Port to listen on")
+	retainedCallbackPort := flags.Int("retained-owner-callback-port", 0, "Opt-in exclusive retained-owner mode: trusted callback loopback port (0 disables)")
 	region := flags.String("region", "us-east-1", "AWS region")
 	accountID := flags.String("account-id", "000000000000", "AWS account ID")
 	s3Endpoint := flags.String("s3-endpoint", "http://localhost:9000", "S3 endpoint for Firehose flush (RustFS)")
@@ -69,7 +71,8 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	if *cognitoProfile != "" && *cognitoProfile != "legacy-fixtures" {
 		return config{}, fmt.Errorf("unknown Cognito fixture profile %q", *cognitoProfile)
 	}
-	return config{
+	cfg := config{
+		retainedCallbackPort:  *retainedCallbackPort,
 		port:                  *port,
 		region:                *region,
 		accountID:             *accountID,
@@ -92,5 +95,6 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		sesLog:                *sesLog,
 		sesConfig:             *sesConfig,
 		debug:                 *debug,
-	}, nil
+	}
+	return cfg, validateRetainedConfig(cfg)
 }

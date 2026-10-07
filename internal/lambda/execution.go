@@ -3,6 +3,7 @@ package lambda
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -135,7 +136,10 @@ func (service *Service) Execute(ctx context.Context, input InvokeInput) (InvokeO
 	requestID := uuid.NewString()
 	result, err := service.invoke(ctx, entry, prepareInvocation(entry, name, input, requestID))
 	if err != nil {
-		return InvokeOutput{}, invocationError(http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
+		if errors.Is(err, errClosed) {
+			return InvokeOutput{}, invocationError(http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
+		}
+		return InvokeOutput{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return InvokeOutput{}, err

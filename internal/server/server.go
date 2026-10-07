@@ -123,10 +123,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 	if target := r.Header.Get("X-Amz-Target"); target != "" {
-		protocol := awsprotocol.JSON10
-		if strings.HasPrefix(target, "Firehose_") || strings.HasPrefix(target, "AmazonSSM.") || strings.HasPrefix(target, "secretsmanager.") {
-			protocol = awsprotocol.JSON11
-		}
+		protocol := awsprotocol.JSONForTarget(target)
 		if r.Method != http.MethodPost {
 			protocol.Error(w, http.StatusMethodNotAllowed, "InvalidMethod", "Only POST is supported")
 			return

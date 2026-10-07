@@ -14,8 +14,9 @@ import (
 // Config is the resolved local recipe used by this service. Native protocol
 // fields retain AWS semantics; file loading belongs to dev_config.go.
 type Config struct {
-	Functions map[string]Function `yaml:"functions"`
-	DevAsync  *DevAsyncConfig     `yaml:"dev_async,omitempty"`
+	Functions   map[string]Function `yaml:"functions"`
+	DevAsync    *DevAsyncConfig     `yaml:"dev_async,omitempty"`
+	DevActivity DevActivity         `yaml:"-"`
 }
 
 // Function declares one local function. Command is an argv vector, never a

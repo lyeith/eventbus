@@ -11,6 +11,7 @@ internal/
   server/                AWS protocol selection, routing and /health
   awsprotocol/           Shared wire mechanics, target extraction and request IDs
   devcapture/            Harness JSONL append/sync, failure and file ownership
+  devquiescence/         Exclusive retained-owner fence, live activity and resumable generations
   localexec/             Shared process groups, descendant cleanup and capped output
   gateway/               REST/HTTP API REQUEST events, IAM/simple responses and HTTP/Lambda proxy
   lambda/                App-owned multi-language execution, Invoke/Runtime API and child lifetime
@@ -42,8 +43,11 @@ Put YAML/file loading and compatibility fixture extensions in `dev_*.go` files.
 configurable listener readiness reservation and application collision validation.
 The `consumer` package already owns harness polling/process recipes. App composition
 injects local endpoints, function runners, recorders and clocks through real ports.
-Any future agent-control HTTP API gets a distinct harness namespace; it does not
-pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
+Retained-owner controls use `/__eventbus/dev/retained-owner`, a separate harness
+namespace. `app/dev_retained_owner.go` composes source/callback listeners and the
+supported profile; Lambda `dev_lifecycle.go` supplies joined task/invocation
+lifetimes without changing native payloads. See [Retained owner](RETAINED-OWNER.md)
+and [ticket ownership](ISSUE-TRIAGE.md).
 
 ## Dependency rules
 
@@ -91,6 +95,11 @@ pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
   SES/Cognito/SQS retain distinct serializers, size limits and error envelopes.
 - `devcapture` owns file/borrowed-writer lifetime, serialized JSONL append, fsync
   and terminal write failure. Services own schemas, timestamps and acceptance.
+- `devquiescence` owns the process-exclusive source fence, counted HTTP envelopes,
+  accepted native lifetimes, held proof and generation-checked resume. It owns no
+  service runtime or fixture deletion. App composes its profile; applications own
+  callback endpoint configuration and exact cleanup. No PID/grace-period proof
+  substitutes for joined ownership, and business success remains an app assertion.
 - `localexec` owns OS process groups, cancellation, retained-pipe bounds,
   descendant cleanup and capped output buffers. Lambda, triggers and consumers
   own their protocols, results, deadlines, environment and retries; each runner
@@ -106,6 +115,7 @@ private. Application acceptance behavior belongs in the consuming application.
 | Complete, durable capture output | `devcapture`; service wrappers select records and acceptance ordering |
 | OS child/descendant lifetime and capped output | `localexec`; runners admit/join invocations, select limits and reject incomplete results |
 | HTTP drain and dependency-ordered release | `app`; each service joins its own workers |
+| Resumable retained-suite ownership barrier | `devquiescence`; EventBus app composes listeners/profile, Lambda reports lifetimes, consuming application owns exact cleanup |
 | Operation extraction and bounded body reading | `awsprotocol`; service prefix, transport budget and native validation remain caller-owned |
 | Token issuance across password/SRP/custom/MFA/refresh | Cognito `auth.go` and `client_validity.go`; every flow uses persisted client policy |
 | Shared challenge continuation state | Cognito `challenge_state.go`; custom trigger decisions stay in `custom_auth.go` |
@@ -134,6 +144,7 @@ owners. Do not merge these policies into a generic runner or wire decoder.
 | Target/path selection, health or protocol fallback | `internal/server` tests with composed service handlers |
 | Scheduler state/timing/idempotency/target admission | `internal/scheduler` tests; real JS SDK in `tests/sdk` |
 | Worker joins, HTTP drain or independent resource closure | `internal/app` tests |
+| Retained fence/generation/activity/evidence and accepted-chain recovery | `internal/devquiescence` tests; Lambda seam and app composition tests; opt-in retained-owner SDK lane |
 | Python/JavaScript SDK, SRP/JWT and trigger/SES interoperability, complete dispatcher and child runner | `tests/sdk`, opt-in `sdksmoke` tag |
 | Firehose behavior against an owned RustFS endpoint | `internal/firehose`, opt-in `integration` tag |
 

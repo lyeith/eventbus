@@ -132,7 +132,7 @@ func newCommand(ctx context.Context, entry executableFunction, input invocation,
 	return command, nil
 }
 
-func runCommand(ctx context.Context, entry executableFunction, input invocation) invocationResult {
+func runCommand(ctx context.Context, entry executableFunction, input invocation, cleanup func(*exec.Cmd) error) invocationResult {
 	arguments := append([]string(nil), entry.command[1:]...)
 	wrapped := entry.runtime == "node" || entry.runtime == "python"
 	if entry.runtime == "node" {
@@ -188,7 +188,7 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation)
 		return result
 	}
 	waitErr := command.Wait()
-	cleanupErr := localexec.Cleanup(command)
+	cleanupErr := cleanup(command)
 	if reader != nil {
 		// Grandchildren could retain fd3. Group termination happens before
 		// joining the result reader; closing it also bounds the failure path.
@@ -219,6 +219,7 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation)
 		}
 	}
 	result.logs = logs.Bytes()
+	result.ownershipErr = cleanupErr
 	return result
 }
 

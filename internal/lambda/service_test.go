@@ -64,6 +64,9 @@ func TestRuntimeProcess(t *testing.T) {
 	case "error":
 		path = "invocation/" + id + "/error"
 		payload = []byte(`{"errorType":"Error","errorMessage":"Unauthorized"}`)
+	case "internal-error":
+		path = "invocation/" + id + "/error"
+		payload = []byte(`{"errorType":"Runtime.InternalError","errorMessage":"handler-controlled failure"}`)
 	case "bad":
 		payload = []byte("not JSON")
 	case "big":

@@ -59,6 +59,14 @@ for 202/empty acceptance and handler/retry evidence. Scheduler uses the approved
 pinned JS client and a real Node alias, checking exact input and completion
 removal before handler business completion. All fixtures own state and children.
 
+The opt-in `TestRetainedOwnerPythonSDKBarrier` lane targets the development
+[retained-owner profile](../../docs/RETAINED-OWNER.md) through owned source/callback
+listeners and ordinary boto3/native Lambda requests. Its recovery boundary is
+joined accepted activity, exact app-owned cleanup and explicit resume, with no
+business-success or restart-persistence claim. [HANDOFF](../../HANDOFF.md) records
+current verification; the profile's unsupported autonomous sources remain explicit
+refusals.
+
 Each runner requires a successful exit and exactly one PASS marker. Missing
 dependencies, false success, assertion failures and timeouts fail the lane.
 Network waits are bounded; inherited AWS profiles, proxies and interpreter

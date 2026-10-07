@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lyeith/eventbus/internal/devcapture"
+	"github.com/lyeith/eventbus/internal/localexec"
 )
 
 const (
@@ -38,7 +39,11 @@ type executableFunction struct {
 // Service owns all admitted invocations until their process groups and
 // Runtime API listeners have stopped. Registry entries are immutable.
 type Service struct {
-	functions                                          map[string]executableFunction
+	functions   map[string]executableFunction
+	devActivity DevActivity
+	// Immutable in normal construction; private tests can wrap real cleanup to
+	// prove that ownership uncertainty stays separate from native responses.
+	processCleanup                                     func(*exec.Cmd) error
 	mu                                                 sync.Mutex
 	closed                                             bool
 	aborted                                            bool
@@ -91,7 +96,7 @@ func NewService(config *Config, workDir string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	service := &Service{functions: make(map[string]executableFunction), active: make(map[uint64]invocationOwner), done: make(chan struct{})}
+	service := &Service{functions: make(map[string]executableFunction), devActivity: config.DevActivity, processCleanup: localexec.Cleanup, active: make(map[uint64]invocationOwner), done: make(chan struct{})}
 	for name, function := range config.Functions {
 		directory := root
 		if function.WorkDir != "" {
@@ -265,8 +270,15 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		invocation.functionARN = "arn:aws:lambda:" + region + ":" + account + ":function:" + name
 	}
 	result, err := service.invoke(request.Context(), entry, invocation)
-	if errors.Is(err, errClosed) {
-		invokeError(writer, http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
+	if err != nil {
+		var executionErr *InvokeError
+		if errors.As(err, &executionErr) {
+			invokeError(writer, executionErr.Status, executionErr.Code, executionErr.Message)
+		} else if errors.Is(err, errClosed) {
+			invokeError(writer, http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
+		} else if request.Context().Err() == nil {
+			invokeError(writer, http.StatusInternalServerError, "ServiceException", "Cannot execute invocation")
+		}
 		return
 	}
 	if request.Context().Err() != nil {
@@ -336,6 +348,9 @@ type invocationResult struct {
 	payload       []byte
 	functionError bool
 	logs          []byte
+	// Private ownership uncertainty cannot be supplied by a handler or projected
+	// onto native responses. It only makes a developer lifecycle lease dirty.
+	ownershipErr error
 }
 
 func failure(kind, message string) invocationResult {
@@ -346,7 +361,7 @@ func failure(kind, message string) invocationResult {
 func (service *Service) invoke(parent context.Context, entry executableFunction, input invocation) (invocationResult, error) {
 	return service.invokeOwned(parent, entry, input, false)
 }
-func (service *Service) invokeOwned(parent context.Context, entry executableFunction, input invocation, asynchronous bool) (invocationResult, error) {
+func (service *Service) invokeOwned(parent context.Context, entry executableFunction, input invocation, asynchronous bool) (result invocationResult, err error) {
 	ctx, cancel := context.WithTimeout(parent, entry.timeout)
 	defer cancel()
 	input.deadline, _ = ctx.Deadline()
@@ -354,6 +369,14 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	if service.closed && !asynchronous || service.aborted || asynchronous && service.asyncAborted {
 		service.mu.Unlock()
 		return invocationResult{}, errClosed
+	}
+	var release func(error)
+	if !asynchronous {
+		release, err = service.beginActivityLocked("lambda_invoke", input.requestID)
+		if err != nil {
+			service.mu.Unlock()
+			return invocationResult{}, err
+		}
 	}
 	service.next++
 	id := service.next
@@ -363,19 +386,21 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	defer func() {
 		service.mu.Lock()
 		delete(service.active, id)
-		service.mu.Unlock()
 		service.inflight.Done()
+		if release != nil {
+			release(result.ownershipErr)
+		}
+		service.mu.Unlock()
 	}()
-	var result invocationResult
 	if entry.runtime == "provided" {
-		result = runProvided(ctx, entry, input)
+		result = runProvided(ctx, entry, input, service.processCleanup)
 	} else {
-		result = runCommand(ctx, entry, input)
+		result = runCommand(ctx, entry, input, service.processCleanup)
 	}
 	if ctx.Err() != nil {
-		logs := result.logs
+		logs, ownershipErr := result.logs, result.ownershipErr
 		result = failure("Sandbox.Timedout", fmt.Sprintf("Task timed out after %.2f seconds", entry.timeout.Seconds()))
-		result.logs = logs
+		result.logs, result.ownershipErr = logs, ownershipErr
 	}
 	return result, nil
 }

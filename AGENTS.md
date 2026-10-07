@@ -6,6 +6,8 @@ loop: run application scenarios, inspect evidence, assert outcomes and iterate.
 Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
 [SES capture](docs/SES.md) and [Messaging](docs/MESSAGING.md).
 [STATE.md](STATE.md) and [HANDOFF.md](HANDOFF.md) record current work, not API contracts.
+For opt-in retained-suite recovery, read [Retained owner](docs/RETAINED-OWNER.md)
+before configuring endpoints or cleaning fixtures.
 
 ## Ownership and contracts
 
@@ -50,6 +52,12 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
   `localexec` for process groups/descendants and capped output, `awsprotocol`
   for wire mechanics.
   Services keep schemas, admission, result policies and native validation.
+- `internal/devquiescence` owns the development retained-owner fence, live counts
+  and generations; `app/dev_retained_owner.go` owns its two loopback listeners
+  and profile refusals. Lambda `dev_lifecycle.go` reports actual joined lifetimes.
+  Require a safe held generation before exact app-owned cleanup; preserve
+  accepted callback peers and unrelated sentinels. No concurrent unrelated suite
+  or callback caller is supported by this exclusive profile.
 - `internal/ses` owns fixtures, capture records, MIME and both sending adapters.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.

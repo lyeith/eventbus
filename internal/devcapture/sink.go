@@ -98,6 +98,30 @@ func (sink *Sink) Append(record any) error {
 	return sink.failure
 }
 
+// Err reports capture availability and any retained delivery/close failure
+// without closing the sink. It waits for an in-progress append so an incomplete
+// or undurable record cannot be observed as healthy evidence.
+func (sink *Sink) Err() error {
+	if sink == nil {
+		return errors.New("capture is not configured")
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.failure != nil {
+		return sink.failure
+	}
+	if sink.closed {
+		if sink.closeErr != nil {
+			return sink.closeErr
+		}
+		return fmt.Errorf("%s capture is closed", sink.name)
+	}
+	if sink.writer == nil {
+		return fmt.Errorf("%s capture writer is not configured", sink.name)
+	}
+	return nil
+}
+
 // Close waits for an admitted append, closes an owned file once and retains both
 // delivery and close errors. Borrowed output, including stdout, remains open.
 func (sink *Sink) Close() error {

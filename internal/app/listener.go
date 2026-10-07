@@ -16,17 +16,19 @@ import (
 // quiesce first, while this listener remains available.
 var errHTTPNotDrained = errors.New("HTTP listener did not drain; resource cleanup withheld")
 
-// eventBusListener owns the single HTTP listener and its existing resource owner.
+// eventBusListener owns the AWS listener, optional dev callback listener and
+// their existing resource owner.
 // Concurrent shutdown callers share one result; a canceled waiter cannot stop it.
 type eventBusListener struct {
-	server  *http.Server
-	owned   *eventBusLifecycle
-	timeout time.Duration
-	mu      sync.Mutex
-	begun   bool
-	running bool
-	done    chan struct{}
-	err     error
+	server      *http.Server
+	devRetained *devRetainedHTTP
+	owned       *eventBusLifecycle
+	timeout     time.Duration
+	mu          sync.Mutex
+	begun       bool
+	running     bool
+	done        chan struct{}
+	err         error
 }
 
 func newEventBusListener(server *http.Server, owned *eventBusLifecycle, timeout time.Duration) *eventBusListener {
@@ -74,9 +76,16 @@ func (listener *eventBusListener) close(ctx context.Context) (resultErr error) {
 	}
 	deadline, cancel := context.WithTimeout(ctx, listener.timeout)
 	defer cancel()
-	quiesceErr := listener.owned.Quiesce(deadline)
-	if err := listener.server.Shutdown(deadline); err != nil {
-		return errors.Join(quiesceErr, errHTTPNotDrained, fmt.Errorf("drain HTTP listener: %w", err))
+	retainedErr := listener.joinRetained(deadline)
+	quiesceErr := errors.Join(retainedErr, listener.owned.Quiesce(deadline))
+	var httpErrs []error
+	for _, server := range listener.httpServers() {
+		if err := server.Shutdown(deadline); err != nil {
+			httpErrs = append(httpErrs, fmt.Errorf("drain HTTP listener: %w", err))
+		}
+	}
+	if len(httpErrs) != 0 {
+		return errors.Join(quiesceErr, errHTTPNotDrained, errors.Join(httpErrs...))
 	}
 	if err := deadline.Err(); err != nil {
 		return errors.Join(quiesceErr, fmt.Errorf("cleanup budget expired: %w", err))
@@ -115,23 +124,30 @@ func (listener *eventBusListener) Run(ctx context.Context) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
-	served := make(chan error, 1)
-	go func() { served <- listener.server.ListenAndServe() }()
+	servers := listener.httpServers()
+	served := make(chan error, len(servers))
+	for _, server := range servers {
+		go func() { served <- server.ListenAndServe() }()
+	}
 	var serveErr error
-	var finished bool
+	finished := 0
 	select {
 	case serveErr = <-served:
-		finished = true
+		finished++
 	case <-ctx.Done():
 	case <-signals:
 	case <-listener.done:
 	}
 	shutdownErr := listener.Shutdown(context.WithoutCancel(ctx))
-	if !finished {
-		serveErr = <-served
-	}
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		serveErr = nil
+	}
+	for finished < len(servers) {
+		err := <-served
+		finished++
+		if !errors.Is(err, http.ErrServerClosed) {
+			serveErr = errors.Join(serveErr, err)
+		}
 	}
 	return errors.Join(serveErr, shutdownErr)
 }

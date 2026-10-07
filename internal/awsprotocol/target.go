@@ -10,3 +10,12 @@ func TargetAction(target string) string {
 	}
 	return ""
 }
+
+// JSONForTarget selects the response wire version for a supported AWS target.
+// Unknown targets use JSON 1.0; service admission remains the caller's concern.
+func JSONForTarget(target string) JSONProtocol {
+	if strings.HasPrefix(target, "Firehose_") || strings.HasPrefix(target, "AmazonSSM.") || strings.HasPrefix(target, "secretsmanager.") {
+		return JSON11
+	}
+	return JSON10
+}

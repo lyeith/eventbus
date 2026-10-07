@@ -26,6 +26,14 @@ See [AWS endpoint configuration](https://docs.aws.amazon.com/sdkref/latest/guide
 and [LocalStack networking](https://docs.localstack.cloud/aws/customization/networking/accessing-endpoint-url/)
 for client and container addressing.
 
+For retained-suite interruption/recovery, opt into [Retained owner](RETAINED-OWNER.md).
+Its source URL is for suite roots; registered handlers/owned native peers use the
+separate trusted callback URL. Fence and join before exact fixture cleanup, then
+resume the held generation. A stopped client, missing capture or absent PID is
+insufficient. This exclusive profile refuses mappings, Scheduler, rotation,
+Firehose, dev recipe consumers and Cognito trigger runners; default mode remains
+available for those workflows.
+
 ## Connect and seed the app
 
 1. Override the selected AWS SDK clients' endpoints to the EventBus URL.
@@ -121,6 +129,9 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   scheduling/dev consumers stop first;
   accepted rotation and Lambda Event work drain with the AWS listener available.
   HTTP drains before stores/captures close. A deadline abort is a failed shutdown.
+  In retained-owner mode, shutdown first joins accepted callback chains with
+  peers available and irreversibly disables resume. Use the resumable barrier
+  while retaining the process between suites.
 
 Keep Cognito's SQLite path, pool/client IDs and issuer stable when continuing
 the same app environment. Use fresh owned paths for independent tests.

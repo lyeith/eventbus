@@ -2,37 +2,38 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD, main.
 Public MIT repository: https://github.com/lyeith/eventbus.
-Latest public binaries: v0.6.0 (2026-10-07); this work is not yet released.
-Plans pins and developer stacks remain untouched.
+Latest public binaries: v0.6.0; #16/#17 are accepted and not yet released.
+Plans pins, developer stacks and identity databases remain untouched.
 
-#16 is implemented and verified:
-- Native SQS mappings accept BatchSize 1–10/default 10 and configured
-  ScalingConfig.MaximumConcurrency 2–1000 with accurate detached readback.
-- Fixed workers own each receive/invoke/settlement sequence; the separate dev
-  worker cap defaults to 32. No selected ceiling keeps local serial execution.
-- SQS selects exact native event JSON within 6 MiB before committing leases.
-  Excluded records retain visibility/counts/receipt state and FIFO head order.
-- Actual whole-batch Lambda completion permits current-receipt acknowledgment;
-  failure/timeout retains all receipts for native visibility/retry/redrive.
-- Mapping Delete/Close and unavailable-source cancellation join every worker.
-- Unsupported larger batches/windows/partial responses/Update/List remain explicit.
+#16: native SQS BatchSize 1–10/default 10; ScalingConfig ceiling 2–1000.
+Fixed workers own receive/invoke/whole-batch settlement. The separate local cap
+defaults to 32; omitted native ceiling remains serial locally. Exact 6 MiB event
+selection occurs before leasing, preserving excluded messages and FIFO order.
+Delete/Close join all workers/children. Larger batches/windows, partial responses,
+Update/List and AWS managed scaling remain explicit separate capabilities.
 
-Verified: eventsource race suite repeated 20 times; messaging race and vet;
-production app/consumer race; combined actual SQS/SNS/Lambda Python SDK race
-39.907s, including preserved batch-one behavior, batch-five concurrency two,
-[7,3] payload-bound selection, retries/DLQ/FIFO/isolation/two-child teardown.
-Read-only ownership review found no remaining #16 defect.
-No dependency added. Full logs follow existing finite SSD /tmp retention.
+#17: opt-in retained-owner development harness, documented in
+docs/RETAINED-OWNER.md. Enable --retained-owner-callback-port for two loopback
+endpoints. Suite roots/control use source; accepted native handlers/peers use
+callback. One exclusive operator must own all active callback callers.
+Count received HTTP before capture, async admission through retry/terminal
+evidence and independent sync execution through actual child/runtime-handler
+join. Fence/join/held exact SNS/SQS cleanup/explicit generation resume never
+reset stores or perform app-specific cleanup.
+Deadline retains fenced dirty state; capture/cleanup uncertainty forbids safe
+cleanup and resume. Shutdown preserves peers during join, aborts/joins native
+work after failed join and withholds store cleanup on failure.
+The first profile explicitly refuses mappings, Scheduler, Firehose/subscriptions,
+RotateSecret, legacy consumers and Cognito triggers; ordinary mode is unchanged.
 
-#17 is in flight: opt-in retained-owner quiescence, a development harness feature.
-Explicit exclusive owner: suite roots use a source endpoint; registered handlers
-and owned native peers use a separate callback endpoint. Shared activity tracks
-received HTTP before capture, async tasks across retry intervals, and independent
-sync execution until child cleanup. Fence/join/held exact cleanup/explicit resume
-must fail closed on deadline, evidence failure or uncertain child ownership.
-Unsupported autonomous sources will be refused in this first retained profile;
-ordinary native mapping/runtime contracts stay unchanged outside the opt-in mode.
-Implementation and real SDK acceptance are underway; no #17 guarantee is claimed.
+Verification: all affected core/app/default consumer and gateway integration
+race suites pass; eight real Python/JavaScript SDK lanes pass, including lost
+SNS/nested responses, pre-capture received publications, process-free retries,
+timeout/shutdown, sentinel preservation and a resumed second suite.
+Scoped tagged vet passes. Read-only combined ownership review has no open finding.
+No new dependency. Full logs use existing finite SSD /tmp retention.
 
-Next: finish #17, combined review/verification, then publish the next minor release.
-SES management and durable async restart recovery remain outside these tickets.
+Next: build v0.7.0 from clean tagged source, verify packaged Linux amd64/macOS
+arm64 behavior, publish eight EventBus/gateway binaries with verified checksums,
+then remove owned release staging. SES management and durable async restart
+recovery remain outside these tickets.

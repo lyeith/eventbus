@@ -3,15 +3,15 @@ package lambda
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/lyeith/eventbus/internal/localexec"
 )
 
 const runtimePrefix = "/2018-06-01/runtime/"
@@ -19,13 +19,12 @@ const runtimePrefix = "/2018-06-01/runtime/"
 // Each provided-runtime invocation gets a private loopback listener. A Go
 // binary built with aws-lambda-go/lambda.Start uses its unmodified Runtime API
 // client; it never needs the EventBus stdin/stdout command adapter.
-func runProvided(ctx context.Context, entry executableFunction, input invocation) invocationResult {
+func runProvided(ctx context.Context, entry executableFunction, input invocation, cleanup func(*exec.Cmd) error) (result invocationResult) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return failure("Runtime.InternalError", "Cannot start Lambda Runtime API")
 	}
 	runtimeCtx, stopRuntime := context.WithCancel(ctx)
-	defer stopRuntime()
 	runtime := &runtimeInvocation{ctx: runtimeCtx, input: input, arn: functionARN(entry, input), result: make(chan invocationResult, 1)}
 	server := &http.Server{
 		Handler:           runtime,
@@ -37,13 +36,7 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	serveDone := make(chan struct{})
 	go func() { _ = server.Serve(listener); close(serveDone) }()
 	defer func() {
-		stopRuntime()
-		shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdown); err != nil {
-			_ = server.Close()
-		}
-		<-serveDone
+		result.ownershipErr = errors.Join(result.ownershipErr, runtime.close(server, stopRuntime, serveDone))
 	}()
 	command, err := newCommand(ctx, entry, input, entry.command[1:], listener.Addr().String())
 	if err != nil {
@@ -58,7 +51,6 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	}
 	processDone := make(chan error, 1)
 	go func() { processDone <- command.Wait() }()
-	var result invocationResult
 	finished := false
 	select {
 	case result = <-runtime.result:
@@ -74,7 +66,7 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	case <-ctx.Done():
 		result = failure("Sandbox.Timedout", "Function invocation timed out")
 	}
-	cleanupErr := localexec.Cleanup(command)
+	cleanupErr := cleanup(command)
 	if !finished {
 		<-processDone
 	}
@@ -82,6 +74,7 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 		result = failure("Runtime.InternalError", "Cannot stop function process group")
 	}
 	result.logs = logs.Bytes()
+	result.ownershipErr = cleanupErr
 	return result
 }
 
@@ -92,10 +85,40 @@ type runtimeInvocation struct {
 	mu        sync.Mutex
 	delivered bool
 	completed bool
+	closing   bool
+	requests  sync.WaitGroup
 	result    chan invocationResult
 }
 
+// close fences handler admission before Wait, cancels duplicate /next polls,
+// closes stalled body/write I/O if graceful shutdown expires, and joins every
+// admitted request. Joining Serve alone only proves listener closure.
+func (runtime *runtimeInvocation) close(server *http.Server, stopRuntime context.CancelFunc, serveDone <-chan struct{}) error {
+	runtime.mu.Lock()
+	runtime.closing = true
+	runtime.mu.Unlock()
+	stopRuntime()
+	shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := server.Shutdown(shutdown)
+	if err != nil {
+		err = errors.Join(err, server.Close())
+	}
+	<-serveDone
+	runtime.requests.Wait()
+	return err
+}
+
 func (runtime *runtimeInvocation) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	runtime.mu.Lock()
+	if runtime.closing {
+		runtime.mu.Unlock()
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	runtime.requests.Add(1)
+	runtime.mu.Unlock()
+	defer runtime.requests.Done()
 	if request.URL.Path == runtimePrefix+"invocation/next" {
 		if request.Method != http.MethodGet {
 			writer.WriteHeader(http.StatusMethodNotAllowed)
