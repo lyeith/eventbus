@@ -58,6 +58,7 @@ func request(handler http.Handler, method, path, target, body string) *httptest.
 
 func TestRoutesToServiceOwnedProtocols(t *testing.T) {
 	router := server.New(composedServices(t))
+	var createdPoolID string
 	for _, tc := range []struct {
 		name, method, path, target, body, contains string
 		status                                     int
@@ -83,12 +84,25 @@ func TestRoutesToServiceOwnedProtocols(t *testing.T) {
 		{"unsupported SES REST", "POST", "/v2/email/no-such-operation", "", `{}`, "SES operation is not implemented", 404},
 		{"malformed query", "POST", "/", "", "Action=Publish&Message=%ZZ", "Malformed Query request", 400},
 		{"malformed SES query", "POST", "/", "", "Action=SendEmail&Version=2010-12-01&Source=%ZZ", "Malformed Query request", 400},
-		{"method envelope", "GET", "/", "", "", "http://sns.amazonaws.com/doc/2010-03-31/", 405},
+		{"method envelope", "GET", "/", "", "", "<ErrorResponse>", 405},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "JWKS suffix" {
+				require.NotEmpty(t, createdPoolID)
+				tc.path = "/" + createdPoolID + "/.well-known/jwks.json"
+			}
 			result := request(router, tc.method, tc.path, tc.target, tc.body)
 			require.Equal(t, tc.status, result.Code, result.Body.String())
 			require.Contains(t, result.Body.String(), tc.contains)
+			if tc.name == "Cognito JSON" {
+				var created struct {
+					UserPool struct {
+						ID string `json:"Id"`
+					} `json:"UserPool"`
+				}
+				require.NoError(t, json.Unmarshal(result.Body.Bytes(), &created))
+				createdPoolID = created.UserPool.ID
+			}
 		})
 	}
 }

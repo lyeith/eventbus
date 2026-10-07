@@ -3,9 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "devDependencies": {
     "@aws-sdk/client-cognito-identity-provider": "3.1146.0",
+    "@aws-sdk/client-scheduler": "3.1146.0",
     "@aws-sdk/client-sesv2": "3.1146.0"
   }
 }

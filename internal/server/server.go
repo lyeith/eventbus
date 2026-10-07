@@ -45,6 +45,7 @@ type Services struct {
 	Cognito        CognitoHandler
 	SES            SESHandler
 	Lambda         http.Handler
+	Scheduler      http.Handler
 	CognitoURLs    *CognitoURLs
 	QueryBodyLimit int64
 }
@@ -66,12 +67,21 @@ func New(services Services) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/schedules" || strings.HasPrefix(r.URL.Path, "/schedules/") {
+		if s.services.Scheduler == nil {
+			writeRESTError(w, http.StatusServiceUnavailable, "InternalServerException", "Scheduler is not configured")
+		} else {
+			s.services.Scheduler.ServeHTTP(w, r)
+		}
+		return
+	}
+	if r.URL.Path == "/schedule-groups" || strings.HasPrefix(r.URL.Path, "/schedule-groups/") {
+		writeRESTError(w, http.StatusBadRequest, "ValidationException", "Schedule group management is not supported")
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/2015-03-31/functions/") {
 		if s.services.Lambda == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("X-Amzn-ErrorType", "ResourceNotFoundException")
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"message":"Lambda function is not configured"}`))
+			writeRESTError(w, http.StatusNotFound, "ResourceNotFoundException", "Lambda function is not configured")
 		} else {
 			s.services.Lambda.ServeHTTP(w, r)
 		}
@@ -103,11 +113,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		awsprotocol.XMLError(w, http.StatusMethodNotAllowed, "InvalidMethod", "Only POST is supported")
-		return
-	}
 	if target := r.Header.Get("X-Amz-Target"); target != "" {
+		protocol := awsprotocol.JSON10
+		if strings.HasPrefix(target, "Firehose_") || strings.HasPrefix(target, "AmazonSSM.") || strings.HasPrefix(target, "secretsmanager.") {
+			protocol = awsprotocol.JSON11
+		}
+		if r.Method != http.MethodPost {
+			protocol.Error(w, http.StatusMethodNotAllowed, "InvalidMethod", "Only POST is supported")
+			return
+		}
 		var handler ActionHandler
 		switch {
 		case strings.HasPrefix(target, "Firehose_"):
@@ -121,17 +135,22 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 		case strings.HasPrefix(target, "AmazonSQS."):
 			handler = s.services.Messaging
 		default:
-			awsprotocol.JSONError(w, http.StatusBadRequest, "UnknownOperationException", "Unknown AWS service target")
+			protocol.Error(w, http.StatusBadRequest, "UnknownOperationException", "Unknown AWS service target")
 			return
 		}
 		if handler == nil {
-			awsprotocol.JSONError(w, http.StatusServiceUnavailable, "ServiceUnavailable", "Service not configured")
+			protocol.Error(w, http.StatusServiceUnavailable, "ServiceUnavailable", "Service not configured")
 			return
 		}
 		handler.ServeAction(w, r, awsprotocol.TargetAction(target))
 		return
 	}
 
+	if r.Method != http.MethodPost {
+		namespace, _ := awsprotocol.QueryNamespace(r.URL.Query().Get("Version"))
+		awsprotocol.QueryError(w, http.StatusMethodNotAllowed, namespace, "InvalidMethod", "Only POST is supported")
+		return
+	}
 	// ParseForm normally caps requests at 10 MB. SES applies decoded MIME quotas
 	// independently, so permit its transport encoding before service selection.
 	r.Body = http.MaxBytesReader(w, r.Body, s.services.QueryBodyLimit)
@@ -142,12 +161,24 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if parseErr != nil {
-		awsprotocol.XMLError(w, http.StatusBadRequest, "InvalidParameter", "Malformed Query request")
+		namespace, _ := awsprotocol.QueryNamespace(r.FormValue("Version"))
+		awsprotocol.QueryError(w, http.StatusBadRequest, namespace, "InvalidParameter", "Malformed Query request")
 		return
 	}
 	if s.services.Messaging == nil {
-		awsprotocol.XMLError(w, http.StatusServiceUnavailable, "ServiceUnavailable", "Messaging not configured")
+		namespace, _ := awsprotocol.QueryNamespace(r.FormValue("Version"))
+		awsprotocol.QueryError(w, http.StatusServiceUnavailable, namespace, "ServiceUnavailable", "Messaging not configured")
 		return
 	}
 	s.services.Messaging.ServeQuery(w, r, action)
+}
+
+// REST JSON services have a native message envelope rather than AWS JSON's
+// __type/Message fields. The wire owner supplies the shared request ID.
+func writeRESTError(w http.ResponseWriter, status int, code, message string) {
+	awsprotocol.EnsureRequestID(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Amzn-ErrorType", code)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
