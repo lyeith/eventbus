@@ -9,10 +9,12 @@ cmd/gateway/             Separate reusable request gateway CLI
 internal/
   app/                   Flags, construction, listener and resource lifetime
   server/                AWS protocol selection, routing and /health
-  awsprotocol/           Shared JSON/XML envelopes and request IDs
+  awsprotocol/           Shared wire mechanics, target extraction and request IDs
+  devcapture/            Harness JSONL append/sync, failure and file ownership
+  localexec/             Shared process groups, descendant cleanup and capped output
   gateway/               REST REQUEST events, Invoke client, policy evaluation and HTTP proxy mappings
   lambda/                App-owned multi-language execution, Invoke/Runtime API and child lifetime
-  cognito/               SQLite identities, lifecycle, SRP/auth, JWT/JWKS and seeds
+  cognito/               SQLite identities, lifecycle, shared challenge state, SRP/auth and JWT/JWKS
   cognitotrigger/        Application-owned Node trigger execution and child lifetime
   messaging/             Shared registry; separate queue and topic engines/adapters
   consumer/              Harness configuration, polling, settlement and processes
@@ -23,6 +25,21 @@ internal/
 tests/sdk/               Dispatcher proofs using pinned Python/JavaScript SDKs and JWT/SRP clients
 examples/                Application-owned fixture format examples
 ```
+
+## AWS core and development adapters
+
+Service core owns native fields/defaults, validation, persisted resource settings,
+state transitions and AWS protocol events/results. A setting stays core when a
+fixture also supplies it: per-client Cognito token policy and gateway payload
+formats are examples. Local lifecycle limits must be stated explicitly.
+
+Put YAML/file loading and compatibility fixture extensions in `dev_*.go` files.
+`cognito/dev_seed.go` and `dev_provisioning.go`, `gateway/dev_config.go` and
+`lambda/dev_config.go` identify existing adapters without changing their contracts.
+The `consumer` package already owns harness polling/process recipes. App composition
+injects local endpoints, function runners, recorders and clocks through real ports.
+Any future agent-control HTTP API gets a distinct harness namespace; it does not
+pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
 
 ## Dependency rules
 
@@ -35,7 +52,8 @@ examples/                Application-owned fixture format examples
 - SNS and SQS share the `messaging` registry but own separate state engines.
   `sqs_*` owns queues, typed operations and both JSON/Query adapters; `sns_*` owns
   topics, subscriptions, SMS/mobile state and Query adapters. SNS delivers to SQS
-  through `SendQueueMessage`; durable capture belongs to `capture.go`.
+  through `SendQueueMessage`; capture records and admission policy stay with SNS.
+  SES/SNS wrappers use `devcapture` for durable output mechanics.
   Publication, subscriptions and queue settlement
   need the same broker. Queue collections remain private to that owner.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message
@@ -48,16 +66,43 @@ examples/                Application-owned fixture format examples
   opaque context mappings and credential removal.
 - `lambda` owns execution and runtime protocol; application handlers own policy.
   `app` injects it into the service dispatcher and closes it after HTTP drain.
-- `awsprotocol` holds reusable wire helpers, without service state. SES and
-  Cognito retain their distinct decoders, size limits and error envelopes.
+- `awsprotocol` holds reusable wire helpers, without service state. Callers own
+  protocol admission and body budgets; over-budget bodies must fail, never truncate.
+  SES/Cognito/SQS retain distinct serializers, size limits and error envelopes.
+- `devcapture` owns file/borrowed-writer lifetime, serialized JSONL append, fsync
+  and terminal write failure. Services own schemas, timestamps and acceptance.
+- `localexec` owns OS process groups, cancellation, retained-pipe bounds,
+  descendant cleanup and capped output buffers. Lambda, triggers and consumers
+  own their protocols, results, deadlines, environment and retries; each runner
+  must Wait its directly launched child.
 
 Add an interface at a real consumer boundary; keep store implementation details
 private. Application acceptance behavior belongs in the consuming application.
+
+## Common patterns and their owners
+
+| Pattern | Owner and boundary |
+| --- | --- |
+| Complete, durable capture output | `devcapture`; service wrappers select records and acceptance ordering |
+| OS child/descendant lifetime and capped output | `localexec`; runners admit/join invocations, select limits and reject incomplete results |
+| HTTP drain and dependency-ordered release | `app`; each service joins its own workers |
+| Operation extraction and bounded body reading | `awsprotocol`; service prefix, transport budget and native validation remain caller-owned |
+| Token issuance across password/SRP/custom/MFA/refresh | Cognito `auth.go`; #10 extends this existing seam with persisted client policy |
+| Shared challenge continuation state | Cognito `challenge_state.go`; custom trigger decisions stay in `custom_auth.go` |
+| Password policy and credential revision | Cognito `password_policy.go` and store lifecycle; keep existing distinct error formatting |
+| Fixture provisioning and local recipe loading | Named `dev_*.go` adapters; test-only store mutation helpers stay in `_test.go` |
+
+Similar-looking code does not always have the same contract. Diagnostic tails,
+complete function results and queue batch output have different size/error policies.
+Likewise native service envelopes, attribute views and auth decisions stay with their
+owners. Do not merge these policies into a generic runner or wire decoder.
 
 ## Test placement
 
 | Change | Test owner |
 | --- | --- |
+| Durable JSONL concurrency/restart/write/sync/close failure | `internal/devcapture` tests; service HTTP tests cover acceptance and schema |
+| OS cancellation, descendants, retained pipes and output bounds | `internal/localexec` tests; runner tests cover invocation/settlement lifetime |
 | REQUEST events, policy evaluation, integration mapping, cache, streaming/upgrade proxy lifetime | `internal/gateway` tests |
 | Lambda Invoke, Runtime API, language handlers and child cleanup | `internal/lambda` tests |
 | Store, validation, capture, filtering or operation behavior | Colocated service tests; real SQLite for Cognito |

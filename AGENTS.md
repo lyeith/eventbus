@@ -9,6 +9,15 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
 
 ## Ownership and contracts
 
+- Native AWS fields/defaults, resource settings and protocol/state behavior belong
+  to their service core. Per-client Cognito settings are core configuration.
+- Put local recipe/file loading, deterministic overrides and agent-only controls
+  in named `dev_*.go` adapters or the existing harness owners. Compose typed core
+  ports in `app`; fixtures must not create separate authentication/delivery rules.
+- Use [issue triage](docs/ISSUE-TRIAGE.md) for priority/dependencies. Keep authorizer
+  and integration payload formats independent; unsupported AWS behavior stays a
+  core capability gap. It is not a dev feature merely because execution is local.
+
 - This repository owns the emulator, generic fixture formats and SDK tests.
   Apps own SDK configuration, seeds, resource names, provisioning and consumers.
 - Preserve supported AWS wire behavior and startup flags. The README lists
@@ -29,7 +38,11 @@ Start with [README](README.md), [Agent workflow](docs/AGENT-HARNESS.md) and
   no consuming application package or store.
 - `internal/lambda` owns Invoke, language execution and child lifetime. App
   handlers are external fixtures; keep their logs separate from function results.
-- `internal/ses` owns fixtures, capture, MIME and both sending adapters.
+- Shared mechanics have one owner: `devcapture` for durable JSONL sinks,
+  `localexec` for process groups/descendants and capped output, `awsprotocol`
+  for wire mechanics.
+  Services keep schemas, admission, result policies and native validation.
+- `internal/ses` owns fixtures, capture records, MIME and both sending adapters.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.
 - Do not reset a developer identity database or interrupt an application stack.

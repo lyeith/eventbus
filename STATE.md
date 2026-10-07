@@ -2,31 +2,49 @@
 
 Canonical source: /home/spite/Projects/eventbus on SSD; branch main.
 Public repository: https://github.com/lyeith/eventbus; MIT, David Wong, 2026.
-Published release: v0.4.0 from clean b60caa1; all eight hashes match GitHub digests.
+Published service release: v0.4.0 from b60caa1; gateway release: v0.3.0.
+Plans pins remain service v0.4.0 and gateway v0.3.0. This cleanup has no new release.
 
-Completed: all 23 SQS and 42 SNS operations for the local harness.
-SNS includes SMS/mobile APIs, with capture rather than external provider delivery.
-Implementation is complete. Full Go race suite, final affected race tests,
-frozen Python messaging/SES SDK checks, Python tooling tests and vet pass.
-No dependencies added. The shared application stack has not been reset/restarted.
+Current work: ten GitHub tickets triaged and shared ownership cleanup completed.
+All #2–#11 are AWS core gaps: four P1, six P2, six crosscutting. None is closed.
+Per-client settings belong to Cognito's persisted app-client policy, not a global
+harness client abstraction. Dependencies/acceptance: docs/ISSUE-TRIAGE.md.
 
-Messaging ownership: shared broker registry, separate sqs_* and sns_* engines.
-SQS JSON and Query share typed operations; SNS fanout uses SendQueueMessage.
-SNS capture uses --sns-log and schema eventbus.sns.capture.v1; initial writes
-precede acceptance. Queue/custom/system metadata propagates to consumer events.
-FIFO replay uses an in-memory bounded archive; production IAM/KMS/cloud metrics
-and real provider delivery remain outside the harness.
+Shared mechanics now have concrete owners:
+- devcapture: serialized JSONL append/fsync, terminal failure and file lifetime.
+- localexec: process groups, descendant cleanup, retained pipes and capped output.
+- awsprotocol: target extraction and caller-budgeted JSON body reading.
+Services retain schemas, validation, admission, results and execution policy.
+Consumer invocations now clean up descendants and reject truncated output.
+SSM/Secrets/Firehose reject oversized bodies instead of accepting a JSON prefix;
+their existing 1 MiB budgets remain explicit pending native protocol review.
 
-Gateway/Lambda work is already pushed and published. eventbus-gateway is separate
-from the AWS listener and imports no consuming application policy/store.
-Go/custom Runtime API, Python and Node authorizers use AWS Lambda Invoke.
-Plans pins service v0.4.0 and gateway v0.3.0. Native auth/route proof passed;
-new service public download/checksum and native CLI capture/restart proof passed.
+Cognito separates shared challenge state, lifecycle/password policy, dev seeding
+and test-only mutation helpers. Legacy fixture behavior is preserved explicitly.
+Gateway owns a typed configuration copy without invoking the YAML adapter;
+gateway/Lambda file loaders are dev_config.go. App owns project-root discovery.
+Architecture and test placement: docs/ARCHITECTURE.md.
 
-Cognito lifecycle/SRP/custom Node triggers and SES sending capture remain supported.
-SQLite preserves identities/signing keys; do not reset developer data.
-All messaging/resource state is in memory and reprovisioned after restart.
-Docs: MESSAGING.md, GATEWAY.md, LAMBDA.md, ARCHITECTURE.md, AGENT-HARNESS.md.
-API Gateway management, Lambda async/warm behavior and SES management are separate.
-Test fixtures own listeners/stores; task build/probe files are removed.
-Test receipts use existing /tmp 24-hour TTL; normal artifact caches are retained.
+Two independent reviews found no cleanup blockers. Existing follow-ups remain
+in docs/BACKLOG.md: consumer Go/Python execution duplication and Cognito DB()
+test access. Native protocol, SSM and Firehose gaps remain separate core work.
+
+Verification: every Go package passed race checks across the full run and final
+consumer rerun; go vet ./... passed. The initial Python fixture launcher failure
+was corrected with explicit test-owned environment; production inheritance is
+unchanged. Darwin/Windows runner branches compile; target execution was not run.
+No new dependencies, database migrations or live application stack changes.
+No task child processes/worktrees remain. Failed managed test allocations are
+quiescent/unpinned and expire under existing SSD GC; logs use /tmp retention.
+
+Supported: local SQS/SNS operation families and capture-only external delivery,
+SES sending capture, Cognito lifecycle/SRP/custom triggers and generic request
+gateway with Go/Python/Node authorizers through synchronous Lambda Invoke.
+Missing native capability tickets remain required; see README/docs for limits.
+SQLite retains developer identities/signing keys; do not reset its data.
+Messaging/resource state is in memory and reprovisioned after restart.
+
+Next: #3 secret-stage correctness and #9 Cognito metadata/readback independently;
+then #10 token validity and incremental #11 settings enforcement. #7 async Lambda
+precedes #8 Scheduler; #5/#6 gateway formats coordinate independently; #4 follows
+#3 and #2 delivery is independent. SES management remains low priority.

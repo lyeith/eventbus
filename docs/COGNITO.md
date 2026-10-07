@@ -51,6 +51,12 @@ omit a policy to accept any nonempty password. AWS JSON names, including
 MinimumLength and RequireNumbers, and legacy snake_case fixture names are
 accepted. Credentials support the AWS 256-character limit.
 
+Legacy password fixtures without an enrolled TOTP secret still accept any
+six-digit SOFTWARE_TOKEN_MFA code; SMS_MFA also uses digit-only fixture acceptance.
+These are development behaviors, not AWS factor verification. Custom auth requires
+an enrolled TOTP secret. An explicit fixture profile separating these modes from
+native provisioning belongs with [settings enforcement #11](https://github.com/lyeith/eventbus/issues/11).
+
 ## Custom SRP and email challenges
 
 Configure the application's three Node handlers using

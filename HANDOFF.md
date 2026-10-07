@@ -1,48 +1,60 @@
 # Handoff
 
-All 23 SQS and 42 SNS actions are implemented for the local emulator/harness.
-SQS JSON and Query share a typed engine; SNS topic/subscription, SMS and mobile
-state have separate owners. SNS fanout uses direct SQS sending, not duplicate
-queue mutation. No dependencies were added.
+Completed ticket triage and a bounded ownership/duplication cleanup on SSD main.
+The ten open GitHub tickets (#2–#11) are AWS core gaps, with four P1/six P2 and
+six crosscutting labels. docs/ISSUE-TRIAGE.md records owners, dependencies and
+acceptance. No feature ticket is closed or claimed implemented by this cleanup.
 
-SQS adds direct/batch send, String/Number/Binary attributes and AWS MD5s,
-visibility batches, renewed receipts, cancellation-aware long polling, FIFO
-ordering/dedup/receive attempts, retroactive FIFO delay, tags/policies, DLQ
-source listing and real rate-controlled/cancellable message-move tasks.
+Changes and owners:
+- devcapture owns shared durable JSONL/file mechanics; SES/SNS retain capture
+  schemas, timestamps and acceptance/fanout ordering. Borrowed writers stay open.
+- localexec owns process groups, cancellation, descendant/pipe cleanup and bounded
+  output. Lambda/triggers/consumers retain execution and result policy. Consumers
+  now stop descendants and refuse overflow before trusting a batch response.
+- awsprotocol owns target extraction and bounded JSON reading. SSM/Secrets/Firehose
+  keep their existing 1 MiB budgets; complete oversized prefixes now fail.
+- Cognito shared challenge continuation, lifecycle lookup and password policy have
+  proper owners. Seed persistence is dev_seed_store.go; unguarded test mutation
+  helpers moved outside production builds. Existing behavior remains supported.
+- Named Cognito dev provisioning/seed and gateway/Lambda YAML adapters demarcate
+  local controls. Gateway copies resolved configuration with typed core code;
+  request behavior/cache and caller/default isolation have regression coverage.
+- Application-root discovery moved from consumer to app. Dead Query parsing code
+  and duplicated capture/process/output implementations were removed.
 
-SNS adds topic/subscription attributes, confirmation/unsubscribe tokens,
-advanced attribute/body filters, raw/protocol delivery, batch/FIFO publishing,
-permissions/tags/data policies, all SMS/mobile operations and bounded FIFO
-archive/replay. DLQ policies validate account/region/FIFO identity atomically.
-SMS sandbox OTPs and subscription tokens are available as local capture evidence.
+Two fresh independent reviews found no blockers; a focused fixture re-review also
+passed. The main agent reviewed the combined source, tests and ownership map.
+Two pre-existing follow-ups are recorded in docs/BACKLOG.md: consolidate private
+Go/Python consumer execution handling and replace Cognito's raw DB() test seam.
+Native protocol/budget differences and SSM/Firehose state gaps remain core work.
 
---sns-log emits append-only eventbus.sns.capture.v1 JSONL. Initial capture
-precedes acceptance/commit/fanout; write failures are terminal. Later outcome
-capture failures preserve accepted publication success and report to stderr.
-Shutdown joins workers/drains HTTP before independently closing SNS/SES capture.
-Consumer records now preserve AWS SQS metadata, attributes and binary values.
+Verification on SSD, through ssd-dev operation --purpose test:
+- go test -race ./...: every package except consumer passed in the initial run.
+  Consumer's new Python fixture lacked SSD's managed uv ownership environment.
+- Final go test -race ./internal/consumer passed (9.460s), including a real Python
+  timeout/start marker and real Python/Go descendant cleanup. The fixture supplies
+  an explicit existing-owner environment; production inheritance stays unchanged.
+  Together these runs cover every Go package after the production changes.
+- go vet ./... passed. Gofmt and git diff --check passed.
+- GOOS=darwin/windows CGO_ENABLED=0 go test -exec=true for localexec, lambda,
+  cognitotrigger and consumer passed: compilation only, not target execution.
+- SDK and owned RustFS integration lanes were not rerun for this cleanup;
+  no destination/storage implementation was changed.
 
-Verification on SSD:
-- Full go test -race ./... passed, including Cognito/SES/gateway/Lambda.
-- Final scoped messaging/server races passed after contract and XML fixes.
-- Consumer/app races passed; independent capture closure is covered.
-- Real Go AWS SDKs cover all operation families through service/dispatcher tests.
-- Frozen Python messaging and all SES sending SDK checks passed; runner controls
-  passed. Python tooling's five tests and go vet ./... passed.
-- AWS's documented SQS MD5 example independently verifies checksums.
-- Tests own listeners/state; no live AWS comparison or provider delivery is claimed.
+Logs: /tmp/eventbus-ownership-final-race-20261007.log,
+/tmp/eventbus-ownership-consumer-final-race-20261007.log,
+/tmp/eventbus-ownership-final-vet-20261007.log and the darwin/windows-compile logs.
+No task children/worktrees or build/probe artifacts remain. Three failed nested
+uv allocations were inspected: quiescent, unpinned and subject to existing SSD GC
+(unverified aging, then failure expiry). Successful fixtures reuse their parent
+owner. Do not rewrite receipts or retain temporary test resources indefinitely.
 
-MESSAGING.md lists all operations, JSONL parsing, archive limits and exclusions.
-IAM/SigV4 enforcement, actual KMS, cloud feedback/inspection and provider retries
-are outside the harness. SNS envelopes are unsigned. Archives are in-memory,
-synchronous snapshots capped at 64 MiB serialized requests plus metadata/topic.
+Published service v0.4.0 remains b60caa1; gateway v0.3.0 and Plans pins unchanged.
+No dependencies, external contract break, database migration, live stack restart
+or developer data reset. Current architecture/test map: docs/ARCHITECTURE.md.
 
-Gateway/Lambda v0.3.0 is already public and adopted by Plans. Generic gateway
-knows no Trust policy/store; Go/Python/Node use synchronous Lambda Invoke.
-Public v0.4.0 targets clean b60caa1; four-platform builds and all GitHub
-executable/SHA256SUMS digests verified. Native CLI live SMS capture, restart
-append and graceful shutdown passed. Plans service pin is v0.4.0; its normal
-public acquisition/checksum and 16 artifact tests pass. Gateway pin stays v0.3.0.
-No developer application stack has been restarted or its state reset.
-Temporary staging/models, native probe script and release build directory are
-removed. Normal artifact cache remains; /tmp test receipts use existing 24-hour TTL.
+Next: #3 and #9 independently; then #10 and incremental #11. Per-client validity
+belongs to Cognito core across auth paths. #7 enables #8; #5/#6 formats remain
+independent; #4 follows secret stages; #2 uses SNS-owned delivery ports and
+Firehose-owned buffering/processing/destination behavior. SES management is low
+priority. Preserve unsupported native behavior as an explicit core gap.

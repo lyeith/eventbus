@@ -36,7 +36,8 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [SES capture](docs/SES.md): sending operations, fixtures and JSONL contract.
 - [Architecture](docs/ARCHITECTURE.md): package ownership, seams and test placement.
 - [Verification](tests/README.md): unit, SDK and native S3 test lanes.
-- [Backlog](docs/BACKLOG.md): deferred SES operations.
+- [Issue triage](docs/ISSUE-TRIAGE.md): AWS core priorities and development boundaries.
+- [Backlog](docs/BACKLOG.md): planned AWS capabilities and deferred SES operations.
 
 ## Supported behavior
 

@@ -1,0 +1,107 @@
+# Issue triage: AWS core and development harness
+
+Reviewed 7 October 2026 against v0.4.0/main and current AWS documentation.
+All ten open tickets describe AWS capability or correctness gaps. Their local
+fixture, execution and evidence adapters are still required, with separate owners.
+This is triage, not a claim that the missing features have been implemented.
+
+P1 fixes misleading successful results or establishes the configuration needed
+to verify them. P2 adds documented missing capabilities. P2 work remains needed;
+it precedes the low-priority SES management backlog.
+
+| Ticket | Priority | AWS core owner and scope | Dependency / coordination |
+| --- | --- | --- | --- |
+| [#3](https://github.com/lyeith/eventbus/issues/3) Secret stages | P1 | `secrets`: immutable values, label ownership, selectors, idempotency, metadata-only create and Describe | First; foundation for #4 |
+| [#9](https://github.com/lyeith/eventbus/issues/9) Cognito region/readback | P1 | `cognito`: configured region/account, persisted names/configuration/timestamps, Describe and parent checks | Configuration foundation for #10/#11 |
+| [#10](https://github.com/lyeith/eventbus/issues/10) Per-client token validity | P1 | `cognito`: persisted native durations/units, selected-client token policy and refresh expiration | After #9; all auth paths and seed/store migration |
+| [#11](https://github.com/lyeith/eventbus/issues/11) Ignored Cognito settings | P1 | `cognito`: explicit capability validation, schema, attribute permissions, signup/verification/recovery policy | Reject unsupported selected settings first; accepted state builds on #9/#10 |
+| [#7](https://github.com/lyeith/eventbus/issues/7) Lambda Event | P2 | `lambda`: asynchronous admission/execution, queue bounds, resolution, retries and shutdown | Before #8; coordinate executor ownership with #4 |
+| [#5](https://github.com/lyeith/eventbus/issues/5) HTTP API authorizers | P2 | `gateway`: native 2.0 event, identities, policy/context and cache semantics | Coordinate representation with #6; formats remain independent |
+| [#6](https://github.com/lyeith/eventbus/issues/6) AWS_PROXY | P2 | `gateway`: 1.0/2.0 application events and HTTP result decoding | Existing Lambda Invoke; no requirement for #7 Event |
+| [#2](https://github.com/lyeith/eventbus/issues/2) SNS → Firehose → S3 | P2 | `messaging`: subscription dispatch; `firehose`: processing, partition/buffer, compression, destination/retry | SNS-owned delivery port; app composes Firehose implementation |
+| [#4](https://github.com/lyeith/eventbus/issues/4) Secret rotation | P2 | `secrets`: native metadata, pending token, stage transitions, four-step asynchronous rotation workflow | After #3; reuse Lambda execution/lifecycle rather than another runner |
+| [#8](https://github.com/lyeith/eventbus/issues/8) Scheduler | P2 | New `scheduler`: REST JSON, schedule state/idempotency, time and target admission | After #7; typed asynchronous Lambda port |
+
+Suggested order: #3 and #9 independently; then #10 and incremental #11.
+The #11 unsupported-setting guard can start earlier. In the capability lane,
+#7 enables #8; #5/#6 coordinate without coupling their format choices; #2 is
+independent; #4 follows stage correctness. Crosscutting labels identify multiple
+service owners or a persisted policy that affects several authentication flows.
+
+## Core versus harness code
+
+| Concern | Owner |
+| --- | --- |
+| Native request fields, defaults, validation, resource identity, stored configuration, state transitions and AWS events/errors | Service core under `internal/<service>` |
+| Per-Cognito-app-client token validity and read/write permissions | Cognito core; every authentication path selects the same persisted client policy |
+| Authorizer payload format versus integration payload format | Independent gateway core configuration, even when provisioned through YAML |
+| Async acceptance/retries, rotation steps, scheduled target dispatch, SNS Firehose delivery | Respective AWS service core with consumer-owned typed ports |
+| YAML loading, deterministic fixture IDs/aliases, fixture profiles, local executable/endpoint selection | Explicit `dev_*.go` adapters; composition in `internal/app` |
+| Captures, agent wait/reset/inspection controls, fault injection and accelerated clocks | Development harness adapters; any future HTTP controls use a distinct namespace |
+| Consumer polling/process recipes, frontend hosting and private application mappings | Existing harness owners; never substitute for missing AWS operations |
+
+Development adapters translate into validated core configuration and operations.
+Keep real AWS fields in core even when a fixture supplies them. Cognito's
+`DeveloperOnlyAttribute` is an AWS feature, despite its name. Native unsupported
+scheduling, IAM or processing behavior remains an explicit core capability limit;
+it must not be relabeled as a development feature.
+
+Existing fixture loading is now named `cognito/dev_seed.go`,
+`gateway/dev_config.go` and `lambda/dev_config.go`. Cognito's legacy flat
+`PoolId`, `ClientId` and `PasswordPolicy` extensions are declared in
+`dev_provisioning.go`. Existing wire/seed behavior is retained. Core request
+handling still has legacy reapplication hooks; #11's explicit fixture profile
+must separate their admission from ordinary AWS provisioning incrementally.
+Shared capture and OS child mechanics have concrete owners in `devcapture` and
+`localexec`; no global client abstraction is introduced. See [ownership](ARCHITECTURE.md).
+
+## Contract checks for implementation
+
+- **#3/#4:** absent AWSPREVIOUS must fail, AWSPENDING must not promote current,
+  both selectors must agree, same-token conflicting values must fail, and
+  metadata-only/pending-token entries must be distinct from stored values.
+  Snapshot state safely; never run a rotation handler while holding a store lock.
+  RotateSecret acceptance is asynchronous; terminal failures need redacted evidence.
+- **#9/#10:** persist native values, not fabricated Describe fields. Native client
+  defaults are independent one-hour access/ID tokens and 30-day refresh tokens.
+  Explicit persisted client settings win. Preserve legacy fixture/store behavior
+  through an identified profile, not process flags overriding native clients.
+  Validate normalized duration limits; refresh must not renew its original expiry.
+- **#11:** first reject selected unsupported settings before mutation. Then
+  implement schema/attribute permissions and separately the lifecycle workflows.
+  Legacy digit-only SOFTWARE_TOKEN_MFA/SMS_MFA acceptance needs an explicit
+  development profile; custom auth already requires enrolled TOTP.
+  AdminCreateUser may omit required attributes; NEW_PASSWORD_REQUIRED must collect
+  them. Client permissions apply to client operations/ID claims, with distinct
+  administrator/trigger semantics. Readback alone does not prove enforcement.
+- **#5/#6:** support native `$default` stage; validate HTTP API identities even at
+  TTL=0. Preserve format-specific context, including supported structured v2
+  context, without changing REST contracts. Test all authorizer/integration format
+  combinations, repeated values/cookies, binary data, aliases and function errors.
+- **#7/#8:** Lambda Event returns 202/empty on admission, with a current 1 MiB
+  payload limit. Handler failure/retries belong to Lambda. Scheduler retries
+  target admission failures and deletes after its final target API invocation,
+  not after handler business completion. Scheduling has 60-second AWS precision;
+  accelerated/exact-second execution is an explicit harness policy. Create/Get/
+  Delete one-time schedules are a subset of Scheduler's 12 operations.
+- **#2:** Firehose owns GZIP, partitioned buffering, output/error prefixes and
+  destination persistence. Apply SNS filters/raw behavior before its delivery port.
+  Reuse retained-buffer/lifecycle ownership; ambiguous S3 failures need a stable
+  retry identity. AWS inline extraction uses jq 1.6; selecting a new dependency or
+  runtime requires review. A handwritten field extractor is not jq compatibility.
+
+Each implementation needs lowest-level state/validation tests plus real SDK
+request/readback proof. Cross-service work also needs actual handler/destination,
+failure/recovery, instance isolation and teardown evidence. Use controlled clocks
+for boundaries. Triage findings are source-confirmed; no new runtime compatibility
+result is claimed for these missing features.
+
+AWS references: [Cognito clients](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateUserPoolClient.html),
+[attributes](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html),
+[secret values](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html),
+[rotation](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_RotateSecret.html),
+[HTTP authorizers](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-lambda-authorizer.html),
+[Lambda proxy formats](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html),
+[Invoke](https://docs.aws.amazon.com/lambda/latest/api/API_Invoke.html),
+[Scheduler](https://docs.aws.amazon.com/scheduler/latest/APIReference/API_CreateSchedule.html),
+[Firehose partitioning](https://docs.aws.amazon.com/firehose/latest/dev/dynamic-partitioning-partitioning-keys.html).
