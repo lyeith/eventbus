@@ -26,7 +26,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var err error
 	status := http.StatusOK
 	switch {
-	case r.URL.Path == mappingPath && r.Method == http.MethodPost:
+	// Older native SDK models include the collection's final slash. Both
+	// exact forms reach the same owner without redirecting or normalizing
+	// neighboring routes.
+	case (r.URL.Path == mappingPath || r.URL.Path == mappingPath+"/") && r.Method == http.MethodPost:
 		var input CreateInput
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		decoder.DisallowUnknownFields()

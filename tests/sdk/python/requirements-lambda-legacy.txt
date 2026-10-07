@@ -1,0 +1,9 @@
+# Issue #19: optional unmodified Lambda SDK URI compatibility proof only.
+# Provision separately; this must never replace the project's frozen environment.
+boto3==1.39.4
+botocore==1.39.4
+jmespath==1.1.0
+python-dateutil==2.9.0.post0
+s3transfer==0.13.1
+six==1.17.0
+urllib3==2.8.0
