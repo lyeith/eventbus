@@ -1,60 +1,59 @@
 # Handoff
 
-Completed ticket triage and a bounded ownership/duplication cleanup on SSD main.
-The ten open GitHub tickets (#2–#11) are AWS core gaps, with four P1/six P2 and
-six crosscutting labels. docs/ISSUE-TRIAGE.md records owners, dependencies and
-acceptance. No feature ticket is closed or claimed implemented by this cleanup.
+Completed all ten triaged ticket scopes #2–#11 plus ownership-review findings on
+SSD main, after cleanup baseline 063e6966. The changes are in concern-scoped commits; no new
+binary release or Plans pin update is part of this work.
 
-Changes and owners:
-- devcapture owns shared durable JSONL/file mechanics; SES/SNS retain capture
-  schemas, timestamps and acceptance/fanout ordering. Borrowed writers stay open.
-- localexec owns process groups, cancellation, descendant/pipe cleanup and bounded
-  output. Lambda/triggers/consumers retain execution and result policy. Consumers
-  now stop descendants and refuse overflow before trusting a batch response.
-- awsprotocol owns target extraction and bounded JSON reading. SSM/Secrets/Firehose
-  keep their existing 1 MiB budgets; complete oversized prefixes now fail.
-- Cognito shared challenge continuation, lifecycle lookup and password policy have
-  proper owners. Seed persistence is dev_seed_store.go; unguarded test mutation
-  helpers moved outside production builds. Existing behavior remains supported.
-- Named Cognito dev provisioning/seed and gateway/Lambda YAML adapters demarcate
-  local controls. Gateway copies resolved configuration with typed core code;
-  request behavior/cache and caller/default isolation have regression coverage.
-- Application-root discovery moved from consumer to app. Dead Query parsing code
-  and duplicated capture/process/output implementations were removed.
+Owners: Cognito persists metadata/schema/permissions/token policy and workflows;
+Secrets owns immutable versions/stages/rotation; Lambda owns execution/Event queue;
+gateway owns independent authorizer/integration formats; SNS owns its Firehose
+port and Firehose owns processing/buffers/S3 retries; Scheduler owns time/state
+and target admission. App adapts typed Lambda ports and owns staged shutdown.
+Common capture/process/wire mechanics remain devcapture/localexec/awsprotocol.
+Consumer Go/Python execution policy consolidated; production Cognito DB() removed.
 
-Two fresh independent reviews found no blockers; a focused fixture re-review also
-passed. The main agent reviewed the combined source, tests and ownership map.
-Two pre-existing follow-ups are recorded in docs/BACKLOG.md: consolidate private
-Go/Python consumer execution handling and replace Cognito's raw DB() test seam.
-Native protocol/budget differences and SSM/Firehose state gaps remain core work.
+Quiesce stops producers while the AWS listener/sync invocation stay usable by
+accepted rotation/Event SDK handlers. All independent owners drain even after a
+peer fails. HTTP then drains, final owners close, and failed prerequisite barriers
+retain stores/captures. Deadline aborts cancel/join children and retain errors.
+Reviews fixed transactional NPR immutable-first-value/contact verification,
+retired Firehose references/ARN limits and final admission/cancellation races.
 
-Verification on SSD, through ssd-dev operation --purpose test:
-- go test -race ./...: every package except consumer passed in the initial run.
-  Consumer's new Python fixture lacked SSD's managed uv ownership environment.
-- Final go test -race ./internal/consumer passed (9.460s), including a real Python
-  timeout/start marker and real Python/Go descendant cleanup. The fixture supplies
-  an explicit existing-owner environment; production inheritance stays unchanged.
-  Together these runs cover every Go package after the production changes.
-- go vet ./... passed. Gofmt and git diff --check passed.
-- GOOS=darwin/windows CGO_ENABLED=0 go test -exec=true for localexec, lambda,
-  cognitotrigger and consumer passed: compilation only, not target execution.
-- SDK and owned RustFS integration lanes were not rerun for this cleanup;
-  no destination/storage implementation was changed.
+Approved: pinned gojq v0.12.19 (+timefmt-go v0.1.8), test-only JS Scheduler
+SDK 3.1146.0. Frozen npm ci and go mod tidy completed. No jq binary/framework.
+Go jq implements the documented tested profile, not literal jq 1.6 equivalence.
 
-Logs: /tmp/eventbus-ownership-final-race-20261007.log,
-/tmp/eventbus-ownership-consumer-final-race-20261007.log,
-/tmp/eventbus-ownership-final-vet-20261007.log and the darwin/windows-compile logs.
-No task children/worktrees or build/probe artifacts remain. Three failed nested
-uv allocations were inspected: quiescent, unpinned and subject to existing SSD GC
-(unverified aging, then failure expiry). Successful fixtures reuse their parent
-owner. Do not rewrite receipts or retain temporary test resources indefinitely.
+Verification through ssd-dev on Linux:
+- go test -race -count=1 -p 3 ./...: every package except Cognito passed.
+  Cognito (355.267s) failed exactly two old legacy policy input fixtures; all other
+  cases passed. Those fixtures lacked explicit PoolId despite legacy aliases.
+  Fixture-only repair, then targeted race of policy/default/precedence and native
+  unsupported-setting refusal passed (2.92s). No production change after full run;
+  these runs together cover every package/test in the final source.
+- Full frozen SDK race suite passed (133.224s) (tests/sdk, sdksmoke, timeout 8m):
+  existing Cognito/SRP/custom/SES/messaging plus native provisioning/restart,
+  real Python Secrets rotation, Lambda Event and real JS Scheduler/Node alias.
+- go vet ./... passed. All affected Go files are gofmt-clean; diffcheck and local
+  documentation links passed. Focused fixes also have colocated race checks.
+- Native Go SNS/Firehose SDK→owned RustFS pipeline race suite passed, including
+  filters/raw/envelope, partitions/GZIP/errors, failed delivery recovery and drain.
+  Later backing-reference/ARN guard fixes passed focused Firehose race/vet.
+- Darwin arm64 and Windows amd64 CGO-free runner/Scheduler/app/server tests
+  compile with -exec=true. Target-platform execution was not performed.
 
-Published service v0.4.0 remains b60caa1; gateway v0.3.0 and Plans pins unchanged.
-No dependencies, external contract break, database migration, live stack restart
-or developer data reset. Current architecture/test map: docs/ARCHITECTURE.md.
+Evidence under /tmp on SSD, governed by existing finite retention:
+ eventbus-plate-final-{race,sdk,vet}-20261007.log
+ eventbus-cognito-policy-fixture-race.log
+ eventbus-firehose-agent-verified.txt / eventbus-firehose-ownership-verified.txt
+ eventbus-background-drain-race-20261007.log
+ eventbus-plate-{darwin,windows}-compile-20261007.log
 
-Next: #3 and #9 independently; then #10 and incremental #11. Per-client validity
-belongs to Cognito core across auth paths. #7 enables #8; #5/#6 formats remain
-independent; #4 follows secret stages; #2 uses SNS-owned delivery ports and
-Firehose-owned buffering/processing/destination behavior. SES management is low
-priority. Preserve unsupported native behavior as an explicit core gap.
+All fixtures owned listeners/state/processes; no live stack reset. RustFS 40955
+and its task volume are gone; staging/probes/bytecode removed, no worktrees.
+Canonical frozen SDK environments remain reusable. Failed managed allocations
+are quiescent/unpinned and expire through SSD GC; no receipts were rewritten.
+STATE.md and service guides record current truth and explicit unsupported limits.
+
+Next: separately requested release/consumer acceptance; low-priority SES
+management. Do not imply all management APIs, production IAM/KMS or durable
+async/schedule recovery are present. Preserve developer identity SQLite data.

@@ -12,16 +12,17 @@ internal/
   awsprotocol/           Shared wire mechanics, target extraction and request IDs
   devcapture/            Harness JSONL append/sync, failure and file ownership
   localexec/             Shared process groups, descendant cleanup and capped output
-  gateway/               REST REQUEST events, Invoke client, policy evaluation and HTTP proxy mappings
+  gateway/               REST/HTTP API REQUEST events, IAM/simple responses and HTTP/Lambda proxy
   lambda/                App-owned multi-language execution, Invoke/Runtime API and child lifetime
   cognito/               SQLite identities, lifecycle, shared challenge state, SRP/auth and JWT/JWKS
   cognitotrigger/        Application-owned Node trigger execution and child lifetime
   messaging/             Shared registry; separate queue and topic engines/adapters
   consumer/              Harness configuration, polling, settlement and processes
   ses/                   Fixtures, sending, MIME, capture and v1/v2 adapters
-  firehose/              Stream state, buffered S3 delivery and HTTP adapter
+  firehose/              Processing, partition buffers, GZIP and retained S3 delivery
+  scheduler/             One-time schedule state, idempotency and Lambda admission
   ssm/                   Parameter state and HTTP adapter
-  secrets/               Secret/version state, ARN configuration and HTTP adapter
+  secrets/               Secret/version/stage state and asynchronous rotation workflow
 tests/sdk/               Dispatcher proofs using pinned Python/JavaScript SDKs and JWT/SRP clients
 examples/                Application-owned fixture format examples
 ```
@@ -44,7 +45,8 @@ pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
 ## Dependency rules
 
 - `app` constructs services and injects handlers into `server`. It owns startup,
-  signals and shutdown: drain HTTP, join workers, then release resources.
+  signals and shutdown: quiesce background SDK callers with HTTP available, then
+  drain HTTP and release resources.
 - `server` declares the HTTP interfaces it consumes. It selects a protocol and
   delegates operations; it imports no service package and accesses no store.
 - Each service owns its state and operation adapter. Services do not import
@@ -53,7 +55,7 @@ pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
   `sqs_*` owns queues, typed operations and both JSON/Query adapters; `sns_*` owns
   topics, subscriptions, SMS/mobile state and Query adapters. SNS delivers to SQS
   through `SendQueueMessage`; capture records and admission policy stay with SNS.
-  SES/SNS wrappers use `devcapture` for durable output mechanics.
+  SES/SNS/Cognito notification and Lambda evidence wrappers use `devcapture` for durable output mechanics.
   Publication, subscriptions and queue settlement
   need the same broker. Queue collections remain private to that owner.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message
@@ -65,7 +67,12 @@ pretend to be an AWS operation. See [ticket ownership](ISSUE-TRIAGE.md).
   application policy, identity, private route format or database. Apps configure
   opaque context mappings and credential removal.
 - `lambda` owns execution and runtime protocol; application handlers own policy.
-  `app` injects it into the service dispatcher and closes it after HTTP drain.
+  `app` injects it into the service dispatcher and closes it after background Event drain and HTTP drain.
+- `secrets` owns a narrow RotationInvoker port and its step/state policy;
+  `scheduler` owns a narrow TargetInvoker port and admission retry/time policy.
+  `app` adapts both to Lambda typed Execute/Admit. Services do not import Lambda.
+- SNS owns FirehoseDelivery; `app` injects Firehose. Filters/raw/envelopes belong
+  to SNS, while extraction/buffering/retry/destination lifetime belong to Firehose.
 - `awsprotocol` holds reusable wire helpers, without service state. Callers own
   protocol admission and body budgets; over-budget bodies must fail, never truncate.
   SES/Cognito/SQS retain distinct serializers, size limits and error envelopes.
@@ -87,7 +94,7 @@ private. Application acceptance behavior belongs in the consuming application.
 | OS child/descendant lifetime and capped output | `localexec`; runners admit/join invocations, select limits and reject incomplete results |
 | HTTP drain and dependency-ordered release | `app`; each service joins its own workers |
 | Operation extraction and bounded body reading | `awsprotocol`; service prefix, transport budget and native validation remain caller-owned |
-| Token issuance across password/SRP/custom/MFA/refresh | Cognito `auth.go`; #10 extends this existing seam with persisted client policy |
+| Token issuance across password/SRP/custom/MFA/refresh | Cognito `auth.go` and `client_validity.go`; every flow uses persisted client policy |
 | Shared challenge continuation state | Cognito `challenge_state.go`; custom trigger decisions stay in `custom_auth.go` |
 | Password policy and credential revision | Cognito `password_policy.go` and store lifecycle; keep existing distinct error formatting |
 | Fixture provisioning and local recipe loading | Named `dev_*.go` adapters; test-only store mutation helpers stay in `_test.go` |
@@ -103,12 +110,13 @@ owners. Do not merge these policies into a generic runner or wire decoder.
 | --- | --- |
 | Durable JSONL concurrency/restart/write/sync/close failure | `internal/devcapture` tests; service HTTP tests cover acceptance and schema |
 | OS cancellation, descendants, retained pipes and output bounds | `internal/localexec` tests; runner tests cover invocation/settlement lifetime |
-| REQUEST events, policy evaluation, integration mapping, cache, streaming/upgrade proxy lifetime | `internal/gateway` tests |
+| REQUEST formats, policy/simple decisions, Lambda/HTTP proxy, cache and upgrade lifetime | `internal/gateway` tests |
 | Lambda Invoke, Runtime API, language handlers and child cleanup | `internal/lambda` tests |
 | Store, validation, capture, filtering or operation behavior | Colocated service tests; real SQLite for Cognito |
 | Node custom trigger configuration, execution, deadlines and child cleanup | `internal/cognitotrigger` tests |
 | Consumer configuration, process execution or settlement | `internal/consumer` tests |
 | Target/path selection, health or protocol fallback | `internal/server` tests with composed service handlers |
+| Scheduler state/timing/idempotency/target admission | `internal/scheduler` tests; real JS SDK in `tests/sdk` |
 | Worker joins, HTTP drain or independent resource closure | `internal/app` tests |
 | Python/JavaScript SDK, SRP/JWT and trigger/SES interoperability, complete dispatcher and child runner | `tests/sdk`, opt-in `sdksmoke` tag |
 | Firehose behavior against an owned RustFS endpoint | `internal/firehose`, opt-in `integration` tag |

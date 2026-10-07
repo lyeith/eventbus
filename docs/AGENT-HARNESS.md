@@ -90,6 +90,9 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   Assert SDK responses, queue/DLQ outcomes and application state.
 - Read operational logs on stderr. Add `--debug` to see captured handler
   diagnostics and batch settlement. Consumer stdout is the JSON result.
+- Read Cognito notification JSONL from `--cognito-log`; native signup, recovery
+  and invitation flows expose local codes/passwords there. Use schema and resource
+  IDs to correlate requests; [Cognito](COGNITO.md) documents the evidence fields.
 - Read SES JSONL from the selected `--ses-log` file. Use `request` and
   `outcome` for assertions; [SES capture](SES.md) explains bulk failures and
   derived email views.
@@ -97,12 +100,15 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   schema, subscription tokens, sandbox OTPs and external delivery intents.
   Assert the message ID and per-delivery status; capture proves local intent,
   not delivery to a real recipient.
-- Stop the owned process with Ctrl-C or SIGTERM. Shutdown drains admitted HTTP
-  requests and joins consumers before releasing stores.
+- Stop the owned process with Ctrl-C or SIGTERM. Scheduling/consumers stop first;
+  accepted rotation and Lambda Event work drain with the AWS listener available.
+  HTTP drains before stores/captures close. A deadline abort is a failed shutdown.
 
 Keep Cognito's SQLite path, pool/client IDs and issuer stable when continuing
 the same app environment. Use fresh owned paths for independent tests.
-Reprovision in-memory resources after restart. Supply `--s3-endpoint` for
+Reprovision in-memory resources after restart. Follow Lambda JSONL terminal
+records for asynchronous completion, and Scheduler/rotation redacted operational
+logs for target admission/workflow outcomes. HTTP acceptance alone is insufficient. Supply `--s3-endpoint` for
 Firehose tests; its local S3 credentials are `test`/`testtest123`.
 
 Use the application's tests for end-to-end behavior. When changing EventBus,

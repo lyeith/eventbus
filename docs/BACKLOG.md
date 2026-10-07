@@ -1,42 +1,17 @@
 # Backlog
 
-## Triaged AWS core work
+## Completed ticket scope
 
-[Issue triage](ISSUE-TRIAGE.md) records all ten open tickets, priorities,
-dependencies, core owners and separate development harness adapters. Start with
-Secrets Manager stage correctness (#3) and Cognito configuration/readback (#9),
-then per-client validity (#10) and incremental settings enforcement (#11).
-Lambda async (#7), HTTP API authorizers/proxy (#5/#6), Firehose delivery (#2),
-rotation (#4) and Scheduler (#8) remain required core capabilities.
+All ten triaged tickets #2–#11 and recorded ownership-review findings have
+accepted implementations with race, SDK and native delivery evidence.
+[Issue triage](ISSUE-TRIAGE.md) records bounded scope, owners and dependencies.
+The service guides state supported contracts and remaining capability limits.
 
-## Protocol follow-up from the ownership review
-
-`awsprotocol` now owns target extraction and bounded body-reading mechanics.
-SSM/Secrets/Firehose retain their existing local 1 MiB transport budgets explicitly;
-these must be reviewed against native operation limits (especially Firehose #2).
-Their legacy JSON helpers still use 1.0, including the Firehose adapter marked 1.1.
-Query fallback errors still use SNS namespace/Sender, and request-ID placement varies.
-Service adapters own selecting native protocol versions, namespaces, error classes
-and quotas; shared wire helpers should accept those choices. Verify the matrix with
-actual SDK/error/boundary requests before changing supported wire behavior.
-This is separate core compatibility work, not a development feature.
-
-## Ownership follow-ups
-
-A second independent review found no blockers in the cleanup and two pre-existing
-seams to improve separately:
-
-- `consumer` owns consolidating Go/Python timeout, output/logging, cleanup and batch
-  result handling behind one private helper; command construction stays separate.
-- `cognito` owns retiring the production `DB()` accessor used by app/SDK tests.
-  App liveness checks should use domain reads; SDK time/state fixtures need an
-  owned seam, coordinated with #10's clock/expiration work.
-
-Other source-confirmed AWS core work: SSM should return snapshots and select path
-hierarchies; Firehose must validate malformed batch entries/report native ordered
-failures and own its delivery client. The latter belongs with #2's delivery work.
-These are core behavior, not harness conveniences. No new generic lifecycle,
-store or execution framework is required.
+Wire protocols/request IDs now have a shared owner with service-selected media
+versions/namespaces/budgets. SSM snapshots/hierarchies/versioning and Firehose
+batch validation/delivery ownership are corrected. Consumer execution policy is
+consolidated; Cognito no longer exports its raw SQL connection in production.
+These findings are implementation work, not deferred dev conveniences.
 
 ## Low priority: remaining SES APIs
 
@@ -66,6 +41,6 @@ are a separate feature from the existing Go/Python consumer runner.
 ## Separate gateway and Lambda work
 
 Request gateway contracts are covered in GATEWAY.md. API Gateway management/deployment
-APIs, other authorizer types and HTTP API v2 are separate features. Lambda
-asynchronous invocation is tracked in #7; HTTP API v2 contracts in #5/#6.
+APIs, other authorizer types are separate features. HTTP API authorizers/Lambda proxy 1.0/2.0 and Lambda
+Event invocation are now implemented in the bounded request/runtime scope.
 Warm runtime reuse and management/provisioning APIs remain separate work.

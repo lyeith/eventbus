@@ -9,8 +9,8 @@ uv run --frozen python -m unittest discover -s tests/sdk/python -p 'test_*.py'
 EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -tags sdksmoke ./...
 ```
 
-Python dependencies come from `uv.lock`. JavaScript uses the exact Cognito IDP
-and SESv2 SDK v3 version `3.1146.0`, including the transitive npm lockfile.
+Python dependencies come from `uv.lock`. JavaScript uses the exact Cognito IDP,
+SESv2 and Scheduler SDK v3 version `3.1146.0`, including the transitive npm lockfile.
 `EVENTBUS_SMOKE_NODE` optionally selects an absolute Node executable; otherwise
 the lane finds `node` on PATH. CI uses Node 22.
 
@@ -41,10 +41,19 @@ secrets and pool/client management. SES covers all nine v1/v2 sending operations
 current optional fields, exact binary capture and ordered bulk results using
 [the pinned official sending models](aws_models/README.md).
 
+Native Cognito provisioning proofs start with an empty eu-west-1 store, use
+Python/Node Describe readback, client lifetimes/schema/permissions and live
+verification capture, then restart and check persistence/instance isolation.
+Secrets uses boto3 and an actual Python rotation Lambda. Lambda Event uses boto3
+for 202/empty acceptance and handler/retry evidence. Scheduler uses the approved
+pinned JS client and a real Node alias, checking exact input and completion
+removal before handler business completion. All fixtures own state and children.
+
 Each runner requires a successful exit and exactly one PASS marker. Missing
 dependencies, false success, assertion failures and timeouts fail the lane.
 Network waits are bounded; inherited AWS profiles, proxies and interpreter
-preloads/options are excluded. Fixtures close their listeners before resources.
+preloads/options are excluded. Fixtures quiesce background SDK callers while listeners are available, then close
+HTTP and resources; fixtures without background callbacks drain HTTP first.
 
 Ordinary Go tests need neither Python nor SDK packages. These checks verify the
 supported contracts; they do not claim complete AWS compatibility.

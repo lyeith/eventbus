@@ -3,7 +3,9 @@
 Reviewed 7 October 2026 against v0.4.0/main and current AWS documentation.
 All ten open tickets describe AWS capability or correctness gaps. Their local
 fixture, execution and evidence adapters are still required, with separate owners.
-This is triage, not a claim that the missing features have been implemented.
+The bounded scopes below are implemented and accepted on main, including the
+recorded ownership-review findings. Published v0.4.0 does not contain these
+changes. HANDOFF.md records verification; the service guides state exact limits.
 
 P1 fixes misleading successful results or establishes the configuration needed
 to verify them. P2 adds documented missing capabilities. P2 work remains needed;
@@ -22,7 +24,7 @@ it precedes the low-priority SES management backlog.
 | [#4](https://github.com/lyeith/eventbus/issues/4) Secret rotation | P2 | `secrets`: native metadata, pending token, stage transitions, four-step asynchronous rotation workflow | After #3; reuse Lambda execution/lifecycle rather than another runner |
 | [#8](https://github.com/lyeith/eventbus/issues/8) Scheduler | P2 | New `scheduler`: REST JSON, schedule state/idempotency, time and target admission | After #7; typed asynchronous Lambda port |
 
-Suggested order: #3 and #9 independently; then #10 and incremental #11.
+Implementation dependencies: #3 and #9 independently; then #10 and incremental #11.
 The #11 unsupported-setting guard can start earlier. In the capability lane,
 #7 enables #8; #5/#6 coordinate without coupling their format choices; #2 is
 independent; #4 follows stage correctness. Crosscutting labels identify multiple
@@ -49,9 +51,9 @@ it must not be relabeled as a development feature.
 Existing fixture loading is now named `cognito/dev_seed.go`,
 `gateway/dev_config.go` and `lambda/dev_config.go`. Cognito's legacy flat
 `PoolId`, `ClientId` and `PasswordPolicy` extensions are declared in
-`dev_provisioning.go`. Existing wire/seed behavior is retained. Core request
-handling still has legacy reapplication hooks; #11's explicit fixture profile
-must separate their admission from ordinary AWS provisioning incrementally.
+`dev_provisioning.go`. Existing wire/seed behavior remains available through the explicit
+`legacy-fixtures` profile; native admission rejects fixture extensions. Native
+client policy is independent of process-level legacy defaults.
 Shared capture and OS child mechanics have concrete owners in `devcapture` and
 `localexec`; no global client abstraction is introduced. See [ownership](ARCHITECTURE.md).
 
@@ -87,14 +89,14 @@ Shared capture and OS child mechanics have concrete owners in `devcapture` and
 - **#2:** Firehose owns GZIP, partitioned buffering, output/error prefixes and
   destination persistence. Apply SNS filters/raw behavior before its delivery port.
   Reuse retained-buffer/lifecycle ownership; ambiguous S3 failures need a stable
-  retry identity. AWS inline extraction uses jq 1.6; selecting a new dependency or
-  runtime requires review. A handwritten field extractor is not jq compatibility.
+  retry identity. AWS inline extraction uses jq 1.6. The user approved pinned Go jq instead of an
+  executable dependency; the tested semantic profile and upstream differences
+  are documented rather than claiming exact jq 1.6 equivalence.
 
 Each implementation needs lowest-level state/validation tests plus real SDK
 request/readback proof. Cross-service work also needs actual handler/destination,
 failure/recovery, instance isolation and teardown evidence. Use controlled clocks
-for boundaries. Triage findings are source-confirmed; no new runtime compatibility
-result is claimed for these missing features.
+for boundaries. Combined compatibility results are recorded in HANDOFF.md; service guides describe current scope and explicit limits.
 
 AWS references: [Cognito clients](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateUserPoolClient.html),
 [attributes](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html),
