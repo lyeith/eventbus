@@ -23,24 +23,3 @@ func formMapValues(r *http.Request, prefix string) map[string]string {
 	}
 	return result
 }
-
-// parseMessageAttributes extracts MessageAttributes from form params.
-// Format: MessageAttributes.entry.N.Name, MessageAttributes.entry.N.Value.DataType, MessageAttributes.entry.N.Value.StringValue
-func parseMessageAttributes(r *http.Request) map[string]MessageAttribute {
-	attrs := make(map[string]MessageAttribute)
-
-	for i := 1; i <= 100; i++ {
-		name := r.FormValue(fmt.Sprintf("MessageAttributes.entry.%d.Name", i))
-		if name == "" {
-			break
-		}
-		dataType := r.FormValue(fmt.Sprintf("MessageAttributes.entry.%d.Value.DataType", i))
-		stringValue := r.FormValue(fmt.Sprintf("MessageAttributes.entry.%d.Value.StringValue", i))
-		attrs[name] = MessageAttribute{
-			DataType:    dataType,
-			StringValue: stringValue,
-		}
-	}
-
-	return attrs
-}

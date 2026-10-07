@@ -10,6 +10,9 @@ import (
 	"github.com/lyeith/eventbus/internal/awsprotocol"
 )
 
+// maxJSONRequestBytes retains this adapter's existing local transport budget.
+const maxJSONRequestBytes int64 = 1 << 20
+
 // Handler owns the Parameter Store AWS JSON adapter.
 type Handler struct {
 	ssm *SSMStore
@@ -20,7 +23,7 @@ func NewHandler(store *SSMStore) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.ServeAction(w, r, extractSSMAction(r.Header.Get("X-Amz-Target")))
+	h.ServeAction(w, r, awsprotocol.TargetAction(r.Header.Get("X-Amz-Target")))
 }
 
 func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action string) {
@@ -41,7 +44,7 @@ func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action str
 }
 
 func (s *Handler) handleSSMPutParameter(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -79,7 +82,7 @@ func (s *Handler) handleSSMPutParameter(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Handler) handleSSMGetParameter(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -108,7 +111,7 @@ func (s *Handler) handleSSMGetParameter(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Handler) handleSSMGetParametersByPath(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -138,7 +141,7 @@ func (s *Handler) handleSSMGetParametersByPath(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Handler) handleSSMDeleteParameter(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -152,12 +155,4 @@ func (s *Handler) handleSSMDeleteParameter(w http.ResponseWriter, r *http.Reques
 
 	s.ssm.DeleteParameter(name)
 	awsprotocol.JSONResponse(w, http.StatusOK, map[string]interface{}{})
-}
-
-func extractSSMAction(target string) string {
-	parts := strings.SplitN(target, ".", 2)
-	if len(parts) == 2 {
-		return parts[1]
-	}
-	return ""
 }

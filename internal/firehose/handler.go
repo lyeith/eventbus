@@ -11,6 +11,9 @@ import (
 	"github.com/lyeith/eventbus/internal/awsprotocol"
 )
 
+// maxJSONRequestBytes retains this adapter's existing local transport budget.
+const maxJSONRequestBytes int64 = 1 << 20
+
 // Handler owns the Firehose AWS JSON adapter; the manager owns delivery state.
 type Handler struct {
 	firehose *FirehoseManager
@@ -21,7 +24,7 @@ func NewHandler(manager *FirehoseManager) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.ServeAction(w, r, extractFirehoseAction(r.Header.Get("X-Amz-Target")))
+	h.ServeAction(w, r, awsprotocol.TargetAction(r.Header.Get("X-Amz-Target")))
 }
 
 // ServeAction handles Firehose requests using the AWS JSON 1.1 protocol.
@@ -46,7 +49,7 @@ func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action str
 }
 
 func (s *Handler) handleCreateDeliveryStream(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -123,7 +126,7 @@ func (s *Handler) handleCreateDeliveryStream(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Handler) handleDeleteDeliveryStream(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -151,7 +154,7 @@ func (s *Handler) handleDeleteDeliveryStream(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Handler) handleDescribeDeliveryStream(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -180,7 +183,7 @@ func (s *Handler) handleDescribeDeliveryStream(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Handler) handleFirehosePutRecord(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -223,7 +226,7 @@ func (s *Handler) handleFirehosePutRecord(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Handler) handleFirehosePutRecordBatch(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -295,14 +298,4 @@ func extractRecordData(record map[string]interface{}) ([]byte, error) {
 		return []byte(dataStr), nil
 	}
 	return decoded, nil
-}
-
-// extractFirehoseAction extracts the action from X-Amz-Target header.
-// Format: "Firehose_20150804.CreateDeliveryStream" -> "CreateDeliveryStream"
-func extractFirehoseAction(target string) string {
-	parts := strings.SplitN(target, ".", 2)
-	if len(parts) == 2 {
-		return parts[1]
-	}
-	return ""
 }

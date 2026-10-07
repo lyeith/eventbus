@@ -11,6 +11,9 @@ import (
 	"github.com/lyeith/eventbus/internal/awsprotocol"
 )
 
+// maxJSONRequestBytes retains this adapter's existing local transport budget.
+const maxJSONRequestBytes int64 = 1 << 20
+
 // Handler owns the Secrets Manager AWS JSON adapter.
 type Handler struct {
 	secrets *SecretsStore
@@ -21,7 +24,7 @@ func NewHandler(store *SecretsStore) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.ServeAction(w, r, extractSecretsAction(r.Header.Get("X-Amz-Target")))
+	h.ServeAction(w, r, awsprotocol.TargetAction(r.Header.Get("X-Amz-Target")))
 }
 
 func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action string) {
@@ -44,7 +47,7 @@ func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action str
 }
 
 func (s *Handler) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -97,7 +100,7 @@ func (s *Handler) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) handleGetSecretValue(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -125,7 +128,7 @@ func (s *Handler) handleGetSecretValue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) handleUpdateSecret(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -154,7 +157,7 @@ func (s *Handler) handleUpdateSecret(w http.ResponseWriter, r *http.Request) {
 	})
 }
 func (s *Handler) handlePutSecretValue(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -193,7 +196,7 @@ func stringValue(data map[string]interface{}, key string) string {
 }
 
 func (s *Handler) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
-	data, err := awsprotocol.ReadJSONBody(r)
+	data, err := awsprotocol.ReadJSONBody(r, maxJSONRequestBytes)
 	if err != nil {
 		awsprotocol.JSONError(w, http.StatusBadRequest, "InvalidInput", "Invalid JSON body")
 		return
@@ -220,12 +223,4 @@ func (s *Handler) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		"Name":         secretID,
 		"DeletionDate": float64(time.Now().Unix()),
 	})
-}
-
-func extractSecretsAction(target string) string {
-	parts := strings.SplitN(target, ".", 2)
-	if len(parts) == 2 {
-		return parts[1]
-	}
-	return ""
 }

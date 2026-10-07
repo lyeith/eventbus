@@ -128,7 +128,7 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 			awsprotocol.JSONError(w, http.StatusServiceUnavailable, "ServiceUnavailable", "Service not configured")
 			return
 		}
-		handler.ServeAction(w, r, targetAction(target))
+		handler.ServeAction(w, r, awsprotocol.TargetAction(target))
 		return
 	}
 
@@ -150,11 +150,4 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.services.Messaging.ServeQuery(w, r, action)
-}
-
-func targetAction(target string) string {
-	if _, action, ok := strings.Cut(target, "."); ok {
-		return action
-	}
-	return ""
 }
