@@ -144,7 +144,7 @@ func TestSQSLambdaReceiptIssuedStaleHTTPNoopIsNotSettlementProof(t *testing.T) {
 	issued := q.receipts[first.ReceiptHandle]
 	q.mu.Unlock()
 	require.Equal(t, second, current, "stale ACK must not alter the later lease")
-	require.False(t, issued.Settled)
+	require.Equal(t, sqsReceiptUnsettled, issued.Settlement)
 	requireSQSLambdaReceiptAck(t, b, q, second.ReceiptHandle, true)
 	requireSQSLambdaReceiptAck(t, b, q, first.ReceiptHandle, false)
 }
@@ -210,7 +210,7 @@ func TestSQSLambdaReceiptRetentionPurgeAndRedriveNeverInventSettlement(t *testin
 			q.mu.Lock()
 			issued := q.receipts[receipt]
 			q.mu.Unlock()
-			require.False(t, issued.Settled)
+			require.Equal(t, sqsReceiptUnsettled, issued.Settlement)
 		})
 	}
 }
@@ -271,7 +271,7 @@ func TestSQSLambdaReceiptCancellationDoesNotSettleOrPrune(t *testing.T) {
 	issued := q.receipts[current.ReceiptHandle]
 	q.mu.Unlock()
 	require.Equal(t, current, preserved)
-	require.False(t, issued.Settled)
+	require.Equal(t, sqsReceiptUnsettled, issued.Settlement)
 	requireSQSLambdaReceiptAck(t, b, q, current.ReceiptHandle, true)
 	settled, err := b.AcknowledgeSQSLambdaReceiptContext(ctx, q, current.ReceiptHandle)
 	require.ErrorIs(t, err, context.Canceled)
@@ -287,7 +287,7 @@ func TestSQSLambdaReceiptSettlementUsesExistingIssuedExpiry(t *testing.T) {
 	before := q.receipts[current.ReceiptHandle]
 	q.mu.Unlock()
 	require.Equal(t, current.SentTimestamp.Add(q.RetentionPeriod+12*time.Hour), before.Expires)
-	require.False(t, before.Settled)
+	require.Equal(t, sqsReceiptUnsettled, before.Settlement)
 	require.Nil(t, NewHandler(b).deleteSQSReceipt(q, current.ReceiptHandle))
 	q.mu.Lock()
 	after := q.receipts[current.ReceiptHandle]
@@ -296,7 +296,7 @@ func TestSQSLambdaReceiptSettlementUsesExistingIssuedExpiry(t *testing.T) {
 	pruneSQSReceiptsLocked(q, after.Expires)
 	_, removed := q.receipts[current.ReceiptHandle]
 	q.mu.Unlock()
-	require.True(t, after.Settled)
+	require.Equal(t, sqsReceiptNativeSettlement, after.Settlement)
 	require.Equal(t, before.Expires, after.Expires, "settlement does not extend receipt retention")
 	require.True(t, kept)
 	require.False(t, removed)
@@ -354,4 +354,200 @@ func TestSQSLambdaReceiptConcurrentManualAndMappingSettlement(t *testing.T) {
 		require.Zero(t, flight)
 		requireSQSLambdaReceiptAck(t, b, q, receipt, true)
 	}
+}
+
+func requireSQSLambdaReceiptOutcome(t *testing.T, b *Broker, q *Queue, receipt string, acknowledge bool, expected SQSLambdaReceiptOutcome) {
+	t.Helper()
+	outcome, err := b.EvaluateSQSLambdaReceiptContext(t.Context(), q, receipt, acknowledge)
+	require.NoError(t, err)
+	require.Equal(t, expected, outcome)
+}
+
+func TestSQSLambdaReceiptEvidencePreservesNativeAndMappingOrigin(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native-%v", native), func(t *testing.T) {
+			b := newTestBroker()
+			q := receiptQueue(t, b, "origin-receipt-proof")
+			sendSQSLambdaBatchFixture(t, b, q, "one original delivery", "")
+			current := b.ReceiveMessages(q, 1, 0)[0]
+			requireSQSLambdaReceiptOutcome(t, b, q, current.ReceiptHandle, false, SQSLambdaReceiptUnacknowledged)
+			q.mu.Lock()
+			before := q.receipts[current.ReceiptHandle]
+			q.mu.Unlock()
+			expected := SQSLambdaReceiptMappingSettled
+			origin := sqsReceiptMappingSettlement
+			if native {
+				require.Nil(t, NewHandler(b).deleteSQSReceipt(q, current.ReceiptHandle))
+				expected = SQSLambdaReceiptNativeSettled
+				origin = sqsReceiptNativeSettlement
+			}
+			requireSQSLambdaReceiptOutcome(t, b, q, current.ReceiptHandle, true, expected)
+			requireSQSLambdaReceiptOutcome(t, b, q, current.ReceiptHandle, false, expected)
+			requireSQSLambdaReceiptOutcome(t, b, q, current.ReceiptHandle, true, expected)
+			requireSQSLambdaReceiptAck(t, b, q, current.ReceiptHandle, true)
+			require.False(t, b.DeleteMessage(q, current.ReceiptHandle), "evidence must preserve strict native local deletion")
+			q.mu.Lock()
+			after := q.receipts[current.ReceiptHandle]
+			q.mu.Unlock()
+			require.Equal(t, origin, after.Settlement)
+			require.Equal(t, before.Expires, after.Expires, "inspection and replay must not extend native receipt history")
+		})
+	}
+}
+
+func TestSQSLambdaReceiptEvidencePureInspectionLeavesCurrentAndExpiredLeasesIntact(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired-%v", expired), func(t *testing.T) {
+			b := newTestBroker()
+			q := receiptQueue(t, b, "pure-receipt-proof")
+			sendSQSLambdaBatchFixture(t, b, q, "current delivery", "")
+			current := b.ReceiveMessages(q, 1, 0)[0]
+			q.mu.Lock()
+			if expired {
+				q.inFlight[current.ReceiptHandle].VisibleAt = time.Now().Add(-time.Second)
+			}
+			before := cloneMessage(q.inFlight[current.ReceiptHandle])
+			historyBefore := q.receipts[current.ReceiptHandle]
+			wakeBefore := q.notify
+			q.mu.Unlock()
+			expected := SQSLambdaReceiptUnacknowledged
+			if expired {
+				expected = SQSLambdaReceiptStaleOrExpired
+			}
+			requireSQSLambdaReceiptOutcome(t, b, q, current.ReceiptHandle, false, expected)
+			q.mu.Lock()
+			after := cloneMessage(q.inFlight[current.ReceiptHandle])
+			historyAfter := q.receipts[current.ReceiptHandle]
+			wakeAfter := q.notify
+			queued := len(q.messages)
+			q.mu.Unlock()
+			require.Equal(t, before, after)
+			require.Equal(t, historyBefore, historyAfter)
+			require.Equal(t, wakeBefore, wakeAfter)
+			require.Zero(t, queued)
+		})
+	}
+}
+
+func TestSQSLambdaReceiptEvidenceSupersededDiscardedAndUnknown(t *testing.T) {
+	for _, disappearance := range []string{"superseded", "purge", "redrive"} {
+		t.Run(disappearance, func(t *testing.T) {
+			b := newTestBroker()
+			q := receiptQueue(t, b, "discarded-receipt-proof")
+			sendSQSLambdaBatchFixture(t, b, q, "original delivery", "")
+			original := b.ReceiveMessages(q, 1, 0)[0]
+			var later *Message
+			switch disappearance {
+			case "superseded":
+				require.True(t, b.ExtendMessageVisibility(q, original.ReceiptHandle, 0))
+				later = b.ReceiveMessages(q, 1, 0)[0]
+			case "purge":
+				b.PurgeQueue(q)
+			case "redrive":
+				dead := receiptQueue(t, b, "discarded-receipt-dlq")
+				require.True(t, b.MoveMessage(q, dead, original.ReceiptHandle))
+			}
+			requireSQSLambdaReceiptOutcome(t, b, q, original.ReceiptHandle, false, SQSLambdaReceiptStaleOrExpired)
+			requireSQSLambdaReceiptOutcome(t, b, q, original.ReceiptHandle, true, SQSLambdaReceiptStaleOrExpired)
+			require.Nil(t, NewHandler(b).deleteSQSReceipt(q, original.ReceiptHandle), "native stale HTTP success remains a no-op")
+			requireSQSLambdaReceiptOutcome(t, b, q, original.ReceiptHandle, false, SQSLambdaReceiptStaleOrExpired)
+			requireSQSLambdaReceiptOutcome(t, b, q, "never-issued", false, SQSLambdaReceiptUnknown)
+			requireSQSLambdaReceiptOutcome(t, b, q, "never-issued", true, SQSLambdaReceiptUnknown)
+			if later != nil {
+				requireSQSLambdaReceiptOutcome(t, b, q, later.ReceiptHandle, false, SQSLambdaReceiptUnacknowledged)
+				q.mu.Lock()
+				preserved := cloneMessage(q.inFlight[later.ReceiptHandle])
+				q.mu.Unlock()
+				require.Equal(t, later, preserved, "classification cannot mutate the later delivery")
+			}
+		})
+	}
+}
+
+func TestSQSLambdaReceiptEvidenceRejectsCanceledContextButFreshCompletionCanInspect(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native-%v", native), func(t *testing.T) {
+			b := newTestBroker()
+			q := receiptQueue(t, b, "canceled-evidence-proof")
+			sendSQSLambdaBatchFixture(t, b, q, "finished handler delivery", "")
+			current := b.ReceiveMessages(q, 1, 0)[0]
+			if native {
+				require.Nil(t, NewHandler(b).deleteSQSReceipt(q, current.ReceiptHandle))
+			}
+			canceled, cancel := context.WithCancel(t.Context())
+			cancel()
+			for _, acknowledge := range []bool{false, true} {
+				outcome, err := b.EvaluateSQSLambdaReceiptContext(canceled, q, current.ReceiptHandle, acknowledge)
+				require.ErrorIs(t, err, context.Canceled)
+				require.Equal(t, SQSLambdaReceiptUnknown, outcome)
+				require.False(t, outcome.Settled())
+			}
+			completion, stop := context.WithTimeout(t.Context(), time.Second)
+			defer stop()
+			outcome, err := b.EvaluateSQSLambdaReceiptContext(completion, q, current.ReceiptHandle, false)
+			require.NoError(t, err)
+			expected := SQSLambdaReceiptUnacknowledged
+			if native {
+				expected = SQSLambdaReceiptNativeSettled
+			}
+			require.Equal(t, expected, outcome, "joined failure/timeout inspection must not synthesize ACK")
+			if !native {
+				q.mu.Lock()
+				preserved := cloneMessage(q.inFlight[current.ReceiptHandle])
+				q.mu.Unlock()
+				require.Equal(t, current, preserved)
+			}
+		})
+	}
+}
+
+func TestSQSLambdaReceiptEvidenceRemovedReplacedAndForeignQueues(t *testing.T) {
+	b := newTestBroker()
+	q := receiptQueue(t, b, "bound-evidence-proof")
+	sendSQSLambdaBatchFixture(t, b, q, "original receipt", "")
+	original := b.ReceiveMessages(q, 1, 0)[0]
+	require.Nil(t, NewHandler(b).deleteSQSReceipt(q, original.ReceiptHandle))
+	require.True(t, b.DeleteQueue(q.Name))
+	replacement := b.CreateQueue(q.Name, time.Minute, 0)
+	sendSQSLambdaBatchFixture(t, b, replacement, "replacement receipt", "")
+	current := b.ReceiveMessages(replacement, 1, 0)[0]
+	foreign := newTestBroker().CreateQueue(q.Name, time.Minute, 0)
+	for _, bound := range []*Queue{q, foreign, nil} {
+		for _, acknowledge := range []bool{false, true} {
+			outcome, err := b.EvaluateSQSLambdaReceiptContext(t.Context(), bound, original.ReceiptHandle, acknowledge)
+			require.ErrorIs(t, err, ErrQueueUnavailable)
+			require.Equal(t, SQSLambdaReceiptQueueUnavailable, outcome)
+			require.False(t, outcome.Settled())
+		}
+	}
+	requireSQSLambdaReceiptOutcome(t, b, replacement, original.ReceiptHandle, false, SQSLambdaReceiptUnknown)
+	requireSQSLambdaReceiptOutcome(t, b, replacement, current.ReceiptHandle, false, SQSLambdaReceiptUnacknowledged)
+	replacement.mu.Lock()
+	preserved := cloneMessage(replacement.inFlight[current.ReceiptHandle])
+	replacement.mu.Unlock()
+	require.Equal(t, current, preserved)
+}
+
+func TestSQSLambdaReceiptEvidenceExpiredHistoryIsUnknownWithoutPruning(t *testing.T) {
+	b := newTestBroker()
+	q := receiptQueue(t, b, "history-evidence-proof")
+	sendSQSLambdaBatchFixture(t, b, q, "history original", "")
+	current := b.ReceiveMessages(q, 1, 0)[0]
+	requireSQSLambdaReceiptOutcome(t, b, q, current.ReceiptHandle, true, SQSLambdaReceiptMappingSettled)
+	q.mu.Lock()
+	issued := q.receipts[current.ReceiptHandle]
+	issued.Expires = time.Now().Add(-time.Second)
+	q.receipts[current.ReceiptHandle] = issued
+	wakeBefore := q.notify
+	q.mu.Unlock()
+	requireSQSLambdaReceiptOutcome(t, b, q, current.ReceiptHandle, false, SQSLambdaReceiptUnknown)
+	requireSQSLambdaReceiptOutcome(t, b, q, current.ReceiptHandle, true, SQSLambdaReceiptUnknown)
+	requireSQSLambdaReceiptAck(t, b, q, current.ReceiptHandle, false)
+	q.mu.Lock()
+	after, retained := q.receipts[current.ReceiptHandle]
+	wakeAfter := q.notify
+	q.mu.Unlock()
+	require.True(t, retained, "evidence inspection must not perform the maintenance owner's pruning")
+	require.Equal(t, issued, after)
+	require.Equal(t, wakeBefore, wakeAfter)
 }

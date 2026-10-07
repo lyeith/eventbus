@@ -5,13 +5,39 @@ import (
 	"time"
 )
 
-// sqsReceipt retains native receipt issuance until the existing grace deadline.
-// Issuance permits the AWS stale-delete no-op; Settled proves that this exact
-// receipt was actually deleted while it was current and unexpired. Expiry,
-// redrive and purge never produce that proof.
+// SQSLambdaReceiptOutcome is queue-owned evidence about one original delivery.
+// It contains no receipt handle or message payload. NativeSettled proves a native
+// caller deleted the current receipt; it does not identify that caller.
+type SQSLambdaReceiptOutcome string
+
+const (
+	SQSLambdaReceiptMappingSettled   SQSLambdaReceiptOutcome = "mapping_settled"
+	SQSLambdaReceiptNativeSettled    SQSLambdaReceiptOutcome = "native_settled"
+	SQSLambdaReceiptUnacknowledged   SQSLambdaReceiptOutcome = "unacknowledged"
+	SQSLambdaReceiptStaleOrExpired   SQSLambdaReceiptOutcome = "stale_or_expired"
+	SQSLambdaReceiptUnknown          SQSLambdaReceiptOutcome = "unknown"
+	SQSLambdaReceiptQueueUnavailable SQSLambdaReceiptOutcome = "queue_unavailable"
+)
+
+func (outcome SQSLambdaReceiptOutcome) Settled() bool {
+	return outcome == SQSLambdaReceiptMappingSettled || outcome == SQSLambdaReceiptNativeSettled
+}
+
+type sqsReceiptSettlement uint8
+
+const (
+	sqsReceiptUnsettled sqsReceiptSettlement = iota
+	sqsReceiptNativeSettlement
+	sqsReceiptMappingSettlement
+)
+
+// sqsReceipt retains native issuance until the existing grace deadline. Only an
+// actual current/unexpired deletion records its settlement origin. Issuance
+// still permits the AWS stale-delete no-op; expiry, redrive and purge never
+// produce settlement proof or extend this history's lifetime.
 type sqsReceipt struct {
-	Expires time.Time
-	Settled bool
+	Expires    time.Time
+	Settlement sqsReceiptSettlement
 }
 
 func issueSQSReceiptLocked(q *Queue, message *Message) {
@@ -38,21 +64,26 @@ func (b *Broker) DeleteMessage(q *Queue, receipt string) bool {
 	return deleteCurrentSQSReceiptLocked(q, receipt)
 }
 
+func currentSQSReceiptLocked(q *Queue, receipt string, now time.Time) (*Message, bool) {
+	message := q.inFlight[receipt]
+	return message, message != nil && now.Before(message.VisibleAt) && (q.RetentionPeriod <= 0 || now.Before(message.SentTimestamp.Add(q.RetentionPeriod)))
+}
+
 func deleteCurrentSQSReceiptLocked(q *Queue, receipt string) bool {
+	return settleCurrentSQSReceiptLocked(q, receipt, sqsReceiptNativeSettlement, time.Now())
+}
+
+func settleCurrentSQSReceiptLocked(q *Queue, receipt string, origin sqsReceiptSettlement, now time.Time) bool {
 	if q.deleted {
 		return false
 	}
-	message, ok := q.inFlight[receipt]
-	if !ok {
-		return false
-	}
-	now := time.Now()
-	if !now.Before(message.VisibleAt) || q.RetentionPeriod > 0 && !now.Before(message.SentTimestamp.Add(q.RetentionPeriod)) {
+	message, current := currentSQSReceiptLocked(q, receipt, now)
+	if !current {
 		return false
 	}
 	delete(q.inFlight, receipt)
 	if issued, known := q.receipts[receipt]; known {
-		issued.Settled = true
+		issued.Settlement = origin
 		q.receipts[receipt] = issued
 	}
 	releaseDevSQSMessageLocked(q, message.ID)
@@ -61,29 +92,64 @@ func deleteCurrentSQSReceiptLocked(q *Queue, receipt string) bool {
 	return true
 }
 
-// AcknowledgeSQSLambdaReceiptContext settles one completed mapping delivery on
-// its original queue instance. An SDK handler may have already deleted that
-// same current receipt; explicit native settlement history makes its joined ACK
-// idempotent. Merely issued stale/expired/unknown receipts are never success.
-// Refusal and cancellation perform no housekeeping or mutation of other leases.
-func (b *Broker) AcknowledgeSQSLambdaReceiptContext(ctx context.Context, q *Queue, receipt string) (bool, error) {
+func inspectSQSLambdaReceiptLocked(q *Queue, receipt string, now time.Time) SQSLambdaReceiptOutcome {
+	if message, current := currentSQSReceiptLocked(q, receipt, now); message != nil {
+		if current {
+			return SQSLambdaReceiptUnacknowledged
+		}
+		return SQSLambdaReceiptStaleOrExpired
+	}
+	issued, known := q.receipts[receipt]
+	if !known || !now.Before(issued.Expires) {
+		return SQSLambdaReceiptUnknown
+	}
+	switch issued.Settlement {
+	case sqsReceiptNativeSettlement:
+		return SQSLambdaReceiptNativeSettled
+	case sqsReceiptMappingSettlement:
+		return SQSLambdaReceiptMappingSettled
+	default:
+		// The issued original is no longer current. Its expiry, supersession,
+		// purge or redrive cannot be mistaken for successful deletion.
+		return SQSLambdaReceiptStaleOrExpired
+	}
+}
+
+// EvaluateSQSLambdaReceiptContext inspects an original bound delivery without
+// mutation when acknowledge is false. On true, only its exact current receipt
+// is settled; native prior settlement stays distinguishable from mapping ACK.
+// An inspection after failed/canceled execution can use a fresh bounded context
+// only after the invocation has joined. Cancellation/error is never success.
+// Neither mode runs housekeeping or changes another receipt's ownership.
+func (b *Broker) EvaluateSQSLambdaReceiptContext(ctx context.Context, q *Queue, receipt string, acknowledge bool) (SQSLambdaReceiptOutcome, error) {
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return SQSLambdaReceiptUnknown, err
 	}
 	if _, err := b.QueueInfo(q); err != nil {
-		return false, err
+		return SQSLambdaReceiptQueueUnavailable, err
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return SQSLambdaReceiptUnknown, err
 	}
 	if q.deleted {
-		return false, ErrQueueUnavailable
+		return SQSLambdaReceiptQueueUnavailable, ErrQueueUnavailable
 	}
-	if deleteCurrentSQSReceiptLocked(q, receipt) {
-		return true, nil
+	now := time.Now()
+	outcome := inspectSQSLambdaReceiptLocked(q, receipt, now)
+	if acknowledge && outcome == SQSLambdaReceiptUnacknowledged {
+		if settleCurrentSQSReceiptLocked(q, receipt, sqsReceiptMappingSettlement, now) {
+			return SQSLambdaReceiptMappingSettled, nil
+		}
 	}
-	issued, known := q.receipts[receipt]
-	return known && issued.Settled && time.Now().Before(issued.Expires), nil
+	return outcome, nil
+}
+
+// AcknowledgeSQSLambdaReceiptContext preserves the original bool mapping port.
+// Native current settlement and proven prior settlement are both success; merely
+// issued stale/expired/unknown receipts cannot acknowledge any later lease.
+func (b *Broker) AcknowledgeSQSLambdaReceiptContext(ctx context.Context, q *Queue, receipt string) (bool, error) {
+	outcome, err := b.EvaluateSQSLambdaReceiptContext(ctx, q, receipt, true)
+	return err == nil && outcome.Settled(), err
 }
