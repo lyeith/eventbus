@@ -27,6 +27,7 @@ internal/
   scheduler/             One-time schedule state, idempotency and Lambda admission
   ssm/                   Parameter state and HTTP adapter
   secrets/               Secret/version/stage state and asynchronous rotation workflow
+  testperf/              Performance-tag observation summaries; no runtime policy or timing assertions
 tests/sdk/               Dispatcher proofs using pinned Python/JavaScript SDKs and JWT/SRP clients
 examples/                Application-owned fixture format examples
 ```
@@ -86,6 +87,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
 - `cognito` declares its TriggerInvoker port and owns challenge state and decisions.
   `cognitotrigger` executes configured app handlers; it imports no Cognito package.
   `app` injects and joins the runner before releasing stores/capture.
+  Store bootstrap owns one transaction for schema/identity/verification setup;
+  the `dev_seed_store.go` adapter uses the native credential owner.
 - `gateway` consumes authorizers only through AWS Lambda Invoke HTTP. It knows no
   application policy, identity, private route format or database. Apps configure
   opaque context mappings and credential removal.
@@ -99,6 +102,10 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   native results/retries and redacted async metadata keep their existing contracts.
   `dev_python_stacks.go` and its Python collector own bounded live wait snapshots
   in that same sink; live evidence cannot attest invocation join or business success.
+  `async.go` owns capture transitions separately from the shared service mutex.
+  Pending admissions count capacity/activity before capture but cannot execute
+  or publish queued state until durable acceptance. Drain joins workers, pending
+  admissions and terminal capture; fencing/cancellation never waits on capture I/O.
 - `secrets` owns a narrow RotationInvoker port and its step/state policy;
   `scheduler` owns a narrow TargetInvoker port and admission retry/time policy.
   `app/service_invocations.go` shares redacted Execute/Admit mechanics with SNS
@@ -144,6 +151,7 @@ private. Application acceptance behavior belongs in the consuming application.
 | SQS Lambda wire records and projection | `sqsevent` owns types; messaging owns snapshots, leases and settlement |
 | Synchronous completion and asynchronous admission adapters | `app`; narrow consumer ports retain service policy, Lambda owns children |
 | Fixture provisioning and local recipe loading | Named `dev_*.go` adapters; test-only store mutation helpers stay in `_test.go` |
+| Opt-in performance observation summaries | `testperf`; service fixtures own native workloads, sample order and correctness checks |
 
 Similar-looking code does not always have the same contract. Diagnostic tails,
 complete function results and queue batch output have different size/error policies.

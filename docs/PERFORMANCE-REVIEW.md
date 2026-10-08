@@ -1,5 +1,8 @@
 # EventBus performance review
 
+The [general audit](PERFORMANCE-AUDIT.md) continues the candidates below with
+measured Cognito, Lambda async/log, SQS/SNS and gateway fixes and current priorities.
+
 The [launcher follow-up](#launcher-fix-and-follow-up-8-october-2026) records the
 SSD tooling fix: managed startup median 1154ms → 349ms; native UV Init 1161ms → 389ms.
 

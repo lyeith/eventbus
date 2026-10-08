@@ -1,48 +1,52 @@
 # Handoff
 
-Canonical SSD main. Published v0.11.2 from clean 9e1b652:
-https://github.com/lyeith/eventbus/releases/tag/v0.11.2
-Eight Go 1.26.0/CGO0 binaries and SHA256SUMS verified after upload/download.
-#29 closed; issues board empty at final check. No dependencies added.
-Plans/application state and shared frozen SDK caches preserved.
+Canonical SSD main; current runtime/fixture source5186da3. Public MIT EventBus.
+Latest public v0.11.2; audited v0.11.3 binaries to build/publish next.
+No Plans/application data or default Cognito DB touched; no dependencies added.
 
-Source c36ce1c: top process detail belongs to final launch; bounded per-launch
-facts retain retired errors, native ownership and raw frozen cancellation pairs.
-One adapter classifies causes. Top ownership is cumulative over native launches
-and optional collector. No native policy/identity/outcome change.
-docs/LAMBDA.md defines additive v1 fields and older-record limitations.
-Real managed success/final process+handler failure, Event identity, cancellation,
-dirty first cleanup/no retry, truncation and late cancellation are covered.
-Provided success followed by deliberate long-poll shutdown preserves its raw
-OS Wait detail; consumers use native state/ownership, not free-form error text.
+Owner commits:
+- ffb9ad6 shared opt-in performance reporting; earlier reducers consolidated.
+- 63f41cb Cognito bootstrap owns one unchanged-SQL transaction; seed omits only
+  redundant bcrypt comparison after successful create. Legacy rollback/reopen,
+  credential changes/concurrent creators and persisted RSA keys covered.
+- 4bd6113 SQS sorts after actual visibility returns; receive compacts owned slice,
+  retains delayed/rejected fronts and detached snapshots. FIFO/fairness/receipt/
+  transfer/attempt/redrive and mapping custody contracts preserved.
+- 17db939 SNS publication-local immutable envelopes keyed by protocol text.
+  Filters/raw/attrs/capture/FIFO/replay and per-subscription Lambda wrappers retained.
+- 810473d log byte counts avoid discarded merged-tail copies; stream tails preserved.
+- 8efc82a asyncTransitionMu→Service.mu; Append/Sync holds only transition lock.
+  Reservations count capacity/activity before capture but stay private/non-executable.
+  Healthy Close honors prior reservation; abort captures canceled terminal/no child.
+  Workers, pending admissions, native children and terminal capture all join.
+  Capture interruption/failure remains dirty; global fence/cancel stays responsive.
+- 5186da3 gateway literal fastpath/shared split, immutable parsed IAM matchers,
+  current-ARN/Deny checks; same-key concurrent insertion avoids unrelated eviction.
 
-PASS SSD /tmp logs, existing 24h lifetime:
-- eventbus-29-race-20261008: Lambda 84.689s/localexec 2.077s/devcapture 1.169s.
-- eventbus-29-native-consumers-20261008: native Event/evidence/retained-owner
-  SDK 34.994s; actual configured cleanup/gateway continuation 1.530s.
-- eventbus-29-vet-20261008: all packages, sdksmoke/integration/performance tags.
-- eventbus-v0.11.2-{build,metadata,local-checksums,downloaded-checksums}-20261008.
-- eventbus-v0.11.2-{linux,macos}-packaged-20261008: both real Python/Node
-  default 10s Init timeout → successful fallback; exact native request/attempt,
-  private phase facts, actual process/group absence and joined server shutdown.
-Linux arm64/macOS amd64 cross-built/metadata-checked, not executed.
-The consumer selection ran no eventsource tests; no claim for that package.
+docs/PERFORMANCE-AUDIT.md owns distributions, native scopes, reproduction and limits.
+Local medians: empty bootstrap153→34ms; async DescribeTarget11ms→4µs;
+FIFO10k native receive1.27→0.16ms; SNS100queues disabled1.16→0.61ms;
+gateway1000route miss142→14µs; full-cache exact IAM hit27→1.4µs.
+Seed numbers include random RSA; async durable throughput remains similar.
+Crypto/key caches, queue dedup indexes, cache expiry/routing structures and runtime
+reuse remain separate priorities, not required unfinished implementation.
 
-Proper overhead owner: ssd-dev-tools 796c1dd, pushed and immediately active through
-installed symlinks. Three fresh storage queries replace 13; exact owner/root/cache
-checks retained, no proof cache or root broker/config/dependency/restart.
-Launcher median 1154ms → 349ms over 10 samples per side. Native UV Init median
-388.942ms over 20, prior 1160.549ms. Runtime fixture passed 100 joined invocations
-in 11.872s. Performance report cf292c8 records frozen interpreter, timing noise,
-fixed ordering and limitations; no app import/business-flow or p99 claim.
-Tooling 41 Policy/shell tests and storage/operation/bootstrap cases pass.
-Full suite 898 tests: 18 failures/3 import errors/23 skips. Clean 26f8468
-reproduces all 18+3; fixture fields, umask/NoNewPrivs assumptions and absent pytest
-documented. No unrelated tooling fixes or added dependency.
+PASS saved SSD /tmp/eventbus-audit-*-20261008.log, existing24h lifetime:
+- Cognito fullnon42.474s; focused bootstrap/seed/legacy/persistence race35.022s.
+- Lambda fullrace96.269s /devcapture1.202s /localexec2.076s.
+- Messaging fullrace5.594s; gateway fullrace20.301s.
+- Eventsource1.593s /app19.444s /server2.732s /devquiescence1.052s races.
+- Ten native Python/Node SDK + retained-stack cases118.583s, no selected skips:
+  provision/restart/JWT, SQS/SNS/Event, batches/FIFO/retries/settlement, evidence,
+  retained resume, authenticated gateway callbacks and actual owned RustFS cleanup.
+- Vet all packages with sdksmoke,integration,performance tags; matrices and diff checks.
+Full Cognito race timed out4m during bcrypt; current test had run1s.
+No race/assertion failure was reported before timeout; full package race is a gap.
+Initial gateway mixed fixture expected greedy over full parameter route; corrected
+before production edits and reran only failed case; other baseline data retained.
 
-Cleanup: owned profiling/source/packaged helpers, binaries/download stages and
-duplicate laptop evidence removed. Native children, servers and all operations
-joined. No owned environment/worktree retained. Saved SSD logs have 24h TTL.
-Two failed tooling receipts are quiescent/unpinned with empty 0KiB scratch; the
-existing owner has no per-run purge. GC eligible Oct 9 13:25/13:29 UTC.
-No application/default DB or running stack was exercised or reset.
+No owned environments/worktrees or active processes remain. Successful fixtures
+close/join before temp deletion. Failed owned operations72b1f2fa/ae026ad1 verified
+quiescent/unpinned, GC expiry Oct9 14:15:15/14:22:51UTC under host24h policy.
+Raw logs share finite24h retention; no new retention/migration/cleanup machinery.
+Prior empty failed-tooling scratch receipts keep Oct9 13:25/13:29UTC expiry.
