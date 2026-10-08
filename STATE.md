@@ -1,33 +1,30 @@
 # EventBus state
 
-Canonical SSD /home/spite/Projects/eventbus, main. Public MIT standalone emulator
-and agent harness. Plans and consuming application state remain untouched.
+Canonical SSD /home/spite/Projects/eventbus, main; public MIT standalone AWS
+emulator and agent harness. Plans/application state remains untouched.
 Latest published: https://github.com/lyeith/eventbus/releases/tag/v0.11.1
-All 8 binaries and SHA256SUMS verified after upload/download. #27/#28 closed;
-GitHub issue board empty. No dependency changes or current blockers.
+Preparing v0.11.2 for #29; source acceptance passed, packaged checks pending.
 
-Both CLIs refuse positionals before resource construction. Native Python, Node
-and provided Init is capped at 10s; readiness starts configured Invoke. One
-cleanly joined fallback shares its configured Init+Invoke budget. Command keeps
-whole-process timeout. Caller/service/gateway deadlines and SQS leases remain
-independent; native request IDs/Event attempts unchanged. Core owns deadlines
-and facts; development adapters own the private phase schema.
-Darwin group-cleanup EPERM triggers absence probes for at most 1s; persistent
-denial stays dirty. Actual native process/resource joins remain required.
+#29 keeps top process_error attached to the final native launch. Retired Init
+errors, native ownership and frozen typed causes are bounded per-launch facts.
+Ownership remains cumulative over all launches and the optional collector.
+Native outcomes, IDs/Event attempts, Init/Invoke budgets and retries unchanged.
+Provided runtimes may reply successfully then be stopped while long-polling;
+raw OS Wait detail does not determine native success.
 
-Final owner race passed: Lambda 106.864s, localexec 2.067s, cognitotrigger 7.838s,
-consumer 11.036s, gateway 40.141s; all tagged vet passed. App/eventsource/native
-SDK and retained-stack race checks passed. Native macOS old-owner regression
-fails; corrected process-owner race/vet passed. Packaged Linux amd64 and three
-complete macOS arm64 proofs passed CLI, cold starts, timeouts, cancellation,
-privacy and actual joins. Linux arm64/macOS amd64 cross-built and metadata-
-checked only. Release binaries have clean tagged revision 416e309.
-The failed v0.11.0 draft was removed; its immutable source tag remains and was
-never a published release.
+Linux full race: Lambda84.689s/localexec2.077s/devcapture1.169s PASS.
+Native Event/evidence/retained-owner SDK race34.994s and actual app cleanup
+continuation race1.530s PASS; tagged vet across all packages PASS.
+Final SDK smoke needs no new dependencies; existing frozen environment used.
 
-Separate docs/PERFORMANCE-REVIEW.md measured 180 invocations and 80 appends.
-Same-interpreter median Python Init: 29.675ms direct, 1160.549ms managed UV.
-Durable XFS append median: 3.35–3.92ms. Report records method/source boundaries
-and ranked owner investigations; application-chain behavior was outside scope.
-Owned probes, source staging, binaries/downloads and native test copy removed.
-No owned processes, environments or worktrees retained; SSD evidence has 24h TTL.
+Overhead fixed/pushed in SSD tooling796c1dd. Already-owned managed wrapper reuses
+exact receipt/cgroup checks and batches fresh storage proofs;13 broker calls→3.
+Same-interpreter launcher median1154ms→349ms; native UV Init1161ms→389ms.
+docs/PERFORMANCE-REVIEW.md records method/source boundaries and limitations.
+All41 Policy/shell tests passed. Full tooling18 failures/3 import errors
+reproduce on unchanged26f8468; existing fixture/environment blockers documented.
+No root broker/config changes, restart or cross-invocation proof cache.
+
+#27/#28 shipped in v0.11.1; Darwin group EPERM reconciliation remains fail closed.
+One serial SSD lane; GOMAXPROCS4/GOFLAGS-p2. Owned probes pending final cleanup;
+saved evidence follows existing24h TTL. No application/default DB exercised.
