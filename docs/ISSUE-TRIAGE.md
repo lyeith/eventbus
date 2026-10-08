@@ -236,10 +236,9 @@ contract owned by Lambda's private diagnostics adapter. Native launch facts
 remain in execution core; the adapter bounds/projects per-launch errors,
 ownership and frozen cancellation causes. Top process detail is the final
 launch; ownership stays cumulative. Source race/SDK/vet acceptance passed;
-v0.11.2 packaged verification/publication is pending.
+released in v0.11.2 after packaged Linux/macOS fallback verification.
 
 Measured startup overhead belongs to SSD tooling, fixed in
 [796c1dd](https://github.com/lyeith/ssd-dev-tools/commit/796c1dd), with exact owner
-reuse and batched fresh storage proofs. No missing AWS functionality is being
-reclassified as a dev feature. [Performance review](PERFORMANCE-REVIEW.md#launcher-fix-and-follow-up-8-october-2026)
+reuse and batched fresh storage proofs. [Performance review](PERFORMANCE-REVIEW.md#launcher-fix-and-follow-up-8-october-2026)
 records measurements and the unchanged baseline tooling-suite blockers.
