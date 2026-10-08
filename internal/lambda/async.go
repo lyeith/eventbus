@@ -58,39 +58,84 @@ func (service *Service) Admit(ctx context.Context, input InvokeInput) (Admission
 	now := time.Now().UTC()
 	requestID := uuid.NewString()
 	task := &asyncTask{entry: entry, input: prepareInvocation(entry, name, input, requestID), readyAt: now, record: AsyncRecord{SchemaVersion: "eventbus.lambda.async.v1", RequestID: requestID, FunctionName: name, State: "queued", QueuedAt: now, UpdatedAt: now}}
+	// Async transitions serialize durable capture and publication independently
+	// of the shared invocation/registry mutex. Always take transitionMu before mu.
+	service.asyncTransitionMu.Lock()
+	defer service.asyncTransitionMu.Unlock()
 	service.mu.Lock()
-	defer service.mu.Unlock()
 	if err := ctx.Err(); err != nil {
+		service.mu.Unlock()
 		return Admission{}, err
 	}
 	if service.closed || service.asyncClosed {
+		service.mu.Unlock()
 		return Admission{}, invocationError(http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
 	}
 	if service.asyncEvidenceErr != nil {
+		service.mu.Unlock()
 		return Admission{}, invocationError(http.StatusInternalServerError, "ServiceException", "Lambda async evidence is unavailable")
 	}
 	if service.asyncOutstanding >= service.asyncCapacity {
+		service.mu.Unlock()
 		return Admission{}, invocationError(http.StatusTooManyRequests, "TooManyRequestsException", "Lambda async queue capacity is exhausted")
 	}
 	release, err := service.beginActivityLocked("lambda_async", requestID)
 	if err != nil {
+		service.mu.Unlock()
 		return Admission{}, err
 	}
 	task.release = release
-	// The small evidence append and publication are atomic with service closing.
-	// Capture writers are owned file/stdio sinks, never application callbacks.
-	if err := service.asyncCapture.Append(task.record); err != nil {
-		service.asyncEvidenceErr = err
-		if task.release != nil {
-			task.release(err)
+	// A reservation wins admission against a later Close and counts capacity
+	// and retained work, but is neither executable nor a published queued record.
+	service.asyncOutstanding++
+	service.asyncAdmissions.Add(1)
+	service.mu.Unlock()
+	reserved := true
+	defer service.asyncAdmissions.Done()
+	defer func() {
+		if reserved {
+			// Propagate a borrowed writer's panic/Goexit without orphaning this
+			// unpublished reservation or treating interrupted evidence as healthy.
+			service.mu.Lock()
+			service.rollbackAsyncAdmissionLocked(task, errors.New("Lambda async admission capture was interrupted"))
+			service.mu.Unlock()
 		}
+	}()
+	captureErr := service.asyncCapture.Append(task.record)
+	service.mu.Lock()
+	reserved = false
+	if captureErr != nil {
+		service.rollbackAsyncAdmissionLocked(task, captureErr)
+		service.mu.Unlock()
 		return Admission{}, invocationError(http.StatusInternalServerError, "ServiceException", "Cannot capture Lambda async admission")
 	}
-	service.asyncOutstanding++
 	service.asyncTasks[requestID] = task
-	service.asyncQueue = append(service.asyncQueue, task)
+	aborted := service.asyncAborted
+	if !aborted {
+		service.asyncQueue = append(service.asyncQueue, task)
+	}
 	service.wakeAsyncLocked()
+	service.mu.Unlock()
+	if aborted {
+		// The reservation preceded shutdown, so successful queued capture still
+		// returns native acceptance. Actual abort owns a canceled terminal record
+		// and never launches this event.
+		service.finishAsync(task, "canceled", "ServiceShutdown")
+	}
 	return Admission{RequestID: requestID}, nil
+}
+
+// The caller owns mu and the unpublished reservation's transition.
+func (service *Service) rollbackAsyncAdmissionLocked(task *asyncTask, err error) {
+	if service.asyncEvidenceErr == nil {
+		service.asyncEvidenceErr = err
+	}
+	service.asyncOutstanding--
+	service.wakeAsyncLocked()
+	if task.release != nil {
+		task.release(err)
+		task.release = nil
+	}
 }
 
 func (service *Service) wakeAsyncLocked() {
@@ -116,21 +161,49 @@ func (service *Service) AsyncSnapshot() []AsyncRecord {
 	return records
 }
 
-func (service *Service) recordAsyncLocked(task *asyncTask, state, errorType string) {
-	task.record.State = state
-	task.record.ErrorType = errorType
-	task.record.UpdatedAt = time.Now().UTC()
+// nextAsyncRecord copies an immutable proposed transition. The task's published
+// state changes only after its capture attempt has completed.
+func nextAsyncRecord(record AsyncRecord, state, errorType string) AsyncRecord {
+	record.State = state
+	record.ErrorType = errorType
+	record.UpdatedAt = time.Now().UTC()
 	if state == "succeeded" || state == "failed" || state == "canceled" {
-		task.record.CompletedAt = task.record.UpdatedAt
+		record.CompletedAt = record.UpdatedAt
 	}
-	if err := service.asyncCapture.Append(task.record); err != nil && service.asyncEvidenceErr == nil {
+	return record
+}
+
+// recordAsync and finishAsync require asyncTransitionMu, with mu released. All
+// filesystem/borrowed-writer I/O stays outside the shared service mutex.
+func (service *Service) captureAsyncRecord(record AsyncRecord) {
+	err := service.asyncCapture.Append(record)
+	service.mu.Lock()
+	firstFailure := err != nil && service.asyncEvidenceErr == nil
+	if firstFailure {
 		service.asyncEvidenceErr = err
-		log.Printf("Lambda async evidence failed request_id=%s function=%s state=%s", task.record.RequestID, task.record.FunctionName, state)
+	}
+	service.mu.Unlock()
+	if firstFailure {
+		log.Printf("Lambda async evidence failed request_id=%s function=%s state=%s", record.RequestID, record.FunctionName, record.State)
 	}
 }
-func (service *Service) finishAsyncLocked(task *asyncTask, state, errorType string) {
-	task.record.NextAttemptAt = time.Time{}
-	service.recordAsyncLocked(task, state, errorType)
+
+func (service *Service) recordAsync(task *asyncTask, record AsyncRecord) {
+	service.captureAsyncRecord(record)
+	service.mu.Lock()
+	task.record = record
+	service.mu.Unlock()
+}
+
+func (service *Service) finishAsync(task *asyncTask, state, errorType string) {
+	service.mu.Lock()
+	record := nextAsyncRecord(task.record, state, errorType)
+	record.NextAttemptAt = time.Time{}
+	service.mu.Unlock()
+	service.captureAsyncRecord(record)
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	task.record = record
 	delete(service.asyncTasks, task.record.RequestID)
 	service.asyncOutstanding--
 	service.asyncHistory = append(service.asyncHistory, task.record)
@@ -145,40 +218,56 @@ func (service *Service) finishAsyncLocked(task *asyncTask, state, errorType stri
 	}
 }
 
+// pollAsync owns one selection/capture transaction. A nil wake with no task
+// means an expired event was settled and the worker should select again.
+func (service *Service) pollAsync() (*asyncTask, <-chan struct{}, time.Time, bool) {
+	service.asyncTransitionMu.Lock()
+	defer service.asyncTransitionMu.Unlock()
+	service.mu.Lock()
+	if service.asyncAborted || service.asyncClosed && service.asyncOutstanding == 0 {
+		service.mu.Unlock()
+		return nil, nil, time.Time{}, true
+	}
+	now := time.Now()
+	selected := -1
+	var earliest time.Time
+	for index, task := range service.asyncQueue {
+		if earliest.IsZero() || task.readyAt.Before(earliest) {
+			earliest = task.readyAt
+			selected = index
+		}
+	}
+	if selected >= 0 && !now.Before(earliest) {
+		task := service.asyncQueue[selected]
+		copy(service.asyncQueue[selected:], service.asyncQueue[selected+1:])
+		service.asyncQueue[len(service.asyncQueue)-1] = nil
+		service.asyncQueue = service.asyncQueue[:len(service.asyncQueue)-1]
+		if now.Sub(task.record.QueuedAt) >= maxEventAge {
+			service.mu.Unlock()
+			service.finishAsync(task, "failed", "EventAgeExceeded")
+			return nil, nil, time.Time{}, false
+		}
+		record := nextAsyncRecord(task.record, "running", "")
+		record.Attempts++
+		record.NextAttemptAt = time.Time{}
+		service.mu.Unlock()
+		service.recordAsync(task, record)
+		return task, nil, time.Time{}, false
+	}
+	wake := service.asyncWake
+	service.mu.Unlock()
+	return nil, wake, earliest, false
+}
+
 func (service *Service) takeAsync() *asyncTask {
 	for {
-		service.mu.Lock()
-		if service.asyncAborted || service.asyncClosed && service.asyncOutstanding == 0 {
-			service.mu.Unlock()
-			return nil
-		}
-		now := time.Now()
-		selected := -1
-		var earliest time.Time
-		for index, task := range service.asyncQueue {
-			if earliest.IsZero() || task.readyAt.Before(earliest) {
-				earliest = task.readyAt
-				selected = index
-			}
-		}
-		if selected >= 0 && !now.Before(earliest) {
-			task := service.asyncQueue[selected]
-			copy(service.asyncQueue[selected:], service.asyncQueue[selected+1:])
-			service.asyncQueue[len(service.asyncQueue)-1] = nil
-			service.asyncQueue = service.asyncQueue[:len(service.asyncQueue)-1]
-			if now.Sub(task.record.QueuedAt) >= maxEventAge {
-				service.finishAsyncLocked(task, "failed", "EventAgeExceeded")
-				service.mu.Unlock()
-				continue
-			}
-			task.record.Attempts++
-			task.record.NextAttemptAt = time.Time{}
-			service.recordAsyncLocked(task, "running", "")
-			service.mu.Unlock()
+		task, wake, earliest, stopped := service.pollAsync()
+		if stopped || task != nil {
 			return task
 		}
-		wake := service.asyncWake
-		service.mu.Unlock()
+		if wake == nil {
+			continue
+		}
 		if earliest.IsZero() {
 			select {
 			case <-wake:
@@ -222,28 +311,70 @@ func (service *Service) asyncWorker() {
 		input := task.input
 		input.attempt = task.record.Attempts
 		result, err := service.invokeOwned(service.asyncContext, task.entry, input, true)
+		service.completeAsync(task, result, err)
+	}
+}
+
+// The native attempt has actually joined before its terminal/retry transaction.
+func (service *Service) completeAsync(task *asyncTask, result invocationResult, err error) {
+	service.asyncTransitionMu.Lock()
+	defer service.asyncTransitionMu.Unlock()
+	service.mu.Lock()
+	task.ownershipErr = errors.Join(task.ownershipErr, result.ownershipErr)
+	if result.ownershipErr != nil && service.asyncOwnershipErr == nil {
+		service.asyncOwnershipErr = result.ownershipErr
+	}
+	aborted := service.asyncAborted
+	record := task.record
+	service.mu.Unlock()
+	switch {
+	case aborted || errors.Is(err, context.Canceled):
+		service.finishAsync(task, "canceled", "ServiceShutdown")
+	case err != nil:
+		service.finishAsync(task, "failed", "ServiceError")
+	case !result.functionError:
+		service.finishAsync(task, "succeeded", "")
+	case record.Attempts <= 2:
+		readyAt := time.Now().Add(service.asyncRetryDelays[record.Attempts-1])
+		record = nextAsyncRecord(record, "retrying", asyncErrorType(result))
+		record.NextAttemptAt = readyAt.UTC()
+		service.recordAsync(task, record)
 		service.mu.Lock()
-		task.ownershipErr = errors.Join(task.ownershipErr, result.ownershipErr)
-		if result.ownershipErr != nil && service.asyncOwnershipErr == nil {
-			service.asyncOwnershipErr = result.ownershipErr
-		}
-		switch {
-		case service.asyncAborted || errors.Is(err, context.Canceled):
-			service.finishAsyncLocked(task, "canceled", "ServiceShutdown")
-		case err != nil:
-			service.finishAsyncLocked(task, "failed", "ServiceError")
-		case !result.functionError:
-			service.finishAsyncLocked(task, "succeeded", "")
-		case task.record.Attempts <= 2:
-			task.readyAt = time.Now().Add(service.asyncRetryDelays[task.record.Attempts-1])
-			task.record.NextAttemptAt = task.readyAt.UTC()
-			service.recordAsyncLocked(task, "retrying", asyncErrorType(result))
+		aborted = service.asyncAborted
+		if !aborted {
+			task.readyAt = readyAt
 			service.asyncQueue = append(service.asyncQueue, task)
 			service.wakeAsyncLocked()
-		default:
-			service.finishAsyncLocked(task, "failed", asyncErrorType(result))
 		}
 		service.mu.Unlock()
+		if aborted {
+			service.finishAsync(task, "canceled", "ServiceShutdown")
+		}
+	default:
+		service.finishAsync(task, "failed", asyncErrorType(result))
+	}
+}
+
+// joinAsync waits accepted children and admission reservations before settling
+// aborted queued events. No new reservation can be added after workers stop:
+// shutdown fenced admission under mu before making worker exit possible.
+func (service *Service) joinAsync() {
+	service.asyncWorkers.Wait()
+	service.asyncAdmissions.Wait()
+	service.asyncTransitionMu.Lock()
+	defer service.asyncTransitionMu.Unlock()
+	for {
+		service.mu.Lock()
+		if len(service.asyncQueue) == 0 {
+			close(service.asyncDrainDone)
+			service.mu.Unlock()
+			return
+		}
+		task := service.asyncQueue[0]
+		service.asyncQueue[0] = nil
+		service.asyncQueue = service.asyncQueue[1:]
+		service.mu.Unlock()
+		service.finishAsync(task, "canceled", "ServiceShutdown")
 	}
 }
 
@@ -286,8 +417,9 @@ func (service *Service) asyncDrainError() error {
 	return errors.Join(service.asyncAbortErr, service.asyncEvidenceErr, service.asyncOwnershipErr)
 }
 
-// The caller owns mu. Synchronous invocations are intentionally independent;
-// their caller contexts and final Close own cancellation.
+// The caller owns mu. Fencing/cancellation never waits for capture. joinAsync
+// owns queued terminal capture after workers and pending admissions join.
+// Synchronous invocations retain their caller contexts and final Close owner.
 func (service *Service) abortAsyncLocked(reason error) {
 	if service.asyncAborted {
 		return
@@ -301,9 +433,5 @@ func (service *Service) abortAsyncLocked(reason error) {
 			owner.cancel()
 		}
 	}
-	for _, task := range service.asyncQueue {
-		service.finishAsyncLocked(task, "canceled", "ServiceShutdown")
-	}
-	service.asyncQueue = nil
 	service.wakeAsyncLocked()
 }

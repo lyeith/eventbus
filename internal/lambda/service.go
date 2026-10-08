@@ -44,15 +44,19 @@ type Service struct {
 	devActivity DevActivity
 	// Immutable in normal construction; private tests can wrap real cleanup to
 	// prove that ownership uncertainty stays separate from native responses.
-	processCleanup                                     func(*exec.Cmd) error
-	mu                                                 sync.Mutex
-	closed                                             bool
-	aborted                                            bool
-	next                                               uint64
-	active                                             map[uint64]invocationOwner
-	inflight                                           sync.WaitGroup
-	done                                               chan struct{}
-	closeErr                                           error
+	processCleanup func(*exec.Cmd) error
+	mu             sync.Mutex
+	closed         bool
+	aborted        bool
+	next           uint64
+	active         map[uint64]invocationOwner
+	inflight       sync.WaitGroup
+	done           chan struct{}
+	closeErr       error
+	// Async transitions take asyncTransitionMu before mu. Capture I/O may
+	// hold only the transition mutex; admission fences/cancellation use mu.
+	asyncTransitionMu                                  sync.Mutex
+	asyncAdmissions                                    sync.WaitGroup
 	asyncQueue                                         []*asyncTask
 	asyncTasks                                         map[string]*asyncTask
 	asyncHistory                                       []AsyncRecord
@@ -584,7 +588,7 @@ func (service *Service) Close(ctx context.Context) error {
 				service.diagnosticMu.Unlock()
 			}
 			service.mu.Lock()
-			service.closeErr = errors.Join(service.closeErr, service.asyncAbortErr, service.invocationEvidenceErr, captureErr)
+			service.closeErr = errors.Join(service.closeErr, service.asyncAbortErr, service.asyncEvidenceErr, service.asyncOwnershipErr, service.invocationEvidenceErr, captureErr)
 			close(service.done)
 			service.mu.Unlock()
 		}()

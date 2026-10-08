@@ -98,7 +98,7 @@ func (service *Service) configureAsync(config *DevAsyncConfig, workDir string) e
 	for index := 0; index < workers; index++ {
 		go service.asyncWorker()
 	}
-	go func() { service.asyncWorkers.Wait(); close(service.asyncDrainDone) }()
+	go service.joinAsync()
 	return nil
 }
 
