@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lyeith/eventbus/internal/testperf"
 )
 
 const performanceReviewSamples = 20
@@ -245,9 +245,7 @@ func logPerformanceReviewSamples(t *testing.T, samples []performanceReviewSample
 		init, invoke, wall = append(init, sample.InitMS), append(invoke, sample.InvokeMS), append(wall, sample.WallMS)
 	}
 	for name, values := range map[string][]float64{"init_ms": init, "invoke_ms": invoke, "joined_invoke_wall_ms": wall} {
-		sort.Float64s(values)
-		median := (values[len(values)/2-1] + values[len(values)/2]) / 2
-		t.Logf("PERFORMANCE_SUMMARY case=%s metric=%s count=%d first=separately_logged min=%.6f median=%.6f max=%.6f", samples[0].Case, name, len(values), values[0], median, values[len(values)-1])
+		testperf.Report(t, samples[0].Case, name, values)
 	}
 }
 

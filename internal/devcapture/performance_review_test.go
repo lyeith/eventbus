@@ -9,10 +9,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lyeith/eventbus/internal/testperf"
 )
 
 // These opt-in measurements retain the durable file contract. The discard
@@ -84,9 +85,7 @@ func TestPerformanceReviewCaptureAppend(t *testing.T) {
 						t.Fatalf("unexpected retained record after samples: %v", err)
 					}
 				}
-				sort.Float64s(samples)
-				median := (samples[count/2-1] + samples[count/2]) / 2
-				t.Logf("PERFORMANCE_CAPTURE_SUMMARY mode=%s payload_bytes=%d count=%d min=%.6f median=%.6f max=%.6f", mode, size, count, samples[0], median, samples[count-1])
+				testperf.Report(t, fmt.Sprintf("capture_%s_bytes_%d", mode, size), "append_ms", samples)
 			})
 		}
 	}
