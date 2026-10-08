@@ -65,6 +65,12 @@ func (output *tailOutput) snapshot() ([]byte, int64) {
 	return append([]byte(nil), output.buffer...), output.total
 }
 
+func (output *tailOutput) byteCount() int64 {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return output.total
+}
+
 // Stream separation is opt-in; the original merged native tail stays intact.
 // Command stdout is its response channel and is deliberately never diagnosed.
 type invocationLogs struct {
@@ -96,7 +102,7 @@ func (logs *invocationLogs) stderrWriter() io.Writer {
 }
 func (logs *invocationLogs) diagnostics() invocationDiagnostics {
 	var result invocationDiagnostics
-	_, result.tailBytes = logs.merged.snapshot()
+	result.tailBytes = logs.merged.byteCount()
 	if logs.stdout != nil {
 		result.stdout, result.stdoutBytes = logs.stdout.snapshot()
 	}
