@@ -121,7 +121,8 @@ diagnostics leave native deadlines, results, retries and joins unchanged; a
 snapshot cannot identify an unproven business cause or attest completion. See
 [private diagnostics](LAMBDA.md#private-invocation-diagnostics) and
 [Python snapshots](LAMBDA.md#python-wait-snapshots). Final regression acceptance
-passed; [HANDOFF](../HANDOFF.md) records verification and release status.
+passed and shipped in [v0.10.0](https://github.com/lyeith/eventbus/releases/tag/v0.10.0);
+[HANDOFF](../HANDOFF.md) records verification and release status.
 
 ## Core versus harness code
 
