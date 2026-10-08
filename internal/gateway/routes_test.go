@@ -21,6 +21,9 @@ func TestTrailingSlashTemplatesMatchLiterally(t *testing.T) {
 		{"/docs/{id}/", "/docs/example/", map[string]string{"id": "example"}, true},
 		{"/docs/{id}/", "/docs/example", nil, false},
 		{"/docs/{id}/", "/docs/", nil, false},
+		{"/items/{id}", "/items/α", map[string]string{"id": "α"}, true},
+		{"/items/{id}", "/items/α/extra", nil, false},
+		{"/{section}/{proxy+}", "/docs/a/b/", map[string]string{"section": "docs", "proxy": "a/b/"}, true},
 		{"/docs/{proxy+}", "/docs", nil, false},
 		{"/docs/{proxy+}", "/docs/", nil, false},
 		{"/docs/{proxy+}", "/docs/assets/", map[string]string{"proxy": "assets/"}, true},
@@ -37,6 +40,15 @@ func TestTrailingSlashTemplatesMatchLiterally(t *testing.T) {
 			parameters, matched := template.match(tc.request)
 			if matched != tc.match || matched && !reflect.DeepEqual(parameters, tc.parameters) {
 				t.Fatalf("match=%t parameters=%v, want %t %v", matched, parameters, tc.match, tc.parameters)
+			}
+			if matched {
+				// Successful literals keep nonnil maps for native JSON.
+				// Captures are owned by this request, including empty maps.
+				parameters["fixture"] = "caller mutation"
+				next, ok := template.match(tc.request)
+				if !ok || !reflect.DeepEqual(next, tc.parameters) {
+					t.Fatalf("request capture ownership leaked: match=%t parameters=%v", ok, next)
+				}
 			}
 		})
 	}

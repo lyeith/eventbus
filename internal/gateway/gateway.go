@@ -196,6 +196,7 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	routingPath, mapped := apiPath(gateway.config.BasePath, r.URL.Path)
 	var route *compiledRoute
 	var parameters map[string]string
+	var routingParts []string
 	for i := range gateway.routes {
 		if !mapped {
 			break
@@ -208,7 +209,10 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			route, parameters = candidate, map[string]string{}
 			break
 		}
-		if values, ok := candidate.template.match(routingPath); ok {
+		if !candidate.template.literal && routingParts == nil {
+			routingParts = splitRequestPath(routingPath)
+		}
+		if values, ok := candidate.template.matchSegments(routingPath, routingParts); ok {
 			route = candidate
 			parameters = values
 			break

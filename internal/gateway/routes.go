@@ -14,10 +14,11 @@ type segment struct {
 type pathTemplate struct {
 	original string
 	segments []segment
+	literal  bool
 }
 
 func parseTemplate(raw string) (pathTemplate, error) {
-	result := pathTemplate{original: raw}
+	result := pathTemplate{original: raw, literal: true}
 	if raw == "" || !strings.HasPrefix(raw, "/") || strings.ContainsAny(raw, "\\%?#") || !canonicalSegments(raw) {
 		return result, fmt.Errorf("route path must be an absolute template with canonical segments")
 	}
@@ -29,6 +30,7 @@ func parseTemplate(raw string) (pathTemplate, error) {
 	for i, part := range parts {
 		item := segment{literal: part}
 		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			result.literal = false
 			item.name = part[1 : len(part)-1]
 			item.literal = ""
 			if strings.HasSuffix(item.name, "+") {
@@ -54,34 +56,59 @@ func (template pathTemplate) hasParameter(name string) bool {
 	}
 	return false
 }
+
+func splitRequestPath(requestPath string) []string {
+	return strings.Split(strings.TrimPrefix(requestPath, "/"), "/")
+}
+
 func (template pathTemplate) match(requestPath string) (map[string]string, bool) {
-	parameters := make(map[string]string)
-	if len(template.segments) == 0 {
-		return parameters, requestPath == "/"
+	var parts []string
+	if !template.literal {
+		parts = splitRequestPath(requestPath)
 	}
-	parts := strings.Split(strings.TrimPrefix(requestPath, "/"), "/")
-	for i, item := range template.segments {
-		if i >= len(parts) {
+	return template.matchSegments(requestPath, parts)
+}
+
+// Gateway selection shares one request split across candidates. Other owners
+// use match; both entry points preserve literal slashes and fresh captures.
+func (template pathTemplate) matchSegments(requestPath string, parts []string) (map[string]string, bool) {
+	if template.literal {
+		if requestPath != template.original {
+			return nil, false
+		}
+		return map[string]string{}, true
+	}
+	if !template.isGreedy() && len(parts) != len(template.segments) {
+		return nil, false
+	}
+	for index, item := range template.segments {
+		if index >= len(parts) {
 			return nil, false
 		}
 		if item.greedy {
-			value := strings.Join(parts[i:], "/")
-			if value == "" {
+			if len(parts) == index+1 && parts[index] == "" {
 				return nil, false
 			}
-			parameters[item.name] = value
-			return parameters, true
+			break
 		}
 		if item.name != "" {
-			if parts[i] == "" {
+			if parts[index] == "" {
 				return nil, false
 			}
-			parameters[item.name] = parts[i]
-		} else if item.literal != parts[i] {
+		} else if item.literal != parts[index] {
 			return nil, false
 		}
 	}
-	return parameters, len(parts) == len(template.segments)
+	// Failed candidates allocate no parameter map or greedy suffix.
+	parameters := make(map[string]string)
+	for index, item := range template.segments {
+		if item.greedy {
+			parameters[item.name] = strings.Join(parts[index:], "/")
+		} else if item.name != "" {
+			parameters[item.name] = parts[index]
+		}
+	}
+	return parameters, true
 }
 func (template pathTemplate) isGreedy() bool {
 	return len(template.segments) > 0 && template.segments[len(template.segments)-1].greedy

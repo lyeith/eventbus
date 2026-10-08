@@ -64,9 +64,12 @@ type authorizerResponse struct {
 	Context          map[string]string
 	Statements       []policyStatement
 }
+
+// A parsed policy owns its immutable matchers; every request still evaluates
+// the current ARN. No pattern state is shared through a global cache.
 type policyStatement struct {
 	Effect             string
-	Actions, Resources []string
+	actions, resources []*regexp.Regexp
 }
 type cachedAuthorization struct {
 	response authorizerResponse
@@ -164,7 +167,10 @@ func (authorizer *lambdaAuthorizer) authorize(ctx context.Context, event request
 	if ttl > 0 {
 		authorizer.mu.Lock()
 		now := authorizer.now()
-		if len(authorizer.cache) >= maxAuthorizerCache {
+		current, replacing := authorizer.cache[cacheKey]
+		// Concurrent same-identity misses may publish after a peer inserted
+		// this key. A live replacement needs no new slot or eviction.
+		if len(authorizer.cache) >= maxAuthorizerCache && (!replacing || !now.Before(current.expires)) {
 			earliestKey := ""
 			var earliest time.Time
 			for key, entry := range authorizer.cache {
@@ -176,7 +182,7 @@ func (authorizer *lambdaAuthorizer) authorize(ctx context.Context, event request
 					earliestKey, earliest = key, entry.expires
 				}
 			}
-			if len(authorizer.cache) >= maxAuthorizerCache {
+			if len(authorizer.cache) >= maxAuthorizerCache && !replacing {
 				delete(authorizer.cache, earliestKey)
 			}
 		}
@@ -377,7 +383,14 @@ func policyStatements(data []byte) ([]policyStatement, error) {
 				return nil, fmt.Errorf("unsupported policy resource")
 			}
 		}
-		statements = append(statements, policyStatement{Effect: raw.Effect, Actions: actions, Resources: resources})
+		statement := policyStatement{Effect: raw.Effect}
+		for _, action := range actions {
+			statement.actions = append(statement.actions, compileIAMGlob(strings.ToLower(action)))
+		}
+		for _, resource := range resources {
+			statement.resources = append(statement.resources, compileIAMGlob(resource))
+		}
+		statements = append(statements, statement)
 	}
 	return statements, nil
 }
@@ -418,20 +431,7 @@ func policyStatus(response authorizerResponse, arn string) int {
 	}
 	allowed := false
 	for _, statement := range response.Statements {
-		actionMatches, resourceMatches := false, false
-		for _, action := range statement.Actions {
-			if iamGlob(strings.ToLower(action), "execute-api:invoke") {
-				actionMatches = true
-				break
-			}
-		}
-		for _, resource := range statement.Resources {
-			if iamGlob(resource, arn) {
-				resourceMatches = true
-				break
-			}
-		}
-		if actionMatches && resourceMatches {
+		if matchesIAM(statement.actions, "execute-api:invoke") && matchesIAM(statement.resources, arn) {
 			if statement.Effect == "Deny" {
 				return http.StatusForbidden
 			}
@@ -443,7 +443,16 @@ func policyStatus(response authorizerResponse, arn string) int {
 	}
 	return 0
 }
-func iamGlob(pattern, value string) bool {
+func matchesIAM(patterns []*regexp.Regexp, value string) bool {
+	for _, pattern := range patterns {
+		if pattern != nil && pattern.MatchString(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func compileIAMGlob(pattern string) *regexp.Regexp {
 	var expression strings.Builder
 	expression.WriteString("(?s)^")
 	for _, character := range pattern {
@@ -457,6 +466,8 @@ func iamGlob(pattern, value string) bool {
 		}
 	}
 	expression.WriteByte('$')
-	matched, err := regexp.MatchString(expression.String(), value)
-	return err == nil && matched
+	// A compiler limit previously made iamGlob return false. Retain that
+	// never-matching pattern policy instead of rejecting the native response.
+	compiled, _ := regexp.Compile(expression.String())
+	return compiled
 }
