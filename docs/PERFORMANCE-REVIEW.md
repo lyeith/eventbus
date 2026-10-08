@@ -1,5 +1,8 @@
 # EventBus performance review
 
+The [launcher follow-up](#launcher-fix-and-follow-up-8-october-2026) records the
+SSD tooling fix: managed startup median 1154ms → 349ms; native UV Init 1161ms → 389ms.
+
 2026-10-08. The controlled no-op fixtures measured median Init of **29.675ms**
 for direct Python and **1160.549ms** for the managed UV recipe using the same
 frozen interpreter, version and environment prefix. The difference occurred
@@ -216,3 +219,72 @@ chain, broader startup/SQL/routing benchmarks, or import tracing. The reported
 consumer 6.245s and 10.359s intervals combine unknown launcher, runtime, imports
 and application work; these fixture results do not attribute those intervals,
 claim a measured optimization, or establish the business chain's outcome.
+
+## Launcher fix and follow-up, 8 October 2026
+
+The measured launcher overhead was fixed in
+[SSD tooling 796c1dd](https://github.com/lyeith/ssd-dev-tools/commit/796c1dd).
+Its [separate owner report](https://github.com/lyeith/ssd-dev-tools/blob/main/docs/performance-startup-20261008.md)
+records the implementation, native timing boundaries and suite limits.
+
+An already-owned managed shell unnecessarily entered another operation
+controller. The wrapper also validated four policy roots and eight cache targets
+through nine separate storage proofs. Before profiles counted 11 broker calls
+inside the wrapper (767.570ms broker time) and 2 in controller reuse (139.475ms).
+They are separate instrumented stages, so their totals are not an exact additive
+breakdown of command latency. Each broker request starts a fresh privileged query
+worker; neither native UV resolution nor application imports explains these calls.
+
+The wrapper now performs the same exact receipt/cgroup verification directly
+for existing owners and uses the established storage owner to pin all policy
+roots/cache targets together for one fresh proof before directory creation.
+The actual owned outer wrapper profile counted **3 queries** (240.860ms broker
+time). Partial/stale markers still refuse; markers themselves grant no authority.
+Project/cwd/argv/environment, private physical paths and current mount, backing,
+project inheritance and quota checks remain. No cached proof, dependency,
+root broker/config update or Lambda runtime-policy change was introduced.
+Installed source symlinks activate the fix for new invocations without a restart.
+
+Ten actual managed-UV launches before and ten after, in serial owned operations,
+used the exact no-project argv and existing Python 3.12.11 environment above.
+Each emitted monotonic readiness plus executable/version/prefix and was joined.
+
+| Joined managed startup, ms | First | Min | Median | Max |
+| --- | ---: | ---: | ---: | ---: |
+| Before | 1155.083 | 1128.627 | 1154.143 | 1187.268 |
+| After | 354.803 | 322.171 | 348.860 | 452.141 |
+
+Median joined launcher startup fell **69.8%**. Samples include index zero and
+run before then after without randomized ordering or cache flushing. Broker
+profiles use cProfile; this ten-sample comparison is uninstrumented.
+
+The native Lambda runtime fixture also passed another 100 fresh invocations:
+20 each for direct Python, managed UV, Node, provided and command.
+All native RequestID/PID, same-interpreter/version/prefix and actual process
+group/listener closure assertions passed. Source was EventBus base `5a18876`
+plus the frozen #29 attribution changes; tooling candidate is `796c1dd`.
+
+| Python native metric, ms | Earlier median | Follow-up median |
+| --- | ---: | ---: |
+| Direct Init | 29.675 | 41.873 |
+| Managed UV Init | 1160.549 | 388.942 |
+| Managed UV joined wall | 1164.572 | 393.150 |
+
+This follow-up ran only `TestPerformanceReviewLambdaRuntimes`, non-race,
+and passed in 11.872s. Existing capture/concurrency measurements were not rerun
+because their implementations were unchanged. Direct-Python variation shows
+host timing noise; these ordered fixtures do not establish a production p99
+or attribute a particular application's import/business-flow intervals.
+
+The tooling run passed all 12 Policy and 29 shell tests, including owned/unowned
+dispatch, invalid owner refusal, fresh batched proof and all cache targets.
+Operation, UV bootstrap and storage cases also passed. Its complete suite had
+18 failures/3 import errors; a clean `26f8468` source copy under the same
+owner/interpreter reproduced exactly those failures. Existing GC fixture
+fields, umask/NoNewPrivs assumptions and unavailable pytest account for them.
+The full tooling suite remains nongreen; no test dependency was installed.
+
+Saved SSD logs: `/tmp/eventbus-overhead-*-20261008.log` and
+`/tmp/eventbus-performance-runtimes-after-20261008.log`, with the existing
+24-hour evidence lifetime. Temporary profiling/source stages are removed after
+acceptance. Broader startup/SQL/routing actions above remain unmeasured follow-ups.
