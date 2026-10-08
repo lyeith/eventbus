@@ -209,6 +209,13 @@ one request ID across its numbered retry attempts. States are `succeeded`,
 channel: `stdout_is_response: true` replaces captured `stdout`. Optional
 `process_error` and `ownership_error` details are each bounded to 8 KiB with
 `detail_truncated`; `context_error` identifies cancellation/deadline expiry.
+The top-level `process_error` describes only the final native process launch's
+OS Wait error, preserving the original single-launch meaning. It does not
+determine the native outcome: a provided runtime can reply successfully, then
+be deliberately killed while long-polling for another event. Native
+`state`/`function_error` still describe that accepted result.
+Top-level ownership covers every native launch and the optional collector;
+a later success never clears earlier ownership uncertainty.
 
 `termination_cause` distinguishes `caller_canceled`, `caller_deadline`,
 `service_canceled`, `function_timeout`, `initialization_timeout` and
@@ -229,6 +236,23 @@ The additive v1 `execution_phases` array has at most two records. Each contains
 `invoke_ms`. Optional `init_state`/`invoke_state` describe phases that occurred:
 `succeeded`, `failed`, `timed_out`, `canceled` or `not_started`. Command has only
 an Invoke phase. `init_attempt` is separate from the native async `attempt`.
+Each launch also has `ownership_confirmed` and optional `process_error`,
+`ownership_error`, `context_error`, `termination_cause` and `detail_truncated`.
+Per-launch ownership covers the native process, Runtime API, result and control
+pipe joins; optional collector uncertainty remains invocation-level. Per-launch
+error details share the 8 KiB bound. Truncation in any launch also sets the
+top-level `detail_truncated` flag.
+
+A joined managed fallback can have an initial `init_state: timed_out`,
+`termination_cause: initialization_timeout` and a retained process error,
+followed by successful fallback Init/Invoke with no final process error.
+The invocation's `process_error` is then absent, while the retired failure
+remains in its phase. A final process failure belongs to the fallback phase
+and the top level; a handler error can fail the native result without an OS
+process error. Check these typed states/causes and confirmed ownership; do not
+classify errors from their free-form text. These are additive v1 fields; older
+records without per-launch facts cannot prove that attribution.
+
 Durations are floating-point milliseconds: Init ends at host receipt of readiness,
 or native join if readiness never arrived. Invoke includes readiness ACK delivery
 and native process/listener/result-pipe joins, excluding optional collector joins.

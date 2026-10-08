@@ -9,38 +9,46 @@ import (
 )
 
 type diagnosticCompletion struct {
-	at                  time.Time
-	contextError, cause string
-	synthesized         bool
+	at                            time.Time
+	contextError, cause           string
+	contextErr, cancellationCause error
+	synthesized                   bool
 }
 
 func snapshotDiagnosticCompletion(ctx context.Context, synthesized bool) diagnosticCompletion {
-	result := diagnosticCompletion{at: time.Now()}
-	contextErr := ctx.Err()
-	if contextErr == nil {
-		return result
+	result := diagnosticCompletion{at: time.Now(), contextErr: ctx.Err()}
+	if result.contextErr != nil {
+		// Once Err is non-nil, the first cancellation cause is immutable.
+		// A later cancellation must not attach a cause to a healthy snapshot.
+		result.cancellationCause = context.Cause(ctx)
+		result.synthesized = synthesized
 	}
-	result.synthesized = synthesized
-	result.contextError = "canceled"
+	result.contextError, result.cause = projectDiagnosticCause(result.contextErr, result.cancellationCause)
+	return result
+}
+
+// Top-level and per-launch diagnostics project the same frozen native pair.
+// This helper never reads a live context or owns native cancellation policy.
+func projectDiagnosticCause(contextErr, cancellationCause error) (contextError, cause string) {
+	if contextErr == nil {
+		return "", ""
+	}
+	contextError = "canceled"
 	if errors.Is(contextErr, context.DeadlineExceeded) {
-		result.contextError = "deadline_exceeded"
+		contextError = "deadline_exceeded"
 	}
 	switch {
-	case errors.Is(context.Cause(ctx), errFunctionBudget):
-		result.cause = "function_timeout"
-		result.contextError = "deadline_exceeded"
-	case errors.Is(context.Cause(ctx), errInitializationBudget):
-		result.cause = "initialization_timeout"
-		result.contextError = "deadline_exceeded"
-	case errors.Is(context.Cause(ctx), errPhaseProtocol):
-		result.cause = "runtime_protocol_error"
-	case errors.Is(context.Cause(ctx), errServiceCancellation):
-		result.cause = "service_canceled"
-	case errors.Is(contextErr, context.DeadlineExceeded), errors.Is(context.Cause(ctx), context.DeadlineExceeded):
-		result.cause = "caller_deadline"
-		result.contextError = "deadline_exceeded"
+	case errors.Is(cancellationCause, errFunctionBudget):
+		return "deadline_exceeded", "function_timeout"
+	case errors.Is(cancellationCause, errInitializationBudget):
+		return "deadline_exceeded", "initialization_timeout"
+	case errors.Is(cancellationCause, errPhaseProtocol):
+		return contextError, "runtime_protocol_error"
+	case errors.Is(cancellationCause, errServiceCancellation):
+		return contextError, "service_canceled"
+	case errors.Is(contextErr, context.DeadlineExceeded), errors.Is(cancellationCause, context.DeadlineExceeded):
+		return "deadline_exceeded", "caller_deadline"
 	default:
-		result.cause = "caller_canceled"
+		return contextError, "caller_canceled"
 	}
-	return result
 }

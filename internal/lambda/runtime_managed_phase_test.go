@@ -62,6 +62,10 @@ def handler(event, context):
     if mode == "invoke_cancel":
         while True:
             time.sleep(10)
+    if mode == "fallback_process_failure":
+        os._exit(17)
+    if mode == "fallback_handler_failure":
+        raise RuntimeError("controlled fallback handler failure")
     time.sleep((700 if mode in ("handler_timeout", "fallback_exhausted") else 50) / 1000)
     return {"event": event, "requestId": context.aws_request_id,
             "arn": context.invoked_function_arn, "remaining": remaining}
@@ -95,6 +99,8 @@ export async function handler(event, context) {
   const remaining = context.getRemainingTimeInMillis();
   marker('invoke.json', {request_id: context.awsRequestId, arn: context.invokedFunctionArn, remaining, event, launch});
   if (mode === 'invoke_cancel') await new Promise(() => {});
+  if (mode === 'fallback_process_failure') process.exit(17);
+  if (mode === 'fallback_handler_failure') throw new Error('controlled fallback handler failure');
   await sleep(['handler_timeout', 'fallback_exhausted'].includes(mode) ? 700 : 50);
   return {event, requestId: context.awsRequestId, arn: context.invokedFunctionArn, remaining};
 }
@@ -173,6 +179,17 @@ func managedPhaseRecord(t *testing.T, service *Service, path, directory string, 
 		t.Fatalf("native terminal diagnostics: %#v", records)
 	}
 	record := records[0]
+	for _, phase := range record.ExecutionPhases {
+		if !phase.OwnershipConfirmed || phase.OwnershipError != "" {
+			t.Fatalf("native launch ownership differs from actual joined fixture: %#v", phase)
+		}
+	}
+	if len(record.ExecutionPhases) > 0 {
+		final := record.ExecutionPhases[len(record.ExecutionPhases)-1]
+		if record.ProcessError != final.ProcessError || record.ContextError != final.ContextError || record.TerminationCause != final.TerminationCause {
+			t.Fatalf("invocation error attribution differs from final launch: record=%#v final=%#v", record, final)
+		}
+	}
 	if metadata.RequestID == "" || record.RequestID != metadata.RequestID ||
 		record.FunctionARN != metadata.FunctionARN || record.FunctionName != "phase:live" ||
 		record.Attempt != 1 || metadata.Attempt != 1 || !record.OwnershipConfirmed ||
@@ -329,6 +346,9 @@ func TestManagedRuntimeCancellationJoinsEachPhase(t *testing.T) {
 						t.Fatalf("caller cancellation phase/cause: %#v", record)
 					}
 					phase := record.ExecutionPhases[0]
+					if phase.ProcessError == "" || phase.ContextError != "canceled" || phase.TerminationCause != "caller_canceled" {
+						t.Fatalf("caller cancellation lost actual final-launch error/cause: %#v", phase)
+					}
 					if mode == "init_cancel" {
 						if phase.InitState != "canceled" || phase.InvokeState != "" || phase.InvokeMS != 0 {
 							t.Fatalf("canceled Init ran a handler: %#v", phase)
@@ -370,6 +390,12 @@ func TestManagedRuntimeInitTimeoutHasOneJoinedFallback(t *testing.T) {
 						t.Fatalf("expected exactly one Init fallback: %#v", record)
 					}
 					initial, fallback := record.ExecutionPhases[0], record.ExecutionPhases[1]
+					if initial.ProcessError == "" || initial.ContextError != "deadline_exceeded" || initial.TerminationCause != "initialization_timeout" {
+						t.Fatalf("retired Init lost its attributed process failure: %#v", initial)
+					}
+					if mode == "fallback_success" && (record.ProcessError != "" || fallback.ProcessError != "") {
+						t.Fatalf("successful fallback retained a retired process error: %#v", record)
+					}
 					if initial.InitAttempt != 1 || initial.Mode != "initial" || initial.InitState != "timed_out" ||
 						initial.InvokeState != "" || initial.InvokeMS != 0 || initial.InitMS < 290 ||
 						fallback.InitAttempt != 2 || fallback.Mode != "fallback" || fallback.InitState != "succeeded" {
@@ -487,6 +513,10 @@ func TestManagedRuntimeEventInitFallbackKeepsOneNativeAttempt(t *testing.T) {
 				t.Fatalf("native Event terminal evidence: %#v", record)
 			}
 			initial, fallback := record.ExecutionPhases[0], record.ExecutionPhases[1]
+			if record.ProcessError != "" || initial.ProcessError == "" || fallback.ProcessError != "" ||
+				initial.ContextError != "deadline_exceeded" || initial.TerminationCause != "initialization_timeout" {
+				t.Fatalf("successful Event fallback has ambiguous process attribution: %#v", record)
+			}
 			if initial.InitAttempt != 1 || initial.Mode != "initial" || initial.InitState != "timed_out" ||
 				initial.InvokeState != "" || fallback.InitAttempt != 2 || fallback.Mode != "fallback" ||
 				fallback.InitState != "succeeded" || fallback.InvokeState != "succeeded" {
@@ -509,5 +539,55 @@ func TestManagedRuntimeEventInitFallbackKeepsOneNativeAttempt(t *testing.T) {
 				t.Fatalf("accepted native Event payload/identity changed across fallback: %#v", invoked)
 			}
 		})
+	}
+}
+
+func TestManagedRuntimeFallbackFinalFailuresHaveExactLaunchAttribution(t *testing.T) {
+	for _, runtime := range []string{"python", "node"} {
+		for _, mode := range []string{"fallback_process_failure", "fallback_handler_failure"} {
+			t.Run(runtime+"/"+mode, func(t *testing.T) {
+				directory := t.TempDir()
+				function := managedPhaseFunction(t, runtime, directory, mode, true)
+				service, path := managedPhaseService(t, directory, function)
+				service.initTimeout = 300 * time.Millisecond
+				outcome, err := service.ExecuteObserved(context.Background(), InvokeInput{
+					FunctionName: "phase:live", Payload: []byte(`{"unchanged":42}`),
+				}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				record := managedPhaseRecord(t, service, path, directory, outcome.Metadata, outcome.OwnershipErr, 2)
+				if outcome.State != InvocationFailed || !outcome.Output.FunctionError || record.State != InvocationFailed ||
+					!record.FunctionError || record.TerminationCause != "" || len(record.ExecutionPhases) != 2 {
+					t.Fatalf("fallback final native failure changed: outcome=%#v record=%#v", outcome, record)
+				}
+				initial, final := record.ExecutionPhases[0], record.ExecutionPhases[1]
+				if initial.ProcessError == "" || initial.InitAttempt != 1 || initial.InitState != "timed_out" ||
+					initial.TerminationCause != "initialization_timeout" || initial.ContextError != "deadline_exceeded" ||
+					final.InitAttempt != 2 || final.Mode != "fallback" || final.InitState != "succeeded" || final.InvokeState != "failed" ||
+					final.ContextError != "" || final.TerminationCause != "" {
+					t.Fatalf("failed launches lost typed attribution: %#v", record.ExecutionPhases)
+				}
+				var native struct {
+					ErrorType    string `json:"errorType"`
+					ErrorMessage string `json:"errorMessage"`
+				}
+				if err := json.Unmarshal(outcome.Output.Payload, &native); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "fallback_process_failure" {
+					if record.ProcessError != "exit status 17" || final.ProcessError != "exit status 17" || native.ErrorType != "Runtime.ExitError" {
+						t.Fatalf("retired kill replaced final exit failure: native=%#v record=%#v", native, record)
+					}
+				} else {
+					if record.ProcessError != "" || final.ProcessError != "" || native.ErrorMessage != "controlled fallback handler failure" {
+						t.Fatalf("handler failure confused with retired process exit: native=%#v record=%#v", native, record)
+					}
+				}
+				if err := service.Close(context.Background()); err != nil {
+					t.Fatalf("ordinary final failure corrupted joined ownership: %v", err)
+				}
+			})
+		}
 	}
 }

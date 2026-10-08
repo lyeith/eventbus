@@ -304,6 +304,14 @@ func TestManagedInitDirtyCleanupCannotLaunchFallback(t *testing.T) {
 	require.Equal(t, "initial", records[0].ExecutionPhases[0].Mode)
 	require.Equal(t, "timed_out", records[0].ExecutionPhases[0].InitState)
 	require.Empty(t, records[0].ExecutionPhases[0].InvokeState)
+	phase := records[0].ExecutionPhases[0]
+	require.NotEmpty(t, phase.ProcessError)
+	require.Equal(t, records[0].ProcessError, phase.ProcessError)
+	require.Equal(t, "deadline_exceeded", phase.ContextError)
+	require.Equal(t, "initialization_timeout", phase.TerminationCause)
+	require.False(t, phase.OwnershipConfirmed)
+	require.Equal(t, records[0].OwnershipError, phase.OwnershipError)
+	require.Contains(t, phase.OwnershipError, uncertain.Error())
 	require.ErrorIs(t, service.DevEvidence(), uncertain)
 	require.ErrorIs(t, service.Close(context.Background()), uncertain)
 }

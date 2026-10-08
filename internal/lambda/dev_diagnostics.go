@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -172,10 +173,17 @@ func (service *Service) DevEvidence() error {
 }
 
 func boundedDiagnosticDetail(value string) (string, bool) {
+	// JSON replaces invalid UTF-8. Normalize before bounding so that encoding
+	// cannot expand a retained detail beyond the documented byte limit.
+	value = strings.ToValidUTF8(value, "\ufffd")
 	if len(value) <= maxDiagnosticDetail {
 		return value, false
 	}
-	return value[:maxDiagnosticDetail], true
+	end := maxDiagnosticDetail
+	for !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end], true
 }
 
 func (service *Service) captureDiagnostics(entry executableFunction, input invocation, result invocationResult, asynchronous bool, started time.Time, completion diagnosticCompletion) error {
@@ -225,6 +233,9 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 	if result.ownershipErr != nil {
 		record.OwnershipError, truncated = boundedDiagnosticDetail(result.ownershipErr.Error())
 		record.DetailTruncated = record.DetailTruncated || truncated
+	}
+	for _, phase := range record.ExecutionPhases {
+		record.DetailTruncated = record.DetailTruncated || phase.DetailTruncated
 	}
 	return service.appendDiagnostic(record)
 }

@@ -413,6 +413,8 @@ func preserveLaunchEvidence(source, result invocationResult) invocationResult {
 
 // Internal Init fallback is still one native attempt. Keep bounded tails and
 // actual byte totals from both launches without retaining either success body.
+// Process errors describe the final launch; phase facts retain retired errors.
+// Ownership uncertainty remains cumulative and can never be erased by success.
 func mergeLaunchDiagnostics(prior, next invocationResult) invocationResult {
 	tail := func(first, second []byte) []byte {
 		merged := append(append([]byte(nil), first...), second...)
@@ -427,9 +429,6 @@ func mergeLaunchDiagnostics(prior, next invocationResult) invocationResult {
 	next.diagnostics.stdoutBytes += prior.diagnostics.stdoutBytes
 	next.diagnostics.stderrBytes += prior.diagnostics.stderrBytes
 	next.diagnostics.tailBytes += prior.diagnostics.tailBytes
-	if prior.diagnostics.processError != "" {
-		next.diagnostics.processError = prior.diagnostics.processError + "\n" + next.diagnostics.processError
-	}
 	next.ownershipErr = errors.Join(prior.ownershipErr, next.ownershipErr)
 	return next
 }

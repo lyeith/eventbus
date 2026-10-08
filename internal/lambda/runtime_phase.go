@@ -37,12 +37,16 @@ type runtimePhase struct {
 // Immutable execution facts. Private JSON field names and capture projection
 // belong to the diagnostics adapter, never to runtime deadline policy.
 type runtimePhaseRecord struct {
-	InitAttempt int
-	Mode        string
-	InitMS      float64
-	InvokeMS    float64
-	InitState   string
-	InvokeState string
+	InitAttempt       int
+	Mode              string
+	InitMS            float64
+	InvokeMS          float64
+	InitState         string
+	InvokeState       string
+	ProcessError      string
+	OwnershipErr      error
+	ContextErr        error
+	CancellationCause error
 }
 
 func newRuntimePhase(parent context.Context, timeout, initTimeout time.Duration, mode string, onReady func(time.Time)) *runtimePhase {
@@ -129,7 +133,10 @@ func (phase *runtimePhase) complete(attempt int, result invocationResult) (runti
 	completion := snapshotDiagnosticCompletion(phase.ctx, true)
 	phase.finished = true
 	phase.timer.Stop()
-	record := runtimePhaseRecord{InitAttempt: attempt, Mode: phase.mode}
+	record := runtimePhaseRecord{
+		InitAttempt: attempt, Mode: phase.mode, ProcessError: result.diagnostics.processError,
+		OwnershipErr: result.ownershipErr, ContextErr: completion.contextErr, CancellationCause: completion.cancellationCause,
+	}
 	state := "succeeded"
 	if result.functionError {
 		state = "failed"
