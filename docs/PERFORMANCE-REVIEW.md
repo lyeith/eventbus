@@ -19,7 +19,8 @@ Source investigation began at `a1a3aad`; measurements used base `6e53ceb`
 plus the frozen #28 working-tree implementation, before the final owner-only
 JSON-schema extraction. Final source projects those unchanged phase facts
 into a private schema using at most two records; those structural edits were
-not remeasured. That implementation gives
+not remeasured. Measurements also predate the later Darwin-only EPERM
+cleanup reconciliation; that fault path was not benchmarked. The phase implementation gives
 ordinary Init 10s, starts the configured Invoke budget at readiness, and permits
 one fresh-process fallback with a shared configured Init/Invoke budget.
 AWS documents these distinct phases and the retried shared budget in its

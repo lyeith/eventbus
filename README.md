@@ -35,6 +35,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Cognito contracts](docs/COGNITO.md): lifecycle, SRP, custom triggers and persistence.
 - [API gateway](docs/GATEWAY.md): REST/HTTP REQUEST authorizers and HTTP/Lambda proxy integrations.
 - [Lambda execution](docs/LAMBDA.md): application-owned Go, Python and Node handlers.
+- [Performance review](docs/PERFORMANCE-REVIEW.md): measured startup/capture costs and ranked owner follow-ups.
 - [SQS Lambda mappings](docs/EVENT-SOURCES.md): native provisioning and completion-based acknowledgment.
 - [Scheduler](docs/SCHEDULER.md): one-time schedules targeting local Lambda events.
 - [Firehose](docs/FIREHOSE.md): SNS delivery, Go jq partitioning, GZIP and S3 retries.

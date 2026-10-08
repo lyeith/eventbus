@@ -1,38 +1,44 @@
 # Handoff
 
-Preparing v0.11.0 on canonical SSD main; latest published v0.10.0.
-#27/#28 implementation/verification complete; packaging/publication pending.
-Plans/application state untouched; no dependency/environment/worktree added.
+Canonical SSD main; latest published v0.10.0. Preparing v0.11.1 for #27/#28.
+Failed v0.11.0 draft removed; source tag preserved. Plans/application state
+untouched; no dependencies, retained environments or worktrees added.
 
-Commits:6e53ceb rejects CLI positionals before DB/capture/listener construction;
-24de500 owns native Init/readiness/Invoke budgets and strict joined fallback;
-e50418d keeps the independent performance audit/opt-in measurements separate.
-Init10s, configured Invoke after readiness, one fallback sharing configured
-Init+Invoke timeout; original request/native Event attempt stable. Command
-whole-process budget retained. Parent/caller/service cancellation stays final;
-dirty cleanup prevents fallback. Core owns causes/facts, dev owns JSON schema.
-Managed fd6/fd7 READY/ACK preserve resultfd3 and optional stackfd4/fd5.
-Provided first /next selects deadline; Init errors fenced before delivery.
-Snapshot deadline follows current phase, one collector per native attempt.
+6e53ceb rejects CLI positionals before runtime effects.24de500 separates bounded
+native Init from configured Invoke; fallback retains original ID/Event attempt
+and shares configured Init+Invoke budget after actual first-process join.
+Caller/service cancellation and dirty ownership prevent retry. Command keeps
+whole-process timeout. Managed fd6/fd7 READY/ACK leave native resultfd3 and
+optional stackfd4/fd5 distinct. Provided /next selects the effective deadline.
+Core owns causes/facts; dev adapter owns private schema. Python collector follows
+current phase and remains joined through terminal evidence.
 
-PASS logs SSD /tmp, existing24h TTL:
-- eventbus-issue27-cli-race.log:app2.497s/gateway2.128s; issue27-vet.log.
-- eventbus-issue28-integration-focused.log:Lambda38.535s before review fixes.
-- eventbus-issue28-lambda-race.log:101.852s all Lambda.
-- eventbus-issue28-phase-channel-race.log:3.522s, forged result/protocol faults,
-  live retained-ready framing, original import error and dirty no-retry proof.
-- eventbus-issue27-28-consumers-race.log:app24.922s,gateway39.356s,eventsource1.431s.
-- eventbus-issue28-native-sdk-final-race.log:Lambda23.812s after final private
-  schema owner extraction; native SDK/retained consumers40.624s.
-- eventbus-issue27-28-vet-final.log:all sdksmoke+performance-tagged packages.
-- eventbus-performance-lambda-20261008.log:non-race47.402s,180 invocations.
-- eventbus-performance-capture-20261008.log:non-race0.168s,80 durable/discard appends.
-Separate report records source/measurement boundary, exact first/min/median/max,
-XFS, same-interpreter attribution and unmeasured owner follow-ups; no speedup
-or consumer-chain success claimed. No runtime optimization expanded into task.
+fb8d02b fixes a packaged macOS ownership failure at the shared localexec owner:
+Darwin negative-group SIGKILL may return EPERM for only unreaped exited children.
+After EPERM, bounded signal0 probes only accept ESRCH; persistent denial/live
+group remains dirty. No additional destructive signals or skipped Wait joins.
+Old-code native regression fails EPERM; corrected native race/vet passed.
 
-Next: tag/build all8 artifacts; inspect clean source/platform/version metadata;
-run owned packaged proof Linuxamd64/macOSarm64; upload draft/download/checksums;
-publish/close #27/#28, update state/triage, prune owned outputs/script/staging.
-Owned temporary authoring:/tmp/eventbus-issue28-root (laptop); packaged script
-/tmp/eventbus-issue28-packaged-owned (both hosts). No owned processes left.
+PASS evidence SSD /tmp under existing24h TTL:
+- issue27 CLI race/vet: parser and side-effect guard; app2.497s/gateway2.128s.
+- issue28 Lambda full race101.852s; channel/dirty-ownership race3.522s.
+- issue27-28 consumers race:app24.922s,gateway39.356s,eventsource1.431s.
+- issue28 native-sdk-final-race:Lambda23.812s,native SDK/retained40.624s.
+- issue27-28-owners-final-race:Lambda106.864s,localexec2.067s,
+  cognitotrigger7.838s,consumer11.036s,gateway40.141s; owners-final-vet all tags.
+- macos-group-native-old-regression:expected old-owner EPERM failure;
+  native-race2.614s/vet pass; localexec-linux-race2.075s/vet pass.
+Earlier v0.11.0 packaged Linux proof/8metadata/downloaded checksums passed,
+but macOS cancellation/provided timeout exposed the shared-owner fault. Candidate
+was withheld; revised v0.11.1 binaries must pass actual packaged acceptance.
+
+Independent e50418d performance audit:180 invocations/80 appends, non-race Lambda
+47.402s/capture0.168s, actual groups/listeners/sinks joined,20 captured handler
+snapshots. Report has source boundary, first/min/median/max, same interpreter,
+managed XFS and ranked unmeasured owner actions. No runtime optimization or
+consumer business-chain claim. README links this separate review.
+
+Next: clean v0.11.1 tag/build, all8metadata, native Linuxamd64/macOSarm64 packaged
+proof; draft/download checksums, publication, ticket closure and owned cleanup.
+Owned staging:/tmp/eventbus-issue28-root (laptop), packaged script on both hosts,
+v0.11.0/v0.11.1 build/metadata staging. Native regression test directory removed.
