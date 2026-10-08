@@ -2,25 +2,31 @@
 
 Canonical SSD /home/spite/Projects/eventbus, main. Public MIT standalone emulator
 and agent harness; Plans/application stacks/databases are untouched.
-Latest published release: https://github.com/lyeith/eventbus/releases/tag/v0.8.0
-Tickets #18–#23 are published and closed.
+Latest public release: https://github.com/lyeith/eventbus/releases/tag/v0.9.0
+Clean tagged source: c563e37d9b185b5f3e467b673d5581cff25568bf.
+#24 is published and closed; final open issue board is empty.
+Earlier #18–#23 shipped in v0.8.0.
 
-#24 implemented and verified; preparing v0.9.0 publication.
 Optional retained_owner_continuation_port / --retained-owner-continuation-port
 adds a separate exclusively trusted 127.0.0.1 gateway listener.
-Public requests always remain roots. Native REQUEST auth and Invoke unchanged.
-Shared lease ledger admits continuations only with actual accepted work,
-atomically checking owner/generation/health before body read and native routing.
-Idle open/held, resume transitions, stale generation and uncertain ownership
-refuse; no public header grants continuation status. Kind-bound replay shares
-the bounded no-expiry root ledger. Handler return confirms completion; panic/
-Goexit remain dirty. Accepted shutdown chains keep private peers available
-through join, with a bounded sticky failure after observed shutdown.
+Public requests remain roots. Native REQUEST auth and Invoke are unchanged.
+Shared leases atomically require actual accepted work, owner/generation and
+healthy evidence before body read/native routing. Idle open/held, transitions,
+stale generation and uncertainty refuse. No public header changes the lane.
+Kind-bound replay shares the bounded no-expiry ledger. Only normal handler return
+confirms completion; panic/Goexit remain dirty. Accepted shutdown chains keep
+private peers alive through join or a bounded sticky failure.
 Apps configure existing HTTP and callback issuer/JWKS bindings; no Trust import.
 
-PASS: full affected-owner race (coordinator1.048s, gateway39.652s, app23.523s,
-cmd1.066s), actual registered Lambda/Cognito SDK/JWT/cold JWKS race5.635s.
-Production app declaration→authenticated gateway→native integration proof PASS.
-Scoped tagged vet PASS. Release binary builds/physical CLI proofs pending.
-No dependency changes, temporary worktrees/branches or new environments.
-Parent owns the serial managed SSD test/build lane.
+PASS: full affected-owner race (coordinator1.048s/gateway39.652s/app23.523s/
+cmd1.066s), actual native SDK/JWT/cold JWKS race5.635s, scoped tagged vet.
+Production configured cleanup→authenticated gateway→native integration PASS.
+Packaged Linuxamd64/macOSarm64 private/prebody/fence/explicit0 proofs PASS.
+Other two platforms cross-built/metadata-inspected. All8 Go1.26/CGO0 assets carry
+v0.9.0/expected platform/clean tagged source. All9 uploaded assets downloaded and
+verified against identical SHA256SUMS before publication.
+
+No dependencies changed. Owned processes/listeners joined; release/download/
+laptop staging and probe scripts removed. No task environments/worktrees/branches.
+Shared caches retained; SSD complete logs expire under existing24h policy.
+No work or test/build lane remains active.

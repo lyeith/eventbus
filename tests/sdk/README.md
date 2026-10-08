@@ -150,6 +150,6 @@ go test -race ./internal/app \
   -run '^TestProductionDeclaredCleanupCallsAuthenticatedGatewayContinuation$'
 ```
 
-Both proofs passed; [Gateway](../../docs/GATEWAY.md#trusted-http-continuations)
+Both proofs passed and shipped in [v0.9.0](https://github.com/lyeith/eventbus/releases/tag/v0.9.0); [Gateway](../../docs/GATEWAY.md#trusted-http-continuations)
 documents endpoint configuration and the exclusive trusted-port contract.
 [HANDOFF](../../HANDOFF.md) records release verification.

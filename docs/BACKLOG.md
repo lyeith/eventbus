@@ -64,14 +64,14 @@ capture while preserving original MIME submission. See [SES](SES.md#raw-configur
 Focused protocol, full SES race/vet and unchanged SDK proofs passed; released in [v0.8.0](https://github.com/lyeith/eventbus/releases/tag/v0.8.0); [HANDOFF](../HANDOFF.md)
 records acceptance.
 
-## Implemented: retained gateway HTTP continuations
+## Released: retained gateway HTTP continuations
 
 [#24](https://github.com/lyeith/eventbus/issues/24) adds optional exclusively trusted
 private gateway ingress for registered handlers and declared cleanup. Public
 roots stay fenced; native routing/auth and real JWT checks remain intact.
 Generation-bound leases count work through handler return and shutdown joins.
 See [Gateway](GATEWAY.md#trusted-http-continuations); [HANDOFF](../HANDOFF.md)
-records passed final acceptance and pending publication.
+records final acceptance and cleanup. Released in [v0.9.0](https://github.com/lyeith/eventbus/releases/tag/v0.9.0).
 
 ## Low priority: remaining SES APIs
 

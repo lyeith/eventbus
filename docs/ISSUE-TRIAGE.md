@@ -100,7 +100,7 @@ These are development controls; #16's native batch contract remains separate.
 [Retained owner](RETAINED-OWNER.md) states endpoints and remaining refusals;
 [HANDOFF](../HANDOFF.md) records current verification.
 
-## Implemented: trusted gateway HTTP continuations
+## Released: trusted gateway HTTP continuations
 
 [#24](https://github.com/lyeith/eventbus/issues/24) is a development retained-owner
 admission gap, not an AWS capability gap. Gateway owns optional private loopback
@@ -108,7 +108,7 @@ ingress through native routes/auth; the coordinator owns generation-bound,
 nonexpiring continuation leases and command lifetime preserves accepted callback
 chains. Applications configure existing HTTP/JWKS endpoints and own business
 assertions. See [gateway continuations](GATEWAY.md#trusted-http-continuations).
-Final regression acceptance passed; publication is pending; [HANDOFF](../HANDOFF.md)
+Final regression acceptance passed; released in [v0.9.0](https://github.com/lyeith/eventbus/releases/tag/v0.9.0); [HANDOFF](../HANDOFF.md)
 records current verification.
 
 ## Core versus harness code
@@ -121,7 +121,7 @@ records current verification.
 | Async acceptance/retries, rotation steps, scheduled target dispatch, SNS Firehose delivery | Respective AWS service core with consumer-owned typed ports |
 | YAML loading, deterministic fixture IDs/aliases, fixture profiles, local executable/endpoint selection | Explicit `dev_*.go` adapters; composition in `internal/app` |
 | Captures, agent wait/reset/inspection controls, fault injection and accelerated clocks | Development harness adapters; HTTP controls use a distinct namespace |
-| Retained-suite fence, source leases, declared cleanup and resume | `devquiescence`/`devactivity`; app composes profile, service seams retain custody/lifetimes, gateway leases roots, consuming apps own cleanup effects |
+| Retained-suite fence, source leases, declared cleanup and resume | `devquiescence`/`devactivity`; app composes profile, service seams retain custody/lifetimes, gateway leases roots/trusted continuations, consuming apps own cleanup effects |
 | Consumer polling/process recipes, frontend hosting and private application mappings | Existing harness owners; never substitute for missing AWS operations |
 
 Development adapters translate into validated core configuration and operations.
