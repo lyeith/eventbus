@@ -333,7 +333,10 @@ func pruneQueueLocked(q *Queue, now time.Time) int {
 			count++
 		}
 	}
-	if q.fifoLocked() {
+	// New sends and transfers append destination-owned increasing sequences;
+	// pruning/receiving only removes entries. Visibility returns are the only
+	// insertion which can place an older FIFO sequence behind a waiting tail.
+	if count > 0 && q.fifoLocked() {
 		sort.SliceStable(q.messages, func(i, j int) bool {
 			left, _ := strconv.ParseUint(q.messages[i].SequenceNumber, 10, 64)
 			right, _ := strconv.ParseUint(q.messages[j].SequenceNumber, 10, 64)
@@ -363,25 +366,32 @@ func (b *Broker) RequeueExpired(q *Queue) int {
 // count or visibility is committed. Lambda batch byte admission uses this same
 // FIFO/fairness owner; ordinary SQS receives pass nil and keep their wire flow.
 func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration, now time.Time, admission func(*Message) bool) []*Message {
+	fifo := q.fifoLocked()
 	blocked := make(map[string]bool)
-	if q.fifoLocked() {
+	if fifo {
 		for _, message := range q.inFlight {
 			blocked[message.GroupID] = true
 		}
 	}
 	var result []*Message
-	remaining := make([]*Message, 0, len(q.messages))
+	// Queue.mu exclusively owns this slice. In-place stable compaction only
+	// writes behind the current read index; returned delivery values are copies.
+	candidates := q.messages
+	remaining := candidates[:0]
 	// Standard MessageGroupId provides tenant fairness without FIFO locking.
-	candidates := append([]*Message(nil), q.messages...)
-	if !q.fifoLocked() && q.lastFairGroup != "" {
+	if !fifo && q.lastFairGroup != "" {
 		sort.SliceStable(candidates, func(i, j int) bool {
 			return candidates[i].GroupID != q.lastFairGroup && candidates[j].GroupID == q.lastFairGroup
 		})
 	}
-	for _, message := range candidates {
-		if len(result) >= max || now.Before(message.VisibleAt) || (q.fifoLocked() && blocked[message.GroupID]) {
+	for index, message := range candidates {
+		if len(result) >= max {
+			remaining = append(remaining, candidates[index:]...)
+			break
+		}
+		if now.Before(message.VisibleAt) || (fifo && blocked[message.GroupID]) {
 			remaining = append(remaining, message)
-			if q.fifoLocked() && now.Before(message.VisibleAt) {
+			if fifo && now.Before(message.VisibleAt) {
 				blocked[message.GroupID] = true
 			}
 			continue
@@ -396,7 +406,7 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 		prepared.ReceiveCount++
 		if admission != nil && !admission(&prepared) {
 			remaining = append(remaining, message)
-			if q.fifoLocked() {
+			if fifo {
 				// A rejected candidate must block its group's tail even when an
 				// earlier member was admitted into this same batch.
 				blocked[message.GroupID] = true
@@ -410,6 +420,9 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 		q.lastFairGroup = message.GroupID
 		result = append(result, cloneMessage(message))
 	}
+	// The reused backing array must not retain selected/settled messages beyond
+	// the waiting slice. In-flight ownership lives in q.inFlight independently.
+	clear(candidates[len(remaining):])
 	q.messages = remaining
 	return result
 }
