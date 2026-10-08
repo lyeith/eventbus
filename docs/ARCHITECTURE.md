@@ -47,8 +47,10 @@ injects local endpoints, function runners, recorders and clocks through real por
 Retained-owner controls use `/__eventbus/dev/retained-owner`, a separate harness
 namespace. `app/dev_retained_owner.go` composes source/callback listeners and the
 supported profile and declared cleanup. Service `dev_*.go` seams report actual
-custody/lifetimes and reversible drain; gateway shares root leases without changing
-native payloads. See [Retained owner](RETAINED-OWNER.md)
+custody/lifetimes and reversible drain; gateway shares root and optional trusted
+HTTP continuation leases without changing native payloads/authentication.
+The command owns a separate loopback continuation listener through accepted-work
+shutdown joins. See [Retained owner](RETAINED-OWNER.md)
 and [ticket ownership](ISSUE-TRIAGE.md).
 
 ## Dependency rules
@@ -87,6 +89,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
 - `gateway` consumes authorizers only through AWS Lambda Invoke HTTP. It knows no
   application policy, identity, private route format or database. Apps configure
   opaque context mappings and credential removal.
+  Its development continuation ingress uses the same native handlers and auth;
+  exclusive private-port ownership is an explicit harness trust assumption.
 - `lambda` owns execution and runtime protocol; application handlers own policy.
   `app` injects it into the service dispatcher and closes it after background Event drain and HTTP drain.
   `dev_diagnostics.go` owns opt-in private attempt logs after actual cleanup;
@@ -125,7 +129,7 @@ private. Application acceptance behavior belongs in the consuming application.
 | Complete, durable capture output | `devcapture`; service wrappers select records and acceptance ordering |
 | OS child/descendant lifetime and capped output | `localexec`; runners admit/join invocations, select limits and reject incomplete results |
 | HTTP drain and dependency-ordered release | `app`; each service joins its own workers |
-| Resumable retained-suite ownership barrier | `devquiescence` plus `devactivity` ports; app composes profile/cleanup, service seams retain custody/lifetimes, gateway leases roots, consuming app owns effects |
+| Resumable retained-suite ownership barrier | `devquiescence` plus `devactivity` ports; app composes profile/cleanup, service seams retain custody/lifetimes, gateway leases roots/trusted continuations, consuming app owns effects |
 | Operation extraction and bounded body reading | `awsprotocol`; service prefix, transport budget and native validation remain caller-owned |
 | Token issuance across password/SRP/custom/MFA/refresh | Cognito `auth.go` and `client_validity.go`; every flow uses persisted client policy |
 | Shared challenge continuation state | Cognito `challenge_state.go`; custom trigger decisions stay in `custom_auth.go` |

@@ -16,19 +16,20 @@ import (
 // Config is the resolved local recipe used by this service. Native protocol
 // fields retain AWS semantics; file loading belongs to dev_config.go.
 type Config struct {
-	Port                    int                         `yaml:"port"`
-	Region                  string                      `yaml:"region"`
-	AccountID               string                      `yaml:"account_id"`
-	APIID                   string                      `yaml:"api_id"`
-	Stage                   string                      `yaml:"stage"`
-	BasePath                string                      `yaml:"base_path"`
-	RetainedOwnerControlURL string                      `yaml:"retained_owner_control_url"` // Opt-in retained-suite harness control plane.
-	DevHealthPath           string                      `yaml:"dev_health_path"`            // Local readiness reservation, not an AWS route.
-	StageVariables          map[string]string           `yaml:"stage_variables"`
-	Authorizers             map[string]AuthorizerConfig `yaml:"authorizers"`
-	Routes                  []RouteConfig               `yaml:"routes"`
-	LogRedactions           []string                    `yaml:"log_redactions"`
-	RemoveHeaders           []string                    `yaml:"remove_headers"`
+	Port                          int                         `yaml:"port"`
+	Region                        string                      `yaml:"region"`
+	AccountID                     string                      `yaml:"account_id"`
+	APIID                         string                      `yaml:"api_id"`
+	Stage                         string                      `yaml:"stage"`
+	BasePath                      string                      `yaml:"base_path"`
+	RetainedOwnerControlURL       string                      `yaml:"retained_owner_control_url"`       // Opt-in retained-suite harness control plane.
+	RetainedOwnerContinuationPort int                         `yaml:"retained_owner_continuation_port"` // Separate opt-in listener for accepted-work continuations.
+	DevHealthPath                 string                      `yaml:"dev_health_path"`                  // Local readiness reservation, not an AWS route.
+	StageVariables                map[string]string           `yaml:"stage_variables"`
+	Authorizers                   map[string]AuthorizerConfig `yaml:"authorizers"`
+	Routes                        []RouteConfig               `yaml:"routes"`
+	LogRedactions                 []string                    `yaml:"log_redactions"`
+	RemoveHeaders                 []string                    `yaml:"remove_headers"`
 }
 
 type AuthorizerConfig struct {

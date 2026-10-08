@@ -2,7 +2,7 @@
 
 This opt-in **development harness** lets one exclusive application suite fence
 new roots, join accepted work, clean exact fixtures and resume the same EventBus
-process and resources. Native payloads, handlers and authentication settings stay
+process and resources. Native payloads, handlers and authentication contracts stay
 unchanged. The barrier proves joined ownership; the application must separately
 assert business results and fixture absence. It makes no persistence claim across
 process restart.
@@ -18,7 +18,7 @@ mkdir -p .local/retained
 ./eventbus --port 14100 --retained-owner-callback-port 14101 \
   --retained-owner-cleanup-functions fixture-cleanup:local \
   --work-dir "$PWD" --lambda-functions "$PWD/functions.yaml" \
-  --issuer-base http://127.0.0.1:14100 \
+  --issuer-base http://127.0.0.1:14101 --jwks-base http://127.0.0.1:14101 \
   --cognito-db "$PWD/.local/retained/cognito.db" \
   --sns-log "$PWD/.local/retained/sns.jsonl" \
   --ses-log "$PWD/.local/retained/ses.jsonl" \
@@ -40,6 +40,8 @@ and Firehose/subscriptions.
 | --- | --- |
 | Source: `http://127.0.0.1:14100` | Suite roots, provisioning and owner controls |
 | Callback: `http://127.0.0.1:14101` | Registered handlers/owned native peers; declared cleanup and allowed native deletion while held |
+| Gateway public: `http://127.0.0.1:14180/local` | Suite/user HTTP roots |
+| Gateway continuation: `http://127.0.0.1:14181/local` (optional) | Exclusively trusted registered handlers/declared cleanup calling application HTTP |
 
 The operator owns the entire process and its gateway exclusively. No unrelated
 suite or caller may use the trusted callback endpoint. It admits descendants of
@@ -80,6 +82,22 @@ control URL and point **every** AWS_PROXY integration and authorizer Invoke URL
 at the advertised callback origin. Its [gateway recipe](GATEWAY.md#retained-owner-ingress)
 requires a literal loopback HTTP control URL; external HTTP integrations and
 frontend proxying are outside this joined profile and rejected.
+
+For downstream application HTTP during drain, additionally select gateway recipe
+`retained_owner_continuation_port: 14181` (CLI `--retained-owner-continuation-port`).
+It defaults off, requires the retained control URL and must differ from the public
+port. Point handlers/cleanup functions' existing application HTTP settings at this
+private loopback origin; suite requests stay public. Native routing and auth stay
+unchanged. This is an exclusive trusted-port assumption, not a causal token or
+public authorization scope; no header can upgrade a public request.
+See [gateway continuations](GATEWAY.md#trusted-http-continuations).
+
+Cold JWT verification must fetch JWKS from the native callback endpoint, e.g.
+`http://127.0.0.1:14101/<pool-id>/.well-known/jwks.json`. The example advertises its
+issuer/JWKS bases there so issuer-derived discovery stays available during drain.
+Configure the application's matching issuer/pool/client binding and retain full
+signature/claim validation. An explicit JWKS URL may preserve a stable expected
+issuer; neither gateway origin nor the fenced source is a continuation JWKS route.
 
 ## Fence, clean, join again and resume
 
@@ -178,7 +196,7 @@ retry policies continue to apply to retained resources.
 | Scheduler | Accepted due target admissions and their retry waits; unclaimed schedules remain paused native resource state |
 | Cognito runners | Actual trigger execution, owned children and accepted callback chains |
 | Firehose | Buffered records, pending objects, late accepted puts and destination retries; reversible force-flush remains enabled through held cleanup until resume |
-| Retained gateway | Shared source leases granted before body read, authorization or Invoke; independently accepted native descendants |
+| Retained gateway | Public root and private `http.gateway.continuation` leases granted before body read, authorization or Invoke and held through handler return; independently accepted native descendants |
 
 While roots are fenced, mapping workers receive only messages in retained
 custody. Registering an enabled mapping adopts that queue's queued/in-flight
@@ -195,10 +213,14 @@ idempotently; a missing reply never proves a root stopped. A candidate freezes
 its cached owner generation at envelope entry before RPC and touches no app resources
 without a grant; refusal cannot migrate that envelope into a resumed generation.
 After resume, cache refresh may briefly refuse a fresh root; retry as a new request.
-The gateway remains available across `draining`/`held` and stops roots only for
-irreversible owner shutdown or owner identity failure. Keep it alive for join.
-The gateway source ledger holds at most 4,096 active/completed roots per generation;
-full ledgers refuse new roots. A healthy quiesce/resume renews it. Completion
+Private gateway continuations require clean `open`, `draining` or `shutdown` with
+actual accepted work. Idle `open`/`held`, resuming, stale generations and uncertainty
+refuse them. Keep the private listener live across owner shutdown until counted
+work/cleanup and received envelopes join. After observing shutdown, bounded join
+or control-loss timeout exits dirty; ordinary open-state polling has no such timeout.
+Public roots remain fenced. The shared gateway ledger holds at most 4,096
+active/completed root and continuation leases per generation; full ledgers refuse
+new admission. A healthy quiesce/resume renews it. Completion
 acknowledgments can replay in the current and immediately prior generation, so
 reconcile lost replies promptly; older completion history is not retained.
 
@@ -212,7 +234,8 @@ reconcile lost replies promptly; older completion history is not retained.
 | `evidence_failure`, `last_timeout` | Optional sticky redacted evidence code; optional `deadline_exceeded`/`canceled` cleared by successful join |
 
 Activities contain `id`, `kind`, `started_at` and optional bounded `request_id`.
-Kinds include `http.source`, `http.callback`, `http.gateway`, `lambda_async`,
+Kinds include `http.source`, `http.callback`, `http.gateway`,
+`http.gateway.continuation`, `lambda_async`,
 `lambda_invoke`, `lambda_cleanup`, `sqs_message`, `sqs_mapping`,
 `scheduler.dispatch`, `cognito_trigger` and `firehose.record`. Diagnostics omit
 payloads, credentials, handler output and raw errors. Caller cancellation, no

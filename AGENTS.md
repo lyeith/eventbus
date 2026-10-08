@@ -66,6 +66,10 @@ before configuring endpoints or cleaning fixtures.
   cleanup before fixture assertions/resume. Preserve callback peers and sentinels;
   no unrelated concurrent suite/callback caller is supported. Keep auth/payloads
   native and actual application cleanup external.
+- Optional [gateway continuations](docs/GATEWAY.md#trusted-http-continuations)
+  use a separate exclusively trusted loopback listener; keep suite roots public,
+  native auth intact and callback JWKS available through accepted-work joins.
+  Headers cannot turn public requests into descendants.
 - `internal/ses` owns fixtures, capture records, MIME and both sending adapters.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.

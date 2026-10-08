@@ -16,15 +16,19 @@ import (
 	"github.com/lyeith/eventbus/internal/devquiescence"
 )
 
-// This opt-in harness adapter transfers root HTTP ownership to the retained
-// broker before native routing. It changes no authorizer or Lambda payload.
+// This opt-in harness adapter transfers HTTP ownership to the retained broker
+// before native routing. It changes no authorizer or Lambda payload.
 var (
 	errRetainedAdmission    = errors.New("retained gateway admission is unavailable")
 	errRetainedOwnership    = errors.New("retained gateway ownership is unresolved")
 	errRetainedOwnerChanged = errors.New("retained gateway owner identity changed")
 )
 
-const retainedControlBudget = 5 * time.Second
+const (
+	retainedControlBudget           = 5 * time.Second
+	retainedGatewayRootKind         = "http.gateway"
+	retainedGatewayContinuationKind = "http.gateway.continuation"
+)
 
 type retainedPending struct {
 	input     devquiescence.SourceLeaseInput
@@ -34,6 +38,7 @@ type retainedPending struct {
 
 type retainedGateway struct {
 	url, ownerID, callbackOrigin string
+	continuations                bool
 	client                       *http.Client
 	transport                    *http.Transport
 	budget                       time.Duration
@@ -74,7 +79,8 @@ func newRetainedGateway(cfg Config, options Options) (*retainedGateway, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil // The exclusive loopback control plane must not use environment proxies.
 	owner := &retainedGateway{url: cfg.RetainedOwnerControlURL, transport: transport, budget: retainedControlBudget,
-		pending: make(map[string]retainedPending), wake: make(chan struct{}), reconcileGate: make(chan struct{}, 1), shutdownSignal: make(chan struct{})}
+		continuations: cfg.RetainedOwnerContinuationPort != 0,
+		pending:       make(map[string]retainedPending), wake: make(chan struct{}), reconcileGate: make(chan struct{}, 1), shutdownSignal: make(chan struct{})}
 	owner.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	ctx, cancel := context.WithTimeout(context.Background(), owner.controlBudget())
 	defer cancel()
@@ -123,24 +129,60 @@ func (owner *retainedGateway) start() {
 		defer close(owner.monitorDone)
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
+		var shutdownDeadline time.Time
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
 			}
-			poll, stop := context.WithTimeout(ctx, owner.controlBudget())
+			budget := owner.controlBudget()
+			if !shutdownDeadline.IsZero() {
+				remaining := time.Until(shutdownDeadline)
+				if remaining <= 0 {
+					owner.signalShutdown(errRetainedOwnership)
+					return
+				}
+				budget = min(budget, remaining)
+			}
+			poll, stop := context.WithTimeout(ctx, budget)
 			snapshot, err := owner.snapshot(poll)
 			stop()
-			if err == nil && snapshot.State == devquiescence.Shutdown || errors.Is(err, errRetainedOwnerChanged) {
-				owner.mu.Lock()
-				owner.closing = true
-				owner.mu.Unlock()
-				owner.shutdownOnce.Do(func() { close(owner.shutdownSignal) })
+			if errors.Is(err, errRetainedOwnerChanged) {
+				owner.signalShutdown(errRetainedOwnerChanged)
 				return
+			}
+			if !shutdownDeadline.IsZero() && !time.Now().Before(shutdownDeadline) {
+				owner.signalShutdown(errRetainedOwnership)
+				return
+			}
+			if err == nil && snapshot.State == devquiescence.Shutdown {
+				if owner.continuations && snapshot.EvidenceFailure != "" {
+					owner.signalShutdown(errRetainedOwnership)
+					return
+				}
+				if !owner.continuations || snapshot.WorkCount == 0 && snapshot.CleanupEnvelopes == 0 {
+					owner.signalShutdown(nil)
+					return
+				}
+				if shutdownDeadline.IsZero() {
+					shutdownDeadline = time.Now().Add(owner.controlBudget())
+				}
 			}
 		}
 	}()
+}
+
+func (owner *retainedGateway) signalShutdown(failure error) {
+	owner.mu.Lock()
+	owner.closing = true
+	if failure != nil && owner.fatal == nil {
+		owner.fatal = failure
+	}
+	close(owner.wake)
+	owner.wake = make(chan struct{})
+	owner.mu.Unlock()
+	owner.shutdownOnce.Do(func() { close(owner.shutdownSignal) })
 }
 
 func (owner *retainedGateway) changed() {
@@ -364,7 +406,7 @@ func (owner *retainedGateway) complete(input devquiescence.SourceLeaseInput, con
 	_ = owner.reconcile(ctx) // Failure leaves the receipt owned and new roots fenced.
 }
 
-func (owner *retainedGateway) serve(w http.ResponseWriter, r *http.Request, handler http.Handler) {
+func (owner *retainedGateway) serve(w http.ResponseWriter, r *http.Request, kind string, handler http.Handler) {
 	generation, admissionErr := owner.enter()
 	if admissionErr != nil {
 		writeGatewayError(w, http.StatusServiceUnavailable)
@@ -376,7 +418,7 @@ func (owner *retainedGateway) serve(w http.ResponseWriter, r *http.Request, hand
 	// The epoch was frozen at entry, before any control-plane exchange. Validate
 	// it without migrating a received candidate to a later resumed epoch.
 	snapshot, err := owner.snapshot(ctx)
-	if err != nil || snapshot.State != devquiescence.Open || snapshot.EvidenceFailure != "" || snapshot.Generation != generation {
+	if err != nil || !retainedGatewaySnapshotAllows(snapshot, kind) || snapshot.Generation != generation {
 		writeGatewayError(w, http.StatusServiceUnavailable)
 		return
 	}
@@ -384,7 +426,7 @@ func (owner *retainedGateway) serve(w http.ResponseWriter, r *http.Request, hand
 		writeGatewayError(w, http.StatusServiceUnavailable)
 		return
 	}
-	input := devquiescence.SourceLeaseInput{OwnerID: owner.ownerID, Generation: generation, RequestID: uuid.NewString(), Kind: "http.gateway"}
+	input := devquiescence.SourceLeaseInput{OwnerID: owner.ownerID, Generation: generation, RequestID: uuid.NewString(), Kind: kind}
 	status, err := owner.acquire(ctx, input)
 	if err != nil {
 		var refusal retainedRefusal
@@ -403,20 +445,40 @@ func (owner *retainedGateway) serve(w http.ResponseWriter, r *http.Request, hand
 		writeGatewayError(w, http.StatusServiceUnavailable)
 		return
 	}
+	normalCompletion := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			owner.complete(input, false)
 			panic(recovered)
 		}
-		owner.complete(input, true)
+		owner.complete(input, normalCompletion)
 	}()
 	// Completion uncertainty can arise while this grant is in flight. Resolve
 	// it before starting application work, or complete this granted root unused.
 	if owner.reconcile(ctx) != nil || r.Context().Err() != nil || !owner.executionAllowed() {
 		writeGatewayError(w, http.StatusServiceUnavailable)
+		normalCompletion = true // The granted but unused envelope returned normally.
 		return
 	}
 	handler.ServeHTTP(w, r)
+	normalCompletion = true
+}
+
+// Snapshot is only a precheck. AcquireSourceLease atomically decides whether
+// accepted actual work still exists, excluding transition-only activity, before
+// the gateway reads a body or invokes native authorization/integration.
+func retainedGatewaySnapshotAllows(snapshot devquiescence.Snapshot, kind string) bool {
+	if snapshot.EvidenceFailure != "" {
+		return false
+	}
+	switch kind {
+	case retainedGatewayRootKind:
+		return snapshot.State == devquiescence.Open
+	case retainedGatewayContinuationKind:
+		return (snapshot.State == devquiescence.Open || snapshot.State == devquiescence.Draining || snapshot.State == devquiescence.Shutdown) && snapshot.WorkCount > 0
+	default:
+		return false
+	}
 }
 
 func (owner *retainedGateway) close(ctx context.Context) error {
@@ -452,6 +514,17 @@ func (owner *retainedGateway) close(ctx context.Context) error {
 }
 
 func (cfg Config) validateRetainedGateway() error {
+	if cfg.RetainedOwnerContinuationPort < 0 || cfg.RetainedOwnerContinuationPort > 65535 {
+		return errors.New("retained_owner_continuation_port must be 1..65535, or omitted")
+	}
+	if cfg.RetainedOwnerContinuationPort != 0 {
+		if cfg.RetainedOwnerContinuationPort == cfg.Port {
+			return errors.New("retained_owner_continuation_port must differ from the public gateway port")
+		}
+		if cfg.RetainedOwnerControlURL == "" {
+			return errors.New("retained_owner_continuation_port requires retained_owner_control_url")
+		}
+	}
 	if cfg.RetainedOwnerControlURL == "" {
 		return nil
 	}

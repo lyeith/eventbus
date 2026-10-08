@@ -130,3 +130,26 @@ HTTP and resources; fixtures without background callbacks drain HTTP first.
 
 Ordinary Go tests need neither Python nor SDK packages. These checks verify the
 supported contracts; they do not claim complete AWS compatibility.
+
+## Retained gateway continuations
+
+`TestRetainedGatewayAuthenticatedNativeContinuations` verifies #24 with real
+registered Python Lambdas, Cognito-issued tokens and cold callback JWKS. It
+covers downstream HTTP during drain and shutdown, typed cleanup, public-root
+fencing, wrong signatures/audiences and final native ownership joins.
+`TestProductionDeclaredCleanupCallsAuthenticatedGatewayContinuation` under
+`internal/app` separately proves actual configured cleanup declarations and
+authenticated native gateway integration; the SDK fixture implements no app
+cleanup allowlist.
+
+```sh
+EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" \
+go test -race -tags sdksmoke ./tests/sdk \
+  -run '^TestRetainedGatewayAuthenticatedNativeContinuations$'
+go test -race ./internal/app \
+  -run '^TestProductionDeclaredCleanupCallsAuthenticatedGatewayContinuation$'
+```
+
+Both proofs passed; [Gateway](../../docs/GATEWAY.md#trusted-http-continuations)
+documents endpoint configuration and the exclusive trusted-port contract.
+[HANDOFF](../../HANDOFF.md) records release verification.

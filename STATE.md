@@ -2,33 +2,25 @@
 
 Canonical SSD /home/spite/Projects/eventbus, main. Public MIT standalone emulator
 and agent harness; Plans/application stacks/databases are untouched.
-Latest release: https://github.com/lyeith/eventbus/releases/tag/v0.8.0
-Clean tagged source: 6cee17627ab39ec4e32466552214eff515334909.
+Latest published release: https://github.com/lyeith/eventbus/releases/tag/v0.8.0
+Tickets #18–#23 are published and closed.
 
-Tickets #18–#23 are implemented, published and closed; final open board is empty.
-Native core: exact older/current mapping URIs, safe original-receipt settlement,
-SES raw MIME configuration-set selection with API precedence and original bytes.
-Harness: retained full native owners/declared cleanup/same-resource resume,
-correlated post-join SQS evidence and bounded opt-in private Lambda diagnostics.
-Native wire results, Event admission and retry decisions remain unchanged.
-Runtime success is not business success; ownership uncertainty stays strict.
-Trusted handlers await side work in owned OS groups; escaped/unawaited pipes
-cannot attest healthy completion. No process-reaper expansion.
+#24 implemented and verified; preparing v0.9.0 publication.
+Optional retained_owner_continuation_port / --retained-owner-continuation-port
+adds a separate exclusively trusted 127.0.0.1 gateway listener.
+Public requests always remain roots. Native REQUEST auth and Invoke unchanged.
+Shared lease ledger admits continuations only with actual accepted work,
+atomically checking owner/generation/health before body read and native routing.
+Idle open/held, resume transitions, stale generation and uncertain ownership
+refuse; no public header grants continuation status. Kind-bound replay shares
+the bounded no-expiry root ledger. Handler return confirms completion; panic/
+Goexit remain dirty. Accepted shutdown chains keep private peers available
+through join, with a bounded sticky failure after observed shutdown.
+Apps configure existing HTTP and callback issuer/JWKS bindings; no Trust import.
 
---sqs-delivery-log requires --lambda-functions. Recipe dev_diagnostics.log_path
-enables private Lambda records. Owned0600 regular files and capture alias refusals.
-Service guides and AGENTS define schemas, ownership, use and remaining limits.
-
-Final affected-owner race/vet, selected13 real SDK race208.846s, app/gateway race,
-SES14focused/full race11.274s and actual SES SDK race1.747s all PASS.
-Eight Go1.26/CGO0 binaries have expected GOOS/GOARCH, exact tagged SHA and clean VCS
-metadata. Physical Linuxamd64/macOSarm64 retained/native proofs PASS; remaining
-two targets cross-built/inspected. Nine uploaded assets downloaded/hash-verified.
-Consuming production Identity business handler was unavailable and is not claimed
-verified; applications own their authenticated cleanup/business acceptance.
-
-No runtime dependencies/frozen locks changed. Approved isolated older SDK env
-removed28MiB. Release/download/laptop staging, scripts and task-generated SDK
-bytecode removed; owned test processes joined. Reusable caches preserved.
-SSD complete logs/failure evidence expire under existing24h policy; disposable
-macOS private proof artifacts removed. No temporary worktrees/branches retained.
+PASS: full affected-owner race (coordinator1.048s, gateway39.652s, app23.523s,
+cmd1.066s), actual registered Lambda/Cognito SDK/JWT/cold JWKS race5.635s.
+Production app declaration→authenticated gateway→native integration proof PASS.
+Scoped tagged vet PASS. Release binary builds/physical CLI proofs pending.
+No dependency changes, temporary worktrees/branches or new environments.
+Parent owns the serial managed SSD test/build lane.

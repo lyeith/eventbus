@@ -98,6 +98,8 @@ EventBus first and add this gateway recipe setting:
 
 ```yaml
 retained_owner_control_url: http://127.0.0.1:14100/__eventbus/dev/retained-owner
+# Optional private application HTTP continuation listener:
+retained_owner_continuation_port: 14181
 ```
 
 `--retained-owner-control-url` provides the same optional CLI override.
@@ -116,9 +118,45 @@ responses; leases do not expire. Refused candidates cannot execute after resume
 in a later generation. New roots return 503 while fenced. Immediately after resume,
 cache refresh may briefly cause 503; retry with a new request. Keep the gateway and
 broker controls/callbacks available during join: reversible `draining`/`held` does
-not shut the gateway down. Irreversible owner shutdown stops/drains ingress;
-an owner identity change fails closed. See the retained guide for cleanup/rejoin,
-dirty recovery and generation rules.
+not shut the gateway down. See the retained guide for cleanup/rejoin, dirty
+recovery and generation rules.
+
+### Trusted HTTP continuations
+
+`retained_owner_continuation_port` defaults to `0` (off). When selected, it must
+be `1..65535`, differ from the public gateway port and have a retained-owner
+control URL. `--retained-owner-continuation-port` is the equivalent CLI override.
+The command binds a separate listener on `127.0.0.1`; embedded hosts use
+`RetainedContinuationHandler()` (nil when disabled). Bind both owned listeners
+before serving. Canonical readiness GET keeps its existing unleased behavior.
+
+Keep suite/user requests on the public origin, e.g. `http://127.0.0.1:14180/local`.
+Point registered handlers and declared cleanup functions' **existing application
+HTTP endpoint settings** at `http://127.0.0.1:14181/local`. This private origin uses
+the same routes, REQUEST authorizers and native Lambda Invoke payloads. Protected
+routes still require their normal credentials and JWT signature/claim checks;
+continuation admission grants no authentication bypass. No caller header can
+turn a public root into a continuation.
+
+The private port is trusted and exclusively owned by this process/suite. It has
+no causal token or per-suite authorization: unrelated callers must not use it.
+Admission counts `http.gateway.continuation` before body read through handler
+return, using the same owner/generation and nonexpiring, idempotent lease ledger.
+It permits clean `open`, `draining` or `shutdown` only with actual accepted work;
+idle `open`/`held`, resuming, stale generations and uncertain ownership refuse admission.
+Declared cleanup first creates real accepted work; an idle cleanup transition
+alone does not grant a continuation.
+
+Keep the private listener live through owner shutdown until accepted work and
+cleanup continuations join. After shutdown is observed, unjoined work or control
+loss beyond the bounded join-monitor budget exits with dirty ownership; ordinary
+open-state poll failures do not start that shutdown timeout. An owner identity
+change fails closed immediately. Lost acknowledgments never prove completion. Configure cold
+JWKS fetches at the broker's **native callback** endpoint, not either gateway
+origin or the fenced source. If the application derives JWKS from its issuer,
+configure the issuer/JWKS binding at that callback origin; preserve the expected
+issuer, audience and token-use validation. An explicit JWKS override can retain
+a stable expected issuer. See [endpoint setup](RETAINED-OWNER.md#configure-the-owner-and-endpoints).
 
 ## Authorization
 

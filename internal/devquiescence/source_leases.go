@@ -10,6 +10,9 @@ const (
 	SourceLeaseSchema    = "eventbus.retained-source-lease.v1"
 	SourceLeaseActive    = "active"
 	SourceLeaseCompleted = "completed"
+
+	sourceLeaseGateway      = "http.gateway"
+	sourceLeaseContinuation = "http.gateway.continuation"
 )
 
 var (
@@ -49,6 +52,7 @@ type sourceLeaseReceiptState struct {
 type sourceLease struct {
 	sourceLeaseReceiptState
 	workID uint64
+	kind   string
 }
 
 type sourceLeaseIdentity struct {
@@ -61,9 +65,15 @@ func (c *Coordinator) sourceReceiptLocked(generation uint64, requestID, status s
 		Generation: generation, RequestID: requestID, Status: status}
 }
 
-// AcquireSourceLease is idempotent within an owner generation. Active roots have
-// no expiry, including lost-response or dead-client intervals. A completed
-// receipt acknowledges history and never grants permission to execute again.
+func validSourceLeaseKind(kind string) bool {
+	return kind == sourceLeaseGateway || kind == sourceLeaseContinuation
+}
+
+// AcquireSourceLease is idempotent for one kind within an owner generation.
+// Active leases have no expiry, including lost-response or dead-client intervals.
+// A completed receipt acknowledges history and never grants execution again.
+// Trusted continuations require live accepted work even in open admission;
+// fresh gateway roots require healthy open admission.
 func (c *Coordinator) AcquireSourceLease(input SourceLeaseInput) (SourceLeaseReceipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -74,20 +84,32 @@ func (c *Coordinator) AcquireSourceLease(input SourceLeaseInput) (SourceLeaseRec
 	if input.Generation != c.generation {
 		return SourceLeaseReceipt{}, ErrGeneration
 	}
-	if input.Kind != "http.gateway" || !safeIdentity.MatchString(input.RequestID) {
+	if !validSourceLeaseKind(input.Kind) || !safeIdentity.MatchString(input.RequestID) {
 		return SourceLeaseReceipt{}, ErrLeaseConflict
 	}
 	if existing := c.sourceLeases[input.RequestID]; existing != nil {
+		if existing.kind != input.Kind {
+			c.failEvidenceLocked("incomplete_ownership_evidence")
+			return SourceLeaseReceipt{}, ErrLeaseConflict
+		}
 		return c.sourceReceiptLocked(input.Generation, input.RequestID, existing.status), nil
 	}
-	if !c.sourceOpenLocked() {
+	allowed := c.sourceOpenLocked()
+	if input.Kind == sourceLeaseContinuation {
+		// Admission is authoritative if the parent joins after a gateway
+		// precheck. Open state alone cannot create a continuation root.
+		// Closing fences roots while accepted descendants still need callback
+		// transports; transition hooks and sticky uncertainty admit no work.
+		allowed = !c.evidenceFailure && c.work > c.transitions && c.descendantsAllowedLocked()
+	}
+	if !allowed {
 		return SourceLeaseReceipt{}, c.admissionErrorLocked()
 	}
 	if len(c.sourceLeases) >= c.maxSourceLeases {
 		return SourceLeaseReceipt{}, ErrLeaseCapacity
 	}
 	id := c.addWorkLocked(input.Kind, input.RequestID)
-	c.sourceLeases[input.RequestID] = &sourceLease{workID: id, sourceLeaseReceiptState: sourceLeaseReceiptState{status: SourceLeaseActive}}
+	c.sourceLeases[input.RequestID] = &sourceLease{workID: id, kind: input.Kind, sourceLeaseReceiptState: sourceLeaseReceiptState{status: SourceLeaseActive}}
 	return c.sourceReceiptLocked(input.Generation, input.RequestID, SourceLeaseActive), nil
 }
 
@@ -156,7 +178,7 @@ func (c *Coordinator) handleSourceLease(writer http.ResponseWriter, request *htt
 	var err error
 	if acquire {
 		var input SourceLeaseInput
-		if decodeControl(writer, request, &input) != nil || input.OwnerID == "" || input.Generation == 0 || input.Kind != "http.gateway" || !safeIdentity.MatchString(input.RequestID) {
+		if decodeControl(writer, request, &input) != nil || input.OwnerID == "" || input.Generation == 0 || !validSourceLeaseKind(input.Kind) || !safeIdentity.MatchString(input.RequestID) {
 			writeFailure(writer, http.StatusBadRequest, errors.New("invalid source lease acquisition"))
 			return
 		}

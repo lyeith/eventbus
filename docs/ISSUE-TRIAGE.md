@@ -100,6 +100,17 @@ These are development controls; #16's native batch contract remains separate.
 [Retained owner](RETAINED-OWNER.md) states endpoints and remaining refusals;
 [HANDOFF](../HANDOFF.md) records current verification.
 
+## Implemented: trusted gateway HTTP continuations
+
+[#24](https://github.com/lyeith/eventbus/issues/24) is a development retained-owner
+admission gap, not an AWS capability gap. Gateway owns optional private loopback
+ingress through native routes/auth; the coordinator owns generation-bound,
+nonexpiring continuation leases and command lifetime preserves accepted callback
+chains. Applications configure existing HTTP/JWKS endpoints and own business
+assertions. See [gateway continuations](GATEWAY.md#trusted-http-continuations).
+Final regression acceptance passed; publication is pending; [HANDOFF](../HANDOFF.md)
+records current verification.
+
 ## Core versus harness code
 
 | Concern | Owner |

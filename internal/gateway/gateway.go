@@ -136,6 +136,22 @@ func New(cfg Config, options Options) (*Gateway, error) {
 }
 
 func (gateway *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	gateway.serveRetainedHTTP(w, r, retainedGatewayRootKind)
+}
+
+// RetainedContinuationHandler exposes an explicit private listener surface for
+// trusted accepted-work callers. Ordinary ingress cannot select this lease kind
+// through a route, header or body. The listener owner must bind it to loopback.
+func (gateway *Gateway) RetainedContinuationHandler() http.Handler {
+	if gateway == nil || gateway.retained == nil || gateway.config.RetainedOwnerContinuationPort == 0 {
+		return nil
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gateway.serveRetainedHTTP(w, r, retainedGatewayContinuationKind)
+	})
+}
+
+func (gateway *Gateway) serveRetainedHTTP(w http.ResponseWriter, r *http.Request, kind string) {
 	if gateway.closed.Load() {
 		writeGatewayError(w, http.StatusServiceUnavailable)
 		return
@@ -144,7 +160,7 @@ func (gateway *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		gateway.serveHTTP(w, r)
 		return
 	}
-	gateway.retained.serve(w, r, http.HandlerFunc(gateway.serveHTTP))
+	gateway.retained.serve(w, r, kind, http.HandlerFunc(gateway.serveHTTP))
 }
 
 func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {

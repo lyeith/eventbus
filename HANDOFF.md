@@ -1,44 +1,38 @@
 # Handoff
 
-Published latest v0.8.0: https://github.com/lyeith/eventbus/releases/tag/v0.8.0
-Tagged clean source6cee17627ab39ec4e32466552214eff515334909; main now records release.
-Public assets: eight EventBus/gateway Linux/macOS amd64/arm64 binaries+SHA256SUMS.
-All uploaded assets downloaded; checksum file identical and eight hashes PASS.
-Tickets18-23 closed; final open board empty. Plans/application state untouched.
+Latest published v0.8.0: https://github.com/lyeith/eventbus/releases/tag/v0.8.0
+Tickets18–23 closed; #24 implemented/verified, publication pending.
 
-Implementation: #19 9b8f56f, #18 973e5f1, #20 a6b48d5,
-private capture072a180, canonical receipt outcomes4de060a, eventsource91e2678,
-Lambda83a9b6c, app/native SDK b8c4628, SES5480973, guides6cee176.
-Core owns AWS selection/leases/protocol; named dev adapters own harness evidence.
-#21 actual request/message lineage joins execution/children and receipt work.
-#22 private bounded attempt diagnostics preserve native results/retry policy.
-Strict Close retains invocation uncertainty; DrainAsync keeps async scope separate.
-#23 raw MIME header selects/validates SES set only without an API field, following
-verified AWS parameter precedence; original request/base64 bytes remain unchanged.
-Runtime completion does not prove business success. Trusted handlers await side
-work in owned groups; escaped/unawaited pipe holders cannot certify healthy joins.
+#24: optional private loopback gateway continuation listener, shared native
+auth/routes and remote source ledger. Source roots remain fenced.
+Coordinator atomically requires actual accepted work in every permitted state;
+a parent finishing after precheck can no longer grant its continuation.
+Owner/gen frozen before RPC, kind-bound replay, existing ACK reconciliation.
+Idle open/held, transition-only/resuming, stale/foreign/dirty requests refuse.
+Native accepted descendants remain available during shutdown; monitor starts a
+bounded sticky join-failure deadline only after observing Shutdown.
+Normal handler return alone confirms completion; Goexit/panic stays dirty.
+CLI binds both listeners before serving, rolls back partial binding and drains/
+joins both before shared owner close; explicit continuation flag0 disables YAML.
 
-Final PASS logs under SSD /tmp24h cleanup:
-- eventbus-final-combined-sdk-race-20261008.log:13selected208.846s, including
-  unchanged older SDK/full retained stack/manual ACK with real60s queue recreation.
-- eventbus-final-app-gateway-race-20261008.log:app23.067/gateway45.455/cmd1.043s.
-- eventbus-final-combined-vet-20261008.log.
-- eventbus-lambda-private-owner-final-fixed-race-20261008.txt:34.824s + scopedvet.
-- eventbus-ses-raw-config-{focused,race,sdk,vet}.log:14cases,11.274s/1.747s.
-Prior combined14owners and all shared messaging/capture/eventsource checks PASS.
-Build log eventbus-v0.8.0-build-20261008.log and complete metadata log verify all8
-Go1.26/CGO0 expected platform/clean tagged source fields.
-Physical packaged Linuxamd64/macOSarm64 PASS: actual IDs, gated native3/mapping2
-settlement, private logs, retry custody, exact signed cleanup/sentinel, same UUID,
-gateway delayed-body callbacks/resume and SIGTERM peer/store join.
-Linux stdout eventbus-v0.8.0-linux-packaged-fixed-20261008.log.
-Initial portable-script HTTP import collision corrected before both final proofs.
-Other two platforms cross-built/inspected. Consuming production Identity business
-handler unavailable; application business acceptance is not claimed verified.
+PASS logs SSD /tmp under existing24h retention:
+- eventbus-24-coordinator-focused-20261008.log (initial policy0.012s).
+- eventbus-24-cli-focused-20261008.log (0.049s).
+- eventbus-24-app-focused-20261008.log (actual declaration0.584s).
+- eventbus-24-gateway-focused-20261008.log: initial race reproduced parent-finish
+  grant; fixed by authoritative core guard, then full race passed.
+- eventbus-24-owners-race-20261008.log: coordinator1.048s/gateway39.652s/
+  app23.523s/cmd1.066s.
+- eventbus-24-sdk-race-20261008.log:5.635s; actual registered A/typed cleanup/
+  shutdown→native REQUEST IAM authorizer→B, genuine Cognito token/cold callback
+  JWKS, forged signature/wrong signed audience refusal, final child joins.
+SDK fixture adds no declaration policy; production app proof uses the actual
+configured cleanup declaration plus authenticated native integration.
+Source/static diff, bounded ownership review and scoped tagged vet PASS.
 
-Cleanup complete: isolated older-SDK env28MiB, release/upload/download staging,
-laptop binaries/private artifacts, both smoke scripts and generated SDK bytecode.
-All owned processes/listeners/fixtures joined; no temp worktrees/branches created.
-Source/public artifacts durable in GitHub. Shared .venv/node_modules/tool caches
-and unrelated developer resources preserved. SSD failures expire24h unless pinned.
-No work or test lane remains active; future tickets start from issue triage.
+Next: commit/push, build clean-source v0.9.0 eight-platform-pair assets,
+run Linuxamd64/macOSarm64 packaged CLI private/prebody/public-fence/explicit0 proof,
+verify uploaded checksums, publish and close24. Update final state/triage then
+remove owned probe/staging. No deps/temporary branches/worktrees/env added.
+Disposable probe /tmp/eventbus-24-packaged-probe.py awaits release binaries.
+No test lane remains active; release work is next. Plans and application state untouched.

@@ -30,6 +30,7 @@ func run() error {
 	frontendProxy := flag.String("frontend-proxy", "", "frontend development server URL")
 	noAuth := flag.Bool("no-auth", false, "explicitly bypass configured authorizers")
 	retainedControl := flag.String("retained-owner-control-url", "", "opt-in exclusively owned loopback retained-owner control URL")
+	continuationPort := flag.Int("retained-owner-continuation-port", 0, "opt-in exclusively owned loopback gateway continuation listener")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
 	cfg, err := gateway.LoadConfig(*configuration)
@@ -42,6 +43,11 @@ func run() error {
 	if *retainedControl != "" {
 		cfg.RetainedOwnerControlURL = *retainedControl
 	}
+	flag.Visit(func(option *flag.Flag) {
+		if option.Name == "retained-owner-continuation-port" {
+			cfg.RetainedOwnerContinuationPort = *continuationPort
+		}
+	})
 	level := zerolog.InfoLevel
 	if *debug {
 		level = zerolog.DebugLevel
@@ -51,43 +57,95 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer application.Close()
-	server := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Port), Handler: application, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
-	listener, err := net.Listen("tcp", server.Addr)
+	listeners, err := listenGateway(cfg.Port, cfg.RetainedOwnerContinuationPort, application, application.RetainedContinuationHandler())
 	if err != nil {
-		return err
+		return errors.Join(err, application.Close())
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	failure := make(chan error, 1)
-	go func() { failure <- server.Serve(listener) }()
-	logger.Info().Int("port", cfg.Port).Bool("no_auth", *noAuth).Msg("EventBus gateway ready")
+	failure := make(chan error, len(listeners))
+	servers := make([]*http.Server, 0, len(listeners))
+	for _, owned := range listeners {
+		servers = append(servers, owned.server)
+		go func(owned gatewayListener) { failure <- owned.server.Serve(owned.listener) }(owned)
+	}
+	logger.Info().Int("port", cfg.Port).Int("retained_owner_continuation_port", cfg.RetainedOwnerContinuationPort).Bool("no_auth", *noAuth).Msg("EventBus gateway ready")
+	remaining := len(servers)
+	var serveErr error
 	select {
-	case err := <-failure:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
+	case serveErr = <-failure:
+		remaining--
 	case <-ctx.Done():
 	case <-application.RetainedShutdownSignal():
 	}
 	drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return shutdownGateway(drain, server, application.Close, failure)
+	return errors.Join(normalServeError(serveErr), shutdownGateways(drain, servers, application.Close, failure, remaining))
 }
 
-func shutdownGateway(ctx context.Context, server *http.Server, closeApplication func() error, failure <-chan error) error {
-	shutdownErr := server.Shutdown(ctx)
-	var closeErr error
-	if shutdownErr != nil {
-		closeErr = server.Close()
+type gatewayListener struct {
+	server   *http.Server
+	listener net.Listener
+}
+
+// Bind all ingress before serving. A failed private bind cannot leave a public
+// gateway running without its configured continuation peer.
+func listenGateway(port, continuationPort int, public, continuation http.Handler) ([]gatewayListener, error) {
+	endpoints := []struct {
+		address string
+		handler http.Handler
+	}{{fmt.Sprintf(":%d", port), public}}
+	if continuationPort != 0 {
+		if continuation == nil {
+			return nil, errors.New("retained gateway continuation handler is unavailable")
+		}
+		endpoints = append(endpoints, struct {
+			address string
+			handler http.Handler
+		}{fmt.Sprintf("127.0.0.1:%d", continuationPort), continuation})
 	}
-	// net/http does not drain hijacked WebSocket connections. Gateway owns its
-	// outbound connections and closes upgrades after ordinary requests drain.
-	applicationErr := closeApplication()
-	serveErr := <-failure
-	if errors.Is(serveErr, http.ErrServerClosed) {
-		serveErr = nil
+	var listeners []gatewayListener
+	for _, endpoint := range endpoints {
+		listener, err := net.Listen("tcp", endpoint.address)
+		if err != nil {
+			for _, owned := range listeners {
+				err = errors.Join(err, owned.listener.Close())
+			}
+			return nil, err
+		}
+		server := &http.Server{Addr: endpoint.address, Handler: endpoint.handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+		listeners = append(listeners, gatewayListener{server: server, listener: listener})
 	}
-	return errors.Join(shutdownErr, closeErr, applicationErr, serveErr)
+	return listeners, nil
+}
+
+func normalServeError(err error) error {
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func shutdownGateways(ctx context.Context, servers []*http.Server, closeApplication func() error, failure <-chan error, remaining int) error {
+	drained := make(chan error, len(servers))
+	for _, server := range servers {
+		go func(server *http.Server) {
+			err := server.Shutdown(ctx)
+			if err != nil {
+				err = errors.Join(err, server.Close())
+			}
+			drained <- err
+		}(server)
+	}
+	var result error
+	for range servers {
+		result = errors.Join(result, <-drained)
+	}
+	// Both listeners stop intake and join ordinary requests before closing the
+	// shared gateway's outbound connections and reconciling retained leases.
+	result = errors.Join(result, closeApplication())
+	for range remaining {
+		result = errors.Join(result, normalServeError(<-failure))
+	}
+	return result
 }
