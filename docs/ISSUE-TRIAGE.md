@@ -124,16 +124,17 @@ snapshot cannot identify an unproven business cause or attest completion. See
 passed and shipped in [v0.10.0](https://github.com/lyeith/eventbus/releases/tag/v0.10.0);
 [HANDOFF](../HANDOFF.md) records verification and release status.
 
-## Accepted: CLI startup argument guard
+## Completed: CLI startup argument guard
 
 [#27](https://github.com/lyeith/eventbus/issues/27) is a low-priority core startup
 guard. Broker `internal/app/config.go` and gateway `cmd/gateway/config.go` reject unexpected
 positional arguments, such as `version`, with a nonzero exit before opening stores,
 captures, listeners or invocation processes. Parser/startup regressions and focused
-app/gateway race/vet checks passed; publication is pending.
+app/gateway race/vet and packaged Linux/macOS proofs passed; released in
+[v0.11.1](https://github.com/lyeith/eventbus/releases/tag/v0.11.1).
 [HANDOFF](../HANDOFF.md) records verification and release status.
 
-## In progress: Lambda Init and Invoke accounting
+## Completed: Lambda Init and Invoke accounting
 
 [#28](https://github.com/lyeith/eventbus/issues/28) is a Lambda execution-core
 timeout gap. Lambda owns managed readiness/provided Runtime API readiness,
@@ -142,7 +143,12 @@ fallback sharing its configured budget across Init and Invoke. Command execution
 keeps its whole-process timeout. Private phase evidence is a harness adapter;
 neither it nor deadline separation proves an application business-chain result.
 See [phase accounting](LAMBDA.md#init-and-invoke-budgets).
-Final verification/publication is pending; [HANDOFF](../HANDOFF.md) records status.
+Final race/SDK and packaged Linux/macOS verification passed; released in
+[v0.11.1](https://github.com/lyeith/eventbus/releases/tag/v0.11.1). Shared `localexec`
+also reconciles Darwin zombie-group EPERM through bounded absence probes while
+persistent ownership errors still refuse completion. The separate
+[performance review](PERFORMANCE-REVIEW.md) records measured startup/capture costs
+and unmeasured follow-ups. [HANDOFF](../HANDOFF.md) records acceptance and cleanup.
 
 ## Core versus harness code
 
