@@ -47,6 +47,10 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 	plans := make([]snsPlannedDelivery, 0, len(subscriptions))
 	deliveries := make([]SNSCaptureDelivery, 0, len(subscriptions))
 	deliveredAttributes := snsDeliveryAttributes(input.Attributes)
+	// All envelope fields except the selected protocol message are shared by
+	// this publication. Raw delivery needs no envelope; Lambda's event wrapper
+	// remains subscription-specific and is built from this immutable body.
+	var envelopes map[string]string
 	for _, subscription := range subscriptions {
 		delivery := SNSCaptureDelivery{Protocol: subscription.Protocol, Endpoint: subscription.Endpoint, SubscriptionARN: subscription.ARN, Status: "captured", MessageID: result.MessageID}
 		if subscription.Pending || subscription.Paused && !replayed {
@@ -74,9 +78,17 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 			deliveries = append(deliveries, delivery)
 			continue
 		}
-		body, _ := buildSNSNotification(input, result, message, messageAttributes, publishedAt, replayed)
-		if subscription.Attributes["RawMessageDelivery"] == "true" {
-			body = message
+		body := message
+		if subscription.Attributes["RawMessageDelivery"] != "true" {
+			var exists bool
+			body, exists = envelopes[message]
+			if !exists {
+				body, _ = buildSNSNotification(input, result, message, messageAttributes, publishedAt, replayed)
+				if envelopes == nil {
+					envelopes = make(map[string]string)
+				}
+				envelopes[message] = body
+			}
 		}
 		plan := snsPlannedDelivery{subscription: subscription, body: body}
 		switch subscription.Protocol {
