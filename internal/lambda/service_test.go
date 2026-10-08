@@ -41,10 +41,35 @@ func TestRuntimeProcess(t *testing.T) {
 			time.Sleep(time.Hour)
 		}
 	}
+	initPoint, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "runtime": os.Getenv("AWS_LAMBDA_RUNTIME_API"), "request_id": os.Getenv("EVENTBUS_LAMBDA_REQUEST_ID")})
+	if marker := os.Getenv("EVENTBUS_LAMBDA_TEST_INIT_PID"); marker != "" {
+		if err := os.WriteFile(marker+".tmp", initPoint, 0600); err == nil {
+			_ = os.Rename(marker+".tmp", marker)
+		}
+	}
+	if path := os.Getenv("EVENTBUS_LAMBDA_TEST_INIT_LOG"); path != "" {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err == nil {
+			_, _ = file.Write(append(initPoint, '\n'))
+			_ = file.Close()
+		}
+	}
+	if delay, err := time.ParseDuration(os.Getenv("EVENTBUS_LAMBDA_TEST_INIT_DELAY")); err == nil {
+		time.Sleep(delay)
+	}
+	if mode == "init-wait" {
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	base := "http://" + os.Getenv("AWS_LAMBDA_RUNTIME_API") + runtimePrefix
-	if mode == "init" {
-		response, err := client.Post(base+"init/error", "application/json", strings.NewReader(`{"errorType":"ImportError","errorMessage":"fixture import failure"}`))
+	if mode == "init" || mode == "init-empty" {
+		payload := `{"errorType":"ImportError","errorMessage":"fixture import failure"}`
+		if mode == "init-empty" {
+			payload = ""
+		}
+		response, err := client.Post(base+"init/error", "application/json", strings.NewReader(payload))
 		if err != nil || response.StatusCode != 202 {
 			os.Exit(3)
 		}
@@ -58,6 +83,22 @@ func TestRuntimeProcess(t *testing.T) {
 	input, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	id := response.Header.Get("Lambda-Runtime-Aws-Request-Id")
+	if mode == "post-next-wait" {
+		if marker := os.Getenv("EVENTBUS_LAMBDA_TEST_PID"); marker != "" {
+			_ = os.WriteFile(marker, []byte(fmt.Sprint(os.Getpid())), 0600)
+		}
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	var receivedAt, deadlineMS int64
+	if mode == "phase-echo" {
+		receivedAt = time.Now().UnixMilli()
+		_, _ = fmt.Sscan(response.Header.Get("Lambda-Runtime-Deadline-Ms"), &deadlineMS)
+	}
+	if delay, err := time.ParseDuration(os.Getenv("EVENTBUS_LAMBDA_TEST_INVOKE_DELAY")); err == nil {
+		time.Sleep(delay)
+	}
 	path := "invocation/" + id + "/response"
 	var payload []byte
 	switch mode {
@@ -72,7 +113,7 @@ func TestRuntimeProcess(t *testing.T) {
 	case "big":
 		payload = bytes.Repeat([]byte(" "), maxPayload+1)
 	default:
-		payload, _ = json.Marshal(map[string]any{
+		value := map[string]any{
 			"input":        json.RawMessage(input),
 			"requestId":    id,
 			"invocationId": response.Header.Get("Lambda-Runtime-Invocation-Id"),
@@ -81,7 +122,13 @@ func TestRuntimeProcess(t *testing.T) {
 			"client":       response.Header.Get("Lambda-Runtime-Client-Context"),
 			"runtime":      os.Getenv("AWS_LAMBDA_RUNTIME_API"),
 			"secret":       os.Getenv("EVENTBUS_LAMBDA_PARENT_SECRET"),
-		})
+		}
+		if mode == "phase-echo" {
+			value["receivedAt"] = receivedAt
+			value["remainingMs"] = deadlineMS - receivedAt
+			value["pid"] = os.Getpid()
+		}
+		payload, _ = json.Marshal(value)
 	}
 	fmt.Fprintln(os.Stdout, "Go application stdout")
 	fmt.Fprintln(os.Stderr, "Go application stderr")
@@ -412,7 +459,11 @@ func TestTimeoutAndRequestCancellationJoinChildren(t *testing.T) {
 	for _, cancelRequest := range []bool{false, true} {
 		t.Run(fmt.Sprint(cancelRequest), func(t *testing.T) {
 			directory := t.TempDir()
-			function := providedFunction(t, "wait")
+			mode := "post-next-wait"
+			if cancelRequest {
+				mode = "wait" // Keep cancellation during Init independent of the handler budget.
+			}
+			function := providedFunction(t, mode)
 			function.Timeout = 150 * time.Millisecond
 			marker := filepath.Join(directory, "pid")
 			function.Environment["EVENTBUS_LAMBDA_TEST_PID"] = marker

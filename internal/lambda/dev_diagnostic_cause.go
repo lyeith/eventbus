@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-var errFunctionBudget = errors.New("Lambda configured function budget expired")
-var errServiceCancellation = errors.New("Lambda service stopped execution")
-
 type diagnosticCompletion struct {
 	at                  time.Time
 	contextError, cause string
@@ -31,10 +28,17 @@ func snapshotDiagnosticCompletion(ctx context.Context, synthesized bool) diagnos
 	switch {
 	case errors.Is(context.Cause(ctx), errFunctionBudget):
 		result.cause = "function_timeout"
+		result.contextError = "deadline_exceeded"
+	case errors.Is(context.Cause(ctx), errInitializationBudget):
+		result.cause = "initialization_timeout"
+		result.contextError = "deadline_exceeded"
+	case errors.Is(context.Cause(ctx), errPhaseProtocol):
+		result.cause = "runtime_protocol_error"
 	case errors.Is(context.Cause(ctx), errServiceCancellation):
 		result.cause = "service_canceled"
-	case errors.Is(contextErr, context.DeadlineExceeded):
+	case errors.Is(contextErr, context.DeadlineExceeded), errors.Is(context.Cause(ctx), context.DeadlineExceeded):
 		result.cause = "caller_deadline"
+		result.contextError = "deadline_exceeded"
 	default:
 		result.cause = "caller_canceled"
 	}

@@ -31,8 +31,9 @@ functions:
 
 `functions` maps names to immutable local fixtures. `runtime`, `command`,
 `handler`, `environment`, `timeout` and `work_dir` are the only entry fields.
-Timeout defaults to 10 seconds and accepts 1ms–900s. Command is an argument
-array, with no implicit shell. Python/Node default to `python3`/`node`;
+Timeout defaults to 10 seconds and accepts 1ms–900s;
+[phase accounting](#init-and-invoke-budgets) determines when it starts. Command
+is an argument array, with no implicit shell. Python/Node default to `python3`/`node`;
 an explicit command can select an application virtual environment or runtime.
 For example, `[uv, run, --project, ., python]` uses an application's Python project.
 
@@ -63,6 +64,38 @@ the original event and standard request ID, deadline, ARN and client-context
 headers. The supported Runtime API paths are `/invocation/next`,
 `/invocation/{id}/response`, `/invocation/{id}/error` and `/init/error` under
 `/2018-06-01/runtime`.
+
+## Init and Invoke budgets
+
+Managed Python/Node executions begin with a bounded 10s Init phase covering
+process launch, imports, static code and context preparation. Private readiness
+IPC then selects the full configured Invoke budget, capped by any earlier parent
+deadline. Handler remaining-time context uses that selected deadline. For
+`provided`, the first valid Runtime API `GET /invocation/next` marks readiness;
+its `Lambda-Runtime-Deadline-Ms` header carries the selected deadline.
+
+If initial Init times out, EventBus joins that process group, listener and result
+pipes before exactly one fresh fallback. The fallback's Init and Invoke share
+one configured timeout: readiness does not reset it. The original request ID
+and native Event attempt remain unchanged. This internal Init fallback is separate
+from the [two async execution retries](#async-execution-evidence). Explicit Init
+failure ends that attempt; cancellation or uncertain ownership never starts a
+fallback. Caller/service cancellation and effective parent deadlines govern both
+phases. The `command` adapter retains its whole-process configured timeout because
+it has no runtime readiness boundary.
+
+Gateway HTTP timeouts and SQS receipt visibility remain independent elapsed-time
+limits and may expire during Init. Phase accounting does not automatically extend
+a caller budget or queue receipt lease.
+
+This models AWS's ordinary on-demand 10s Init and configured-timeout fallback;
+AWS explicitly notes that suppressed Init can leave insufficient Invoke time.
+See the [AWS lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html#runtimes-lifecycle-ib),
+[Init timeout rules](https://docs.aws.amazon.com/lambda/latest/dg/troubleshooting-invocation.html#troubleshooting-invocation-init-timeout)
+and [Runtime API](https://docs.aws.amazon.com/lambda/latest/dg/runtimes-api.html).
+Every local execution remains fresh; warm reuse, preinitialized pools,
+provisioned concurrency and SnapStart are not modeled. Phase separation or
+initialization measurements alone do not attest application business-chain success.
 
 ## Invoke and inspect
 
@@ -178,23 +211,37 @@ channel: `stdout_is_response: true` replaces captured `stdout`. Optional
 `detail_truncated`; `context_error` identifies cancellation/deadline expiry.
 
 `termination_cause` distinguishes `caller_canceled`, `caller_deadline`,
-`service_canceled` and `function_timeout`. `elapsed_ms` measures monotonic time
+`service_canceled`, `function_timeout`, `initialization_timeout` and
+`runtime_protocol_error`. `elapsed_ms` measures monotonic time
 through native cleanup and optional collector join; `configured_timeout_ms` is
 the configured budget. Cause and native state are fixed after native cleanup.
 Slow private evidence can increase terminal elapsed time past the budget without
 turning an already completed function into a timeout.
-`native_response_synthesized: true` identifies the preserved legacy native timeout
-response. Caller/service cancellation omits that manufactured `function_diagnostic`;
-ordinary function failures and actual function-budget expiry retain it. A shorter
+`native_response_synthesized: true` identifies a generated native error response,
+including the preserved legacy timeout shape. Caller/service cancellation omits
+that manufactured `function_diagnostic`; ordinary function failures and actual
+runtime-owned budget/protocol failures retain it. A shorter
 caller cancellation does not mean the configured budget elapsed or identify the
 application’s original wait.
+
+The additive v1 `execution_phases` array has at most two records. Each contains
+`init_attempt` (1 or 2), `mode` (`initial`, `fallback` or `command`), `init_ms` and
+`invoke_ms`. Optional `init_state`/`invoke_state` describe phases that occurred:
+`succeeded`, `failed`, `timed_out`, `canceled` or `not_started`. Command has only
+an Invoke phase. `init_attempt` is separate from the native async `attempt`.
+Durations are floating-point milliseconds: Init ends at host receipt of readiness,
+or native join if readiness never arrived. Invoke includes readiness ACK delivery
+and native process/listener/result-pipe joins, excluding optional collector joins.
+Total `elapsed_ms` also includes the admission observer, fallback gap and optional
+collector join; it need not equal the phase-duration sum. This evidence stays
+private and does not change native response fields or redacted async records.
 
 Correlate the native request ID from SQS delivery or SNS `DeliveryAdmission`
 with diagnostics, for example:
 
 ```sh
 jq -c --arg request "$request_id" \
-  'select(.schema_version == "eventbus.lambda.invocation-diagnostic.v1" and .request_id == $request) | {request_id, function_arn, attempt, state, function_error, termination_cause, elapsed_ms, configured_timeout_ms, native_response_synthesized, ownership_confirmed, stderr, function_diagnostic, python_stack}' \
+  'select(.schema_version == "eventbus.lambda.invocation-diagnostic.v1" and .request_id == $request) | {request_id, function_arn, attempt, state, function_error, termination_cause, elapsed_ms, configured_timeout_ms, execution_phases, native_response_synthesized, ownership_confirmed, stderr, function_diagnostic, python_stack}' \
   .local/lambda-private.jsonl
 ```
 
@@ -224,10 +271,13 @@ dev_diagnostics:
     deadline_lead: 200ms
 ```
 
-One snapshot is attempted per Python execution attempt, at the earliest of
-admission plus `snapshot_after`, effective context deadline minus `deadline_lead`,
-or an explicit typed request. Omitted/zero `snapshot_after` disables its timer;
-a positive value must be at most 900s. Omitted/zero `deadline_lead` selects 200ms;
+One snapshot is attempted per native Python execution attempt. The collector
+attaches only to its first process; Init fallback creates no second collector.
+Its deadline timer follows the current Init/Invoke phase and effective parent cap.
+Triggers select the earliest of admission plus `snapshot_after`, the current
+deadline minus `deadline_lead`, or an explicit typed request. Omitted/zero
+`snapshot_after` disables its timer; a positive value must be at most 900s.
+Omitted/zero `deadline_lead` selects 200ms;
 a positive value must be at most 5s. The gateway's HTTP integration budget is not
 propagated as a Lambda context deadline: for a known 30s gateway budget and 60s
 Lambda budget, the example requests evidence at 25s. Arbitrary cancellation

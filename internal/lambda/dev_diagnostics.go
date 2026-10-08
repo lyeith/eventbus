@@ -71,6 +71,7 @@ type invocationDiagnosticRecord struct {
 	TerminationCause          string              `json:"termination_cause,omitempty"`
 	ElapsedMS                 float64             `json:"elapsed_ms"`
 	ConfiguredTimeoutMS       int64               `json:"configured_timeout_ms"`
+	ExecutionPhases           []diagnosticPhase   `json:"execution_phases,omitempty"`
 	NativeResponseSynthesized bool                `json:"native_response_synthesized,omitempty"`
 	PythonStack               *pythonStackSummary `json:"python_stack,omitempty"`
 	OwnershipError            string              `json:"ownership_error,omitempty"`
@@ -196,6 +197,7 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		Tail:   diagnosticBytes(logs, result.diagnostics.tailBytes), ContextError: completion.contextError,
 		TerminationCause: completion.cause, ElapsedMS: float64(completion.at.Sub(started)) / float64(time.Millisecond),
 		ConfiguredTimeoutMS: entry.timeout.Milliseconds(), NativeResponseSynthesized: completion.synthesized,
+		ExecutionPhases: diagnosticPhases(result.phases),
 	}
 	if input.pythonStacks != nil {
 		record.PythonStack = input.pythonStacks.summary()
@@ -209,7 +211,7 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		stdout := diagnosticBytes(result.diagnostics.stdout, result.diagnostics.stdoutBytes)
 		record.Stdout = &stdout
 	}
-	if result.functionError && (!completion.synthesized || completion.cause == "function_timeout") {
+	if result.functionError && (!completion.synthesized || completion.cause == "function_timeout" || completion.cause == "initialization_timeout" || completion.cause == "runtime_protocol_error") {
 		failure := result.payload
 		if len(failure) > maxDiagnosticFailure {
 			failure = failure[:maxDiagnosticFailure]

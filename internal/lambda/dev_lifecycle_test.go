@@ -439,6 +439,9 @@ func TestDevActivityTimeoutDistinguishesPrivateCleanupUncertainty(t *testing.T) 
 			t.Run(fmt.Sprintf("%s/uncertain=%t", runtime, uncertain), func(t *testing.T) {
 				function := providedFunction(t, "wait")
 				function.Runtime = runtime
+				if runtime == "provided" {
+					function.Environment["EVENTBUS_LAMBDA_TEST_MODE"] = "post-next-wait"
+				}
 				function.Timeout = 40 * time.Millisecond
 				observer := &activityRecorder{}
 				service := newActivityService(t, map[string]Function{"wait": function}, t.TempDir(), observer, nil, nil)

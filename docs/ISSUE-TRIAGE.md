@@ -124,6 +124,26 @@ snapshot cannot identify an unproven business cause or attest completion. See
 passed and shipped in [v0.10.0](https://github.com/lyeith/eventbus/releases/tag/v0.10.0);
 [HANDOFF](../HANDOFF.md) records verification and release status.
 
+## Accepted: CLI startup argument guard
+
+[#27](https://github.com/lyeith/eventbus/issues/27) is a low-priority core startup
+guard. Broker `internal/app/config.go` and gateway `cmd/gateway/config.go` reject unexpected
+positional arguments, such as `version`, with a nonzero exit before opening stores,
+captures, listeners or invocation processes. Parser/startup regressions and focused
+app/gateway race/vet checks passed; publication is pending.
+[HANDOFF](../HANDOFF.md) records verification and release status.
+
+## In progress: Lambda Init and Invoke accounting
+
+[#28](https://github.com/lyeith/eventbus/issues/28) is a Lambda execution-core
+timeout gap. Lambda owns managed readiness/provided Runtime API readiness,
+bounded initial Init and configured Invoke deadlines, with one joined Init
+fallback sharing its configured budget across Init and Invoke. Command execution
+keeps its whole-process timeout. Private phase evidence is a harness adapter;
+neither it nor deadline separation proves an application business-chain result.
+See [phase accounting](LAMBDA.md#init-and-invoke-budgets).
+Final verification/publication is pending; [HANDOFF](../HANDOFF.md) records status.
+
 ## Core versus harness code
 
 | Concern | Owner |

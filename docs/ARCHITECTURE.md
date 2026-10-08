@@ -92,6 +92,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   Its development continuation ingress uses the same native handlers and auth;
   exclusive private-port ownership is an explicit harness trust assumption.
 - `lambda` owns execution and runtime protocol; application handlers own policy.
+  `runtime_phase.go` owns Init/readiness/Invoke deadlines and bounded Init fallback;
+  all phases share caller cancellation and actual process/resource joins.
   `app` injects it into the service dispatcher and closes it after background Event drain and HTTP drain.
   `dev_diagnostics.go` owns opt-in private attempt logs after actual cleanup;
   native results/retries and redacted async metadata keep their existing contracts.

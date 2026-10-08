@@ -369,7 +369,6 @@ func TestPythonStackScheduledAndConfiguredDeadlinePreserveHardStop(t *testing.T)
 		}
 		t.Run(name, func(t *testing.T) {
 			service, path, _ := newPythonStackTestService(t, options, budget)
-			started := time.Now()
 			metadata, cancel, finished := startPythonStackExecution(t, service, map[string]any{"mode": "asgi"}, nil)
 			record := waitPythonStackRecord(t, path, metadata)
 			assertPythonStackSnapshot(t, record, metadata)
@@ -381,8 +380,17 @@ func TestPythonStackScheduledAndConfiguredDeadlinePreserveHardStop(t *testing.T)
 				require.True(t, result.outcome.Output.FunctionError)
 				require.Contains(t, string(result.outcome.Output.Payload), "Sandbox.Timedout")
 				require.Nil(t, result.outcome.OwnershipErr)
-				require.Less(t, time.Since(started), 3*time.Second, "snapshot collection cannot extend the hard runtime deadline")
 				assertPythonStackTerminal(t, path, metadata, InvocationTimedOut, record)
+				_, terminals := readPythonStackEvidence(t, path)
+				require.Len(t, terminals, 1)
+				require.Len(t, terminals[0].ExecutionPhases, 1)
+				phase := terminals[0].ExecutionPhases[0]
+				require.Equal(t, 1, phase.InitAttempt)
+				require.Equal(t, "initial", phase.Mode)
+				require.Equal(t, "succeeded", phase.InitState)
+				require.Equal(t, "timed_out", phase.InvokeState)
+				require.GreaterOrEqual(t, phase.InvokeMS, float64(budget.Milliseconds())-100, "Init must not spend the configured handler budget")
+				require.Less(t, phase.InvokeMS, float64((budget + time.Second).Milliseconds()), "snapshot collection cannot extend the handler deadline")
 			} else {
 				require.Equal(t, "snapshot_after", record.Trigger)
 				_, terminals := readPythonStackEvidence(t, path)
@@ -587,7 +595,7 @@ func TestPythonStackNativeAsyncTimeoutRetryRetainsOriginalAttemptIdentity(t *tes
 	require.Eventually(t, func() bool {
 		records := service.AsyncSnapshot()
 		return len(records) == 1 && records[0].State == "failed"
-	}, 10*time.Second, 5*time.Millisecond, "native async timeout retries did not join")
+	}, 15*time.Second, 5*time.Millisecond, "native async timeout retries did not join")
 	async := service.AsyncSnapshot()
 	require.Len(t, async, 1)
 	require.Equal(t, admission.RequestID, async[0].RequestID)
@@ -612,6 +620,14 @@ func TestPythonStackNativeAsyncTimeoutRetryRetainsOriginalAttemptIdentity(t *tes
 		require.NotNil(t, terminals[index].PythonStack)
 		require.Equal(t, "captured", terminals[index].PythonStack.Status)
 		require.False(t, terminals[index].CompletedAt.Before(snapshots[index].CapturedAt))
+		require.Len(t, terminals[index].ExecutionPhases, 1)
+		phase := terminals[index].ExecutionPhases[0]
+		require.Equal(t, 1, phase.InitAttempt)
+		require.Equal(t, "initial", phase.Mode)
+		require.Equal(t, "succeeded", phase.InitState)
+		require.Equal(t, "timed_out", phase.InvokeState)
+		require.GreaterOrEqual(t, phase.InvokeMS, float64(1900), "each original retry receives its configured 2s handler budget")
+		require.Less(t, phase.InvokeMS, float64(3000), "snapshot collection cannot extend a retry handler deadline")
 	}
 }
 

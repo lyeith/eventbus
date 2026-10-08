@@ -187,9 +187,12 @@ func TestPrivateDiagnosticsPythonCancellationCausesPreserveNativeProjection(t *t
 				t.Fatalf("private cause disagrees with actual cancellation: %#v", record)
 			}
 			if mode == "function_budget" {
-				if record.FunctionDiagnostic == nil || !strings.Contains(string(diagnosticData(t, *record.FunctionDiagnostic)), "Sandbox.Timedout") ||
-					record.ElapsedMS < float64(budget.Milliseconds())-100 {
+				if record.FunctionDiagnostic == nil || !strings.Contains(string(diagnosticData(t, *record.FunctionDiagnostic)), "Sandbox.Timedout") || len(record.ExecutionPhases) != 1 {
 					t.Fatalf("own budget lost explicitly synthetic diagnostic: %#v", record)
+				}
+				phase := record.ExecutionPhases[0]
+				if phase.InitAttempt != 1 || phase.Mode != "initial" || phase.InitState != "succeeded" || phase.InvokeState != "timed_out" || phase.InvokeMS < float64(budget.Milliseconds())-100 {
+					t.Fatalf("configured budget must describe Invoke separately from Init: %#v", record)
 				}
 			} else if record.FunctionDiagnostic != nil || record.ElapsedMS >= float64(budget.Milliseconds()) {
 				t.Fatalf("external cancellation falsely claims configured timeout: %#v", record)

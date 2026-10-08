@@ -245,7 +245,7 @@ func TestEventRetriesTerminalFailureAndEvidenceRedaction(t *testing.T) {
 }
 
 func TestEventTimeoutRetriesAndNativeDefaults(t *testing.T) {
-	function := providedFunction(t, "wait")
+	function := providedFunction(t, "post-next-wait")
 	function.Timeout = 50 * time.Millisecond
 	service := newAsyncTestService(t, map[string]Function{"wait": function}, t.TempDir(), &DevAsyncConfig{RetryDelays: []time.Duration{0, 0}})
 	admission, err := service.Admit(context.Background(), InvokeInput{FunctionName: "wait", Payload: []byte(`{}`)})

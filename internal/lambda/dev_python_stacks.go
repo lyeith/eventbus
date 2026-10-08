@@ -91,6 +91,9 @@ type pythonStackSession struct {
 	identity                     InvocationMetadata
 	scheduled                    time.Time
 	scheduledTrigger             string
+	started                      time.Time
+	config                       DevPythonStacksConfig
+	reschedule                   chan struct{}
 	request                      chan string
 	stop, done                   chan struct{}
 	mu                           sync.Mutex
@@ -107,7 +110,25 @@ func newPythonStackSession(service *Service, identity InvocationMetadata, starte
 	if config.SnapshotAfter > 0 && started.Add(config.SnapshotAfter).Before(scheduled) {
 		scheduled, trigger = started.Add(config.SnapshotAfter), "snapshot_after"
 	}
-	return &pythonStackSession{service: service, identity: identity, scheduled: scheduled, scheduledTrigger: trigger, request: make(chan string, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	return &pythonStackSession{service: service, identity: identity, scheduled: scheduled, scheduledTrigger: trigger, started: started, config: config, reschedule: make(chan struct{}, 1), request: make(chan string, 1), stop: make(chan struct{}), done: make(chan struct{})}
+}
+
+// Readiness selects the real Invoke deadline. Reschedule only an unrequested
+// collector; explicit/admission snapshots remain single-shot and never renew.
+func (session *pythonStackSession) updateDeadline(deadline time.Time) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.requested || session.stopped {
+		return
+	}
+	session.scheduled, session.scheduledTrigger = deadline.Add(-session.config.DeadlineLead), "deadline"
+	if session.config.SnapshotAfter > 0 && session.started.Add(session.config.SnapshotAfter).Before(session.scheduled) {
+		session.scheduled, session.scheduledTrigger = session.started.Add(session.config.SnapshotAfter), "snapshot_after"
+	}
+	select {
+	case session.reschedule <- struct{}{}:
+	default:
+	}
 }
 
 // RequestPythonSnapshot requests one best-effort private snapshot of the exact
@@ -154,22 +175,46 @@ func (session *pythonStackSession) collect() {
 		}
 		session.mu.Unlock()
 	}()
+	session.mu.Lock()
 	timer := time.NewTimer(max(0, time.Until(session.scheduled)))
+	session.mu.Unlock()
 	defer timer.Stop()
 	var trigger string
-	select {
-	case trigger = <-session.request:
-	case <-timer.C:
-		session.requestOnce(session.scheduledTrigger)
+	waiting := true
+	for waiting {
 		select {
 		case trigger = <-session.request:
-		default:
+			waiting = false
+		case <-session.reschedule:
+			session.mu.Lock()
+			timer.Reset(max(0, time.Until(session.scheduled)))
+			session.mu.Unlock()
+		case <-timer.C:
+			session.mu.Lock()
+			// A readiness transition may have replaced a timer just as it fired.
+			due, scheduledTrigger := !time.Now().Before(session.scheduled), session.scheduledTrigger
+			if !due {
+				timer.Reset(time.Until(session.scheduled))
+			}
+			if due && !session.requested && !session.stopped {
+				session.requested = true
+				session.request <- scheduledTrigger
+			}
+			session.mu.Unlock()
+			if !due {
+				continue
+			}
+			select {
+			case trigger = <-session.request:
+				waiting = false
+			default:
+				session.publish("not_requested", pythonStackSnapshot{Status: "capture_unavailable", Reason: "process_completed"}, time.Time{})
+				return
+			}
+		case <-session.stop:
 			session.publish("not_requested", pythonStackSnapshot{Status: "capture_unavailable", Reason: "process_completed"}, time.Time{})
 			return
 		}
-	case <-session.stop:
-		session.publish("not_requested", pythonStackSnapshot{Status: "capture_unavailable", Reason: "process_completed"}, time.Time{})
-		return
 	}
 	requestedAt := time.Now()
 	_ = session.writer.SetWriteDeadline(requestedAt.Add(10 * time.Millisecond))

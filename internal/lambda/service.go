@@ -40,6 +40,7 @@ type executableFunction struct {
 // Runtime API listeners have stopped. Registry entries are immutable.
 type Service struct {
 	functions   map[string]executableFunction
+	initTimeout time.Duration // on-demand Init limit; private override for focused tests
 	devActivity DevActivity
 	// Immutable in normal construction; private tests can wrap real cleanup to
 	// prove that ownership uncertainty stays separate from native responses.
@@ -107,7 +108,7 @@ func NewService(config *Config, workDir string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	service := &Service{functions: make(map[string]executableFunction), devActivity: config.DevActivity, processCleanup: localexec.Cleanup, active: make(map[uint64]invocationOwner), done: make(chan struct{})}
+	service := &Service{functions: make(map[string]executableFunction), initTimeout: initialInitTimeout, devActivity: config.DevActivity, processCleanup: localexec.Cleanup, active: make(map[uint64]invocationOwner), done: make(chan struct{})}
 	for name, function := range config.Functions {
 		directory := root
 		if function.WorkDir != "" {
@@ -367,6 +368,7 @@ type invocation struct {
 	onAdmission                                          func(InvocationMetadata) error
 	diagnostics                                          bool
 	pythonStacks                                         *pythonStackSession
+	phase                                                *runtimePhase
 }
 
 type invocationResult struct {
@@ -376,6 +378,7 @@ type invocationResult struct {
 	state         InvocationState
 	admitted      bool
 	diagnostics   invocationDiagnostics
+	phases        []runtimePhaseRecord
 	// Private ownership uncertainty cannot be supplied by a handler or projected
 	// onto native responses. It only makes a developer lifecycle lease dirty.
 	ownershipErr error
@@ -390,12 +393,16 @@ func (service *Service) invoke(parent context.Context, entry executableFunction,
 	return service.invokeOwned(parent, entry, input, false)
 }
 func (service *Service) invokeOwned(parent context.Context, entry executableFunction, input invocation, asynchronous bool) (result invocationResult, err error) {
-	budget, stopBudget := context.WithTimeoutCause(parent, entry.timeout, errFunctionBudget)
-	defer stopBudget()
-	ctx, stop := context.WithCancelCause(budget)
+	ctx, stop := context.WithCancelCause(parent)
 	defer stop(nil)
 	cancel := func() { stop(errServiceCancellation) }
-	input.deadline, _ = ctx.Deadline()
+	input.deadline = time.Now().Add(service.initTimeout)
+	if entry.runtime == "command" {
+		input.deadline = time.Now().Add(entry.timeout)
+	}
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(input.deadline) {
+		input.deadline = deadline
+	}
 	service.mu.Lock()
 	if service.closed && !asynchronous || service.aborted || asynchronous && service.asyncAborted {
 		service.mu.Unlock()
@@ -419,6 +426,8 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	service.inflight.Add(1)
 	service.mu.Unlock()
 	var completion diagnosticCompletion
+	var phase *runtimePhase
+	defer func() { phase.stop() }()
 	normalCompletion, runnerEntered, diagnosticCompletion := false, false, false
 	input.diagnostics = service.diagnosticCapture != nil
 	defer func() {
@@ -473,19 +482,63 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		}
 	}
 	runnerEntered = true
-	if entry.runtime == "provided" {
-		result = runProvided(ctx, entry, input, service.processCleanup)
-	} else {
-		result = runCommand(ctx, entry, input, service.processCleanup)
+	mode := "initial"
+	if entry.runtime == "command" {
+		mode = "command"
 	}
-	completion = snapshotDiagnosticCompletion(ctx, true)
+	var records []runtimePhaseRecord
+	launchInput := input
+	for initAttempt := 1; initAttempt <= 2; initAttempt++ {
+		var onReady func(time.Time)
+		if launchInput.pythonStacks != nil {
+			onReady = launchInput.pythonStacks.updateDeadline
+		}
+		phase = newRuntimePhase(ctx, entry.timeout, service.initTimeout, mode, onReady)
+		launchInput.phase, launchInput.deadline = phase, phase.deadline
+		if launchInput.pythonStacks != nil {
+			launchInput.pythonStacks.updateDeadline(phase.deadline)
+		}
+		var launched invocationResult
+		if entry.runtime == "provided" {
+			launched = runProvided(phase.ctx, entry, launchInput, service.processCleanup)
+		} else {
+			launched = runCommand(phase.ctx, entry, launchInput, service.processCleanup)
+		}
+		// Actual native cleanup decides this launch before any optional evidence
+		// join. Internal Init retry never releases the admitted invocation owner.
+		var record runtimePhaseRecord
+		record, completion = phase.complete(initAttempt, launched)
+		records = append(records, record)
+		phase.stop()
+		result = mergeLaunchDiagnostics(result, launched)
+		if mode != "initial" || completion.cause != "initialization_timeout" || ctx.Err() != nil || result.ownershipErr != nil {
+			break
+		}
+		if launchInput.pythonStacks != nil {
+			result.ownershipErr = errors.Join(result.ownershipErr, launchInput.pythonStacks.finish())
+			// Preserve one optional snapshot per native execution attempt. The
+			// initial process's collector must join before launching its fallback.
+			launchInput.pythonStacks = nil
+		}
+		if ctx.Err() != nil || result.ownershipErr != nil {
+			break
+		}
+		mode = "fallback"
+	}
+	result.phases = records
 	if completion.contextError != "" {
-		logs, ownershipErr, diagnostics := result.logs, result.ownershipErr, result.diagnostics
+		logs, ownershipErr, diagnostics, phases := result.logs, result.ownershipErr, result.diagnostics, result.phases
 		result = failure("Sandbox.Timedout", fmt.Sprintf("Task timed out after %.2f seconds", entry.timeout.Seconds()))
-		result.logs, result.ownershipErr, result.diagnostics = logs, ownershipErr, diagnostics
+		if completion.cause == "runtime_protocol_error" {
+			result = failure("Runtime.InvalidResponse", "Managed runtime readiness protocol failed")
+		}
+		result.logs, result.ownershipErr, result.diagnostics, result.phases = logs, ownershipErr, diagnostics, phases
 		result.state = InvocationCanceled
 		if completion.contextError == "deadline_exceeded" {
 			result.state = InvocationTimedOut
+		}
+		if completion.cause == "runtime_protocol_error" {
+			result.state = InvocationFailed
 		}
 	}
 	normalCompletion = true

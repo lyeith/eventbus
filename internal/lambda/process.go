@@ -131,6 +131,10 @@ func environment(entry executableFunction, input invocation, runtimeAPI string) 
 	}
 	// This channel is solely selected by owned development configuration.
 	delete(values, "EVENTBUS_DEV_PYTHON_STACKS")
+	delete(values, "EVENTBUS_LAMBDA_PHASE_PROTOCOL")
+	if (entry.runtime == "python" || entry.runtime == "node") && input.phase != nil {
+		values["EVENTBUS_LAMBDA_PHASE_PROTOCOL"] = "1"
+	}
 	if input.pythonStacks != nil {
 		values["EVENTBUS_DEV_PYTHON_STACKS"] = "1"
 	}
@@ -284,7 +288,28 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 			command.ExtraFiles = append(command.ExtraFiles, childStackReader, childStackWriter)
 		}
 	}
+	var control *managedPhaseChannel
+	if wrapped && input.phase != nil {
+		control, err = newManagedPhaseChannel(command)
+		if err != nil {
+			// The process has not started; all already constructed result/stack
+			// channels must be retired before returning a startup failure.
+			for _, file := range []*os.File{writer, childStackReader, stackWriter, stackReader, childStackWriter} {
+				if file != nil {
+					_ = file.Close()
+				}
+			}
+			if readDone != nil {
+				<-readDone
+			}
+			return notStartedFailure("Runtime.InternalError", "Cannot create runtime readiness channel")
+		}
+		defer control.close()
+	}
 	startErr := command.Start()
+	if control != nil {
+		control.childStarted(input.phase, startErr == nil)
+	}
 	if childStackReader != nil {
 		_ = childStackReader.Close()
 		_ = childStackWriter.Close()
@@ -317,6 +342,9 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 	waitErr := command.Wait()
 	cleanupErr := cleanup(command)
 	ownershipErr := cleanupErr
+	if control != nil {
+		ownershipErr = errors.Join(ownershipErr, control.join())
+	}
 	if errors.Is(waitErr, exec.ErrWaitDelay) {
 		// A valid result may coexist with forcibly closed diagnostic pipes.
 		// Preserve native result policy, but never certify that ownership clean.
@@ -370,7 +398,40 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 		result.diagnostics.processError = waitErr.Error()
 	}
 	result.ownershipErr = ownershipErr
+	if wrapped && input.phase != nil && !result.functionError && !input.phase.invoked() {
+		// A native result without the owned readiness boundary must not bypass
+		// invocation accounting, even if a user process writes a forged fd3 reply.
+		result = preserveLaunchEvidence(result, failure("Runtime.InvalidResponse", "Managed runtime did not become ready"))
+	}
 	return result
+}
+
+func preserveLaunchEvidence(source, result invocationResult) invocationResult {
+	result.logs, result.diagnostics, result.ownershipErr = source.logs, source.diagnostics, source.ownershipErr
+	return result
+}
+
+// Internal Init fallback is still one native attempt. Keep bounded tails and
+// actual byte totals from both launches without retaining either success body.
+func mergeLaunchDiagnostics(prior, next invocationResult) invocationResult {
+	tail := func(first, second []byte) []byte {
+		merged := append(append([]byte(nil), first...), second...)
+		if len(merged) > maxLogs {
+			merged = merged[len(merged)-maxLogs:]
+		}
+		return merged
+	}
+	next.logs = tail(prior.logs, next.logs)
+	next.diagnostics.stdout = tail(prior.diagnostics.stdout, next.diagnostics.stdout)
+	next.diagnostics.stderr = tail(prior.diagnostics.stderr, next.diagnostics.stderr)
+	next.diagnostics.stdoutBytes += prior.diagnostics.stdoutBytes
+	next.diagnostics.stderrBytes += prior.diagnostics.stderrBytes
+	next.diagnostics.tailBytes += prior.diagnostics.tailBytes
+	if prior.diagnostics.processError != "" {
+		next.diagnostics.processError = prior.diagnostics.processError + "\n" + next.diagnostics.processError
+	}
+	next.ownershipErr = errors.Join(prior.ownershipErr, next.ownershipErr)
+	return next
 }
 
 func unwrapReply(reply []byte) invocationResult {

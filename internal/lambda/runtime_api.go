@@ -137,6 +137,17 @@ func (runtime *runtimeInvocation) ServeHTTP(writer http.ResponseWriter, request 
 		runtime.mu.Lock()
 		first := !runtime.delivered && !runtime.completed
 		if first {
+			// The common phase owner decides whether this is a fresh Invoke
+			// budget or the remaining fallback budget. It performs no I/O.
+			if runtime.input.phase != nil {
+				deadline, err := runtime.input.phase.beginInvoke()
+				if err != nil {
+					runtime.mu.Unlock()
+					writer.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				runtime.input.deadline = deadline
+			}
 			runtime.delivered = true
 		}
 		runtime.mu.Unlock()
@@ -173,14 +184,14 @@ func (runtime *runtimeInvocation) ServeHTTP(writer http.ResponseWriter, request 
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if id := request.Header.Get("Lambda-Runtime-Invocation-Id"); id != "" && id != runtime.input.requestID {
+	if id := request.Header.Get("Lambda-Runtime-Invocation-Id"); !initialization && id != "" && id != runtime.input.requestID {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusBadRequest)
 		_, _ = writer.Write([]byte(`{"errorType":"InvalidInvocationId","errorMessage":"Invocation ID does not match"}`))
 		return
 	}
 	runtime.mu.Lock()
-	allowed := !runtime.completed && (initialization || runtime.delivered)
+	allowed := runtime.resultAllowedLocked(initialization)
 	runtime.mu.Unlock()
 	if !allowed {
 		writer.WriteHeader(http.StatusConflict)
@@ -196,11 +207,15 @@ func (runtime *runtimeInvocation) ServeHTTP(writer http.ResponseWriter, request 
 	if len(payload) > maxPayload {
 		result = failure("Function.ResponseSizeTooLarge", "Response exceeds the 6291456 byte limit")
 		status = http.StatusRequestEntityTooLarge
+	} else if initialization && len(payload) == 0 {
+		result = failure("Runtime.Unknown", "Runtime failed during initialization")
 	} else if !json.Valid(payload) {
 		result = failure("Runtime.InvalidResponse", "Runtime API response must be JSON")
 	}
 	runtime.mu.Lock()
-	if runtime.completed {
+	// Body I/O runs outside mu. A concurrent first /next can complete Init
+	// while an init/error body is being read; recheck at the actual claim.
+	if !runtime.resultAllowedLocked(initialization) {
 		runtime.mu.Unlock()
 		writer.WriteHeader(http.StatusConflict)
 		return
@@ -214,4 +229,16 @@ func (runtime *runtimeInvocation) ServeHTTP(writer http.ResponseWriter, request 
 		flusher.Flush()
 	}
 	runtime.result <- result
+}
+
+// resultAllowedLocked keeps initialization and invocation result admission in
+// one owner. Call it while holding mu, both before I/O and at completion claim.
+func (runtime *runtimeInvocation) resultAllowedLocked(initialization bool) bool {
+	if runtime.completed {
+		return false
+	}
+	if initialization {
+		return !runtime.delivered
+	}
+	return runtime.delivered
 }
