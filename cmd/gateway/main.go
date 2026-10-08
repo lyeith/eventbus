@@ -24,36 +24,29 @@ func main() {
 	}
 }
 func run() error {
-	port := flag.Int("port", 0, "override listener port")
-	configuration := flag.String("config", "gateway.yaml", "application-owned gateway fixture")
-	frontendDir := flag.String("frontend-dir", "", "static frontend SPA directory")
-	frontendProxy := flag.String("frontend-proxy", "", "frontend development server URL")
-	noAuth := flag.Bool("no-auth", false, "explicitly bypass configured authorizers")
-	retainedControl := flag.String("retained-owner-control-url", "", "opt-in exclusively owned loopback retained-owner control URL")
-	continuationPort := flag.Int("retained-owner-continuation-port", 0, "opt-in exclusively owned loopback gateway continuation listener")
-	debug := flag.Bool("debug", false, "enable debug logging")
-	flag.Parse()
-	cfg, err := gateway.LoadConfig(*configuration)
+	options, err := readCLIConfig(flag.NewFlagSet(os.Args[0], flag.ExitOnError), os.Args[1:])
 	if err != nil {
 		return err
 	}
-	if *port != 0 {
-		cfg.Port = *port
+	cfg, err := gateway.LoadConfig(options.configuration)
+	if err != nil {
+		return err
 	}
-	if *retainedControl != "" {
-		cfg.RetainedOwnerControlURL = *retainedControl
+	if options.port != 0 {
+		cfg.Port = options.port
 	}
-	flag.Visit(func(option *flag.Flag) {
-		if option.Name == "retained-owner-continuation-port" {
-			cfg.RetainedOwnerContinuationPort = *continuationPort
-		}
-	})
+	if options.retainedControl != "" {
+		cfg.RetainedOwnerControlURL = options.retainedControl
+	}
+	if options.continuationPortSet {
+		cfg.RetainedOwnerContinuationPort = options.continuationPort
+	}
 	level := zerolog.InfoLevel
-	if *debug {
+	if options.debug {
 		level = zerolog.DebugLevel
 	}
 	logger := zerolog.New(os.Stderr).Level(level).With().Timestamp().Logger()
-	application, err := gateway.New(*cfg, gateway.Options{NoAuth: *noAuth, FrontendDir: *frontendDir, FrontendProxy: *frontendProxy, Logger: logger})
+	application, err := gateway.New(*cfg, gateway.Options{NoAuth: options.noAuth, FrontendDir: options.frontendDir, FrontendProxy: options.frontendProxy, Logger: logger})
 	if err != nil {
 		return err
 	}
@@ -69,7 +62,7 @@ func run() error {
 		servers = append(servers, owned.server)
 		go func(owned gatewayListener) { failure <- owned.server.Serve(owned.listener) }(owned)
 	}
-	logger.Info().Int("port", cfg.Port).Int("retained_owner_continuation_port", cfg.RetainedOwnerContinuationPort).Bool("no_auth", *noAuth).Msg("EventBus gateway ready")
+	logger.Info().Int("port", cfg.Port).Int("retained_owner_continuation_port", cfg.RetainedOwnerContinuationPort).Bool("no_auth", options.noAuth).Msg("EventBus gateway ready")
 	remaining := len(servers)
 	var serveErr error
 	select {

@@ -72,6 +72,9 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
+	if flags.NArg() != 0 {
+		return config{}, fmt.Errorf("unexpected positional arguments: %q", flags.Args())
+	}
 	if *cognitoProfile != "" && *cognitoProfile != "legacy-fixtures" {
 		return config{}, fmt.Errorf("unknown Cognito fixture profile %q", *cognitoProfile)
 	}

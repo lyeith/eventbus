@@ -1,11 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -223,5 +232,162 @@ func TestShutdownAfterOneGatewayServeFailureConsumesOnlyRemainingPeer(t *testing
 		}
 	case <-ctx.Done():
 		t.Fatal("shutdown waited for an already consumed Serve result")
+	}
+}
+
+func TestGatewayCLIStartupProcess(t *testing.T) {
+	if os.Getenv("EVENTBUS_GATEWAY_CLI_STARTUP_CHILD") != "1" {
+		return
+	}
+	separator := slices.Index(os.Args, "--")
+	if separator < 0 {
+		fmt.Fprintln(os.Stderr, "gateway startup fixture is missing its argument delimiter")
+		os.Exit(2)
+	}
+	os.Args = append([]string{"eventbus-gateway"}, os.Args[separator+1:]...)
+	main()
+	os.Exit(0)
+}
+
+func gatewayCLIStartupPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func gatewayCLIStartupFixture(t *testing.T, directory string) string {
+	t.Helper()
+	path := filepath.Join(directory, "gateway.yaml")
+	// The configured upstream is never called by local readiness. The omitted
+	// fixture port is overridden with this test's private dynamically chosen port.
+	data := []byte("routes:\n  - path: /cli-fixture\n    method: GET\n    integration:\n      type: HTTP_PROXY\n      uri: http://127.0.0.1:1\n")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestGatewayCLIStartupRejectsPositionalsBeforeFixtureAndListeners(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name           string
+		missingFixture bool
+		suffix         []string
+	}{
+		{"valid-fixture", false, []string{"version"}},
+		{"unreadable-fixture", true, []string{"version"}},
+		{"delimiter", false, []string{"--", "version"}},
+		{"flags-after-positional", false, []string{"version", "--debug"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			port := gatewayCLIStartupPort(t)
+			fixture := filepath.Join(directory, "missing.yaml")
+			if !test.missingFixture {
+				fixture = gatewayCLIStartupFixture(t, directory)
+			}
+			args := []string{"--config", fixture, "--port", strconv.Itoa(port)}
+			args = append(args, test.suffix...)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, executable, append([]string{"-test.run=^TestGatewayCLIStartupProcess$", "--"}, args...)...)
+			command.Dir = directory
+			command.Env = append(os.Environ(), "EVENTBUS_GATEWAY_CLI_STARTUP_CHILD=1")
+			command.WaitDelay = time.Second
+			output, err := command.CombinedOutput()
+			var exit *exec.ExitError
+			if ctx.Err() != nil || !errors.As(err, &exit) ||
+				!strings.Contains(string(output), "unexpected positional arguments") ||
+				strings.Contains(string(output), "read gateway configuration") ||
+				strings.Contains(string(output), "EventBus gateway ready") {
+				t.Fatalf("invalid CLI reached fixture/runtime startup: error=%v; context=%v; %s", err, ctx.Err(), output)
+			}
+			listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+			if err != nil {
+				t.Fatalf("invalid CLI left its listener active: %v", err)
+			}
+			if err := listener.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestGatewayCLIStartupValidFlagsStillServeAndShutdown(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("production process cleanup and signals require Linux or Darwin")
+	}
+	directory := t.TempDir()
+	port := gatewayCLIStartupPort(t)
+	fixture := gatewayCLIStartupFixture(t, directory)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	args := []string{"-test.run=^TestGatewayCLIStartupProcess$", "--", "--config", fixture, "--port", strconv.Itoa(port), "--retained-owner-continuation-port=0", "--"}
+	command := exec.CommandContext(ctx, executable, args...)
+	command.Dir = directory
+	command.Env = append(os.Environ(), "EVENTBUS_GATEWAY_CLI_STARTUP_CHILD=1")
+	command.WaitDelay = time.Second
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	var waitErr error
+	go func() { waitErr = command.Wait(); close(done) }()
+	t.Cleanup(func() { _ = command.Process.Kill(); <-done })
+	client := &http.Client{Timeout: 100 * time.Millisecond}
+	defer client.CloseIdleConnections()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", port))
+		if err == nil {
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, 1024))
+			_ = response.Body.Close()
+			if readErr == nil && response.StatusCode == http.StatusOK && bytes.Contains(data, []byte(`"service":"eventbus-gateway"`)) {
+				break
+			}
+		}
+		select {
+		case <-done:
+			t.Fatalf("valid gateway CLI exited before readiness: %v; %s", waitErr, output.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("valid gateway CLI did not reach readiness")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := command.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		if waitErr != nil {
+			t.Fatalf("valid gateway CLI failed shutdown: %v; %s", waitErr, output.String())
+		}
+	case <-ctx.Done():
+		t.Fatal("valid gateway CLI did not join shutdown")
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		t.Fatalf("valid gateway CLI did not release its listener: %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
