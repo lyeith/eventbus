@@ -121,7 +121,10 @@ and [ticket ownership](ISSUE-TRIAGE.md).
 - `localexec` owns OS process groups, cancellation, retained-pipe bounds,
   descendant cleanup and capped output buffers. Lambda, triggers and consumers
   own their protocols, results, deadlines, environment and retries; each runner
-  must Wait its directly launched child.
+  must Wait its directly launched child. Darwin may return EPERM for an
+  unreaped, exited group; the shared owner probes absence for at most 1s using
+  signal 0 while the runner reaps. Only ESRCH resolves that error; a remaining
+  group or another probe error preserves ownership uncertainty.
 
 Add an interface at a real consumer boundary; keep store implementation details
 private. Application acceptance behavior belongs in the consuming application.

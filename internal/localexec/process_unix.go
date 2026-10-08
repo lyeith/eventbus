@@ -3,7 +3,6 @@
 package localexec
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -36,9 +35,5 @@ func Cleanup(command *exec.Cmd) error {
 	if command.Process == nil {
 		return nil
 	}
-	err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	return err
+	return signalProcessGroup(command.Process.Pid, syscall.Kill)
 }
