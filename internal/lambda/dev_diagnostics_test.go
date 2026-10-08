@@ -406,7 +406,7 @@ export async function handler() {
 				t.Fatalf("joined attempts: %#v", records)
 			}
 			for index, record := range records {
-				if record.RequestID != id || record.Attempt != index+1 || record.State != wantState || !record.FunctionError || !record.OwnershipConfirmed || record.ContextError != contextError || record.FunctionDiagnostic == nil || !strings.Contains(string(diagnosticData(t, record.Stderr)), "waiting stderr") {
+				if record.RequestID != id || record.Attempt != index+1 || record.State != wantState || !record.FunctionError || !record.OwnershipConfirmed || record.ContextError != contextError || (record.FunctionDiagnostic != nil) != (mode == "timeout") || !strings.Contains(string(diagnosticData(t, record.Stderr)), "waiting stderr") {
 					t.Fatalf("joined canceled/timeout diagnostics: %#v", record)
 				}
 			}

@@ -1,45 +1,36 @@
 # Handoff
 
-Published latest v0.9.0: https://github.com/lyeith/eventbus/releases/tag/v0.9.0
-Tagged clean source c563e37d9b185b5f3e467b673d5581cff25568bf, pushed to main.
-Public assets:8 EventBus/gateway Linux/macOS amd64/arm64 binaries+SHA256SUMS.
-All9 uploaded assets downloaded; checksum file identical and all8 hashes PASS.
-#24 closed; final open board empty. Plans/application state untouched.
+#25/#26 implementation accepted on canonical SSD EventBus main.
+Latest public release remains v0.9.0; next step is v0.10.0 packaging/publication.
+Plans/application state untouched. No dependency, environment or worktree added.
 
-#24 adds explicit trusted loopback gateway continuations with normal native
-routes/REQUEST auth/Invoke. Public roots remain fenced. Atomic ledger admission
-requires actual accepted work in all states, preventing parent-finish races.
-Counts precede body read and cover handler return; frozen owner/gen, kind-bound
-replay and shared ACK reconciliation keep uncertainty strict.
-Idle open/held, transition-only/resuming, stale/foreign/dirty requests refuse.
-Native accepted shutdown descendants remain live until counts/cleanup join;
-monitor starts its bounded sticky deadline only after observing Shutdown.
-Normal return confirms completion; Goexit/panic stays dirty.
-CLI binds all peers first, rolls back partial binding and drains both listeners
-before shared close. Explicit continuation flag0 disables a YAML-selected port.
-Docs state endpoint roles/exclusive trust and callback issuer/JWKS adoption.
+Private termination evidence separates caller cancel/deadline/service stop from
+own function timeout, preserves native wire/state/retries and original identity.
+Cause freezes after actual native cleanup; terminal elapsed includes optional
+collector join. Gated collector latency cannot change already joined success.
+Python capture is default-off, safe thread locations + loop-owned native task
+await chains, separately framed fd4/fd5 JSONL; fd3/native outputs stay unchanged.
+UV retains duplicate writer descriptors, so live capture must use newline framing
+rather than EOF. Collector100ms/read250ms bounds;32threads/8loops/64tasks/32frames,
+256UTF8-byte identifiers and64KiB wire. Unknown early cancel/GIL/custom loops can
+leave explicit unavailable evidence. Actual kill and ownership joins stay strict.
 
-PASS logs SSD /tmp, existing24h retention:
-- eventbus-24-app-focused-20261008.log: actual declared cleanup0.584s.
-- eventbus-24-owners-race-20261008.log: coordinator1.048s/gateway39.652s/
-  app23.523s/cmd1.066s; includes all existing affected-owner suites.
-- eventbus-24-sdk-race-20261008.log:5.635s; actual registered A/typed cleanup/
-  shutdown→native IAM authorizer→B, real Cognito token/cold callback JWKS,
-  forged signature/wrong signed audience refusal and final child joins.
-- eventbus-24-vet-20261008.log: scoped tagged owners+SDK PASS.
-- eventbus-v0.9.0-{linux,macos}-packaged-20261008.log: private listener/prebody
-  lease/public fence/native error join/explicit0 overrides, clean SIGTERM joins.
-- eventbus-v0.9.0-tagged-build-20261008.log and
-  eventbus-v0.9.0-final-metadata-20261008.log: all8 Go1.26/CGO0 expected
-  platforms, modulev0.9.0, tagged SHA and vcs.modified=false.
-SDK fixture owns no app declaration policy; separate production run proof uses
-the actual configured declaration and authenticated native integration.
-Initial focused parent-finish regression failed before the final atomic guard;
-the final full race passed. First pretag build had a pseudoversion; discarded
-and rebuilt under v0.9.0 before final proofs/upload. No runtime code changed.
+PASS evidence SSD /tmp, existing24h retention:
+- eventbus-25-26-focused-final-20261008.log:39.442s.
+- eventbus-25-26-all-race-20261008.log: all Go owners PASS, Lambda73.572s,
+  Cognito277.731s/app23.075s/gateway41.539s; initial join policy then corrected.
+- eventbus-25-26-lambda-final-race-20261008.log:75.424s, sole optional join and
+  gated post-native-budget/service-close success regression included.
+- eventbus-25-26-sdk-race-20261008.log:69.998s actual Lambda/SNS/SQS/Secrets,
+  private native evidence, retained barrier and authenticated gateway callbacks.
+- eventbus-25-26-vet-20261008.log: full sdksmoke-tagged vet PASS.
+- eventbus-python-stack-live-framing-probe-20261008.log: actual UV retainedfd5,
+  live safe frames + unchanged native output, all scratch/processes cleaned.
+Earlier focused logs show corrected fixture timing/header errors, decoder default
+reason and EOF framing failures; final focused/race/SDK evidence supersedes them.
 
-Cleanup complete: native fixtures/listeners/children joined, release/download/
-laptop binary staging and both probe copies removed. No dependencies or task
-environments/branches/worktrees created; shared SDK/tool caches preserved.
-Disposable macOS evidence removed after copying proof to SSD24h logs.
-Source/artifacts durable in GitHub. No active work or test/build lane.
+Parent owns serial SSD Go lane, GOMAXPROCS4/-p2; currently idle.
+Parent staging /tmp/eventbus-25-26-parent has disposable source copies and the
+stdlib packaged proof. Build tag first so binaries carry actual semver and clean
+source metadata. Verify Linuxamd64/macOSarm64 and download all public assets.
+After publication close issues, rewrite state/triage and remove owned staging.

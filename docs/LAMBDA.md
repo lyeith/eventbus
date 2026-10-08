@@ -177,12 +177,24 @@ channel: `stdout_is_response: true` replaces captured `stdout`. Optional
 `process_error` and `ownership_error` details are each bounded to 8 KiB with
 `detail_truncated`; `context_error` identifies cancellation/deadline expiry.
 
+`termination_cause` distinguishes `caller_canceled`, `caller_deadline`,
+`service_canceled` and `function_timeout`. `elapsed_ms` measures monotonic time
+through native cleanup and optional collector join; `configured_timeout_ms` is
+the configured budget. Cause and native state are fixed after native cleanup.
+Slow private evidence can increase terminal elapsed time past the budget without
+turning an already completed function into a timeout.
+`native_response_synthesized: true` identifies the preserved legacy native timeout
+response. Caller/service cancellation omits that manufactured `function_diagnostic`;
+ordinary function failures and actual function-budget expiry retain it. A shorter
+caller cancellation does not mean the configured budget elapsed or identify the
+application’s original wait.
+
 Correlate the native request ID from SQS delivery or SNS `DeliveryAdmission`
 with diagnostics, for example:
 
 ```sh
 jq -c --arg request "$request_id" \
-  'select(.schema_version == "eventbus.lambda.invocation-diagnostic.v1" and .request_id == $request) | {request_id, function_arn, attempt, state, function_error, ownership_confirmed, stderr, function_diagnostic}' \
+  'select(.schema_version == "eventbus.lambda.invocation-diagnostic.v1" and .request_id == $request) | {request_id, function_arn, attempt, state, function_error, termination_cause, elapsed_ms, configured_timeout_ms, native_response_synthesized, ownership_confirmed, stderr, function_diagnostic, python_stack}' \
   .local/lambda-private.jsonl
 ```
 
@@ -199,6 +211,64 @@ failures to that drain; native async admission/retry evidence remains separate.
 Native Invoke outputs, Event admission, retry decisions and existing redacted
 async records remain unchanged.
 
+### Python wait snapshots
+
+For the actual registered Python process, explicitly enable snapshots in the
+same private recipe sink; omitting `python_stacks` keeps this feature off:
+
+```yaml
+dev_diagnostics:
+  log_path: .local/lambda-private.jsonl
+  python_stacks:
+    snapshot_after: 25s
+    deadline_lead: 200ms
+```
+
+One snapshot is attempted per Python execution attempt, at the earliest of
+admission plus `snapshot_after`, effective context deadline minus `deadline_lead`,
+or an explicit typed request. Omitted/zero `snapshot_after` disables its timer;
+a positive value must be at most 900s. Omitted/zero `deadline_lead` selects 200ms;
+a positive value must be at most 5s. The gateway's HTTP integration budget is not
+propagated as a Lambda context deadline: for a known 30s gateway budget and 60s
+Lambda budget, the example requests evidence at 25s. Arbitrary cancellation
+cannot wait for a snapshot.
+
+Embedded callers can use `Service.RequestPythonSnapshot(InvocationMetadata)`
+with the exact identity from `ExecuteObserved` admission. `true` means request
+accepted, not captured. Let admission return so the process can start; observe
+the live record before explicitly canceling when a snapshot is required. Fast or
+not-yet-started processes can still yield unavailable evidence. There is no native
+or HTTP management endpoint and no handler change is required.
+
+Live `eventbus.lambda.python-stack.v1` records retain the original `request_id`,
+`function_name`, `function_arn` and `attempt`, plus `threads`, `loops`, `truncated`,
+`status` and optional fixed `reason`. Go owns `requested_at` (omitted without a
+request) and `captured_at` (receipt/evidence publication time); thread/task views
+come from nearby times rather than one atomic process snapshot.
+Triggers are `explicit`, `deadline`, `snapshot_after` or `not_requested`; statuses
+are `captured`, `capture_unavailable` or `capture_failed`. A fast completion before
+the trigger records `not_requested`/`capture_unavailable`/`process_completed`
+at join, without an actual request time. The terminal invocation record's
+`python_stack` contains only `{status, reason, trigger}`. A live record does not
+prove invocation join or business success.
+
+```sh
+jq -c --arg request "$request_id" \
+  'select(.schema_version == "eventbus.lambda.python-stack.v1" and .request_id == $request) | {request_id, function_arn, attempt, trigger, requested_at, captured_at, status, reason, truncated, threads, loops}' \
+  .local/lambda-private.jsonl
+```
+
+Collection has a 100ms Python budget and 250ms Go read budget, with at most
+32 threads, 8 loops, 64 tasks, 32 frames per stack, 256-byte frame identifiers and
+64 KiB JSON. Frames contain only `function`, `file` and `line`; tasks are read on
+their loop thread through public APIs for supported stdlib `BaseEventLoop` loops.
+Blocked GIL, custom loops or early cancellation may leave unavailable or partial
+loop evidence; inspect each loop's state/reason and truncation. Locals, source
+text, object reprs, task/thread names and raw exceptions are excluded. File and
+function identifiers can be user-controlled: this is bounded private evidence,
+not semantic redaction. Snapshots add no stdout/public output and do not extend
+native deadlines, alter results/retries or confer cleanup authority.
+
 ## Embedded execution and shutdown
 
 The typed local seam shares the HTTP runner and registered targets:
@@ -207,6 +277,8 @@ The typed local seam shares the HTTP runner and registered targets:
 |---|---|
 | `ValidateTarget(name, qualifier)` | Resolve a registered function/alias without execution |
 | `Execute(ctx, InvokeInput)` | Synchronous result and `FunctionError`, after process cleanup joins |
+| `ExecuteObserved(ctx, InvokeInput, onAdmission)` | Observe the actual attempt identity and return its joined outcome |
+| `RequestPythonSnapshot(InvocationMetadata)` | Accept at most one best-effort private snapshot request for an active Python attempt |
 | `Admit(ctx, InvokeInput)` | Transfer a private payload copy; return an admission request ID |
 | `AsyncSnapshot()` | Copy active and bounded terminal execution metadata |
 | `DrainAsync(ctx)` | Stop Event admission and join accepted async work; keep synchronous execution available |

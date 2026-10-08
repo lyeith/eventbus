@@ -93,7 +93,7 @@ func (service *Service) configureAsync(config *DevAsyncConfig, workDir string) e
 	service.asyncWake = make(chan struct{})
 	service.asyncDrainDone = make(chan struct{})
 	service.asyncTasks = make(map[string]*asyncTask)
-	service.asyncContext, service.asyncCancel = context.WithCancel(context.Background())
+	service.asyncContext, service.asyncCancel = context.WithCancelCause(context.Background())
 	service.asyncWorkers.Add(workers)
 	for index := 0; index < workers; index++ {
 		go service.asyncWorker()

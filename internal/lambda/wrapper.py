@@ -10,6 +10,15 @@ import traceback
 from types import SimpleNamespace
 
 
+if os.environ.get('EVENTBUS_DEV_PYTHON_STACKS') == '1':
+    try:
+        # The Go owner supplies this starter from a private module namespace.
+        # An unavailable diagnostic collector must not change native execution.
+        _eventbus_start_python_stacks()
+    except BaseException:
+        pass
+
+
 def client_context(value):
     if value is None:
         return None

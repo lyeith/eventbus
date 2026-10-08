@@ -59,7 +59,7 @@ type Service struct {
 	asyncRetryDelays                                   [2]time.Duration
 	asyncWake                                          chan struct{}
 	asyncContext                                       context.Context
-	asyncCancel                                        context.CancelFunc
+	asyncCancel                                        context.CancelCauseFunc
 	asyncWorkers                                       sync.WaitGroup
 	asyncCapture                                       *devcapture.Sink
 	asyncEvidenceErr                                   error
@@ -71,6 +71,7 @@ type Service struct {
 	diagnosticClosed                                   bool
 	diagnosticCloseErr                                 error
 	invocationEvidenceErr                              error
+	pythonStacks                                       *DevPythonStacksConfig
 	asyncClosed, asyncAborted                          bool
 	asyncAbortErr                                      error
 	asyncDrainDone                                     chan struct{}
@@ -78,6 +79,8 @@ type Service struct {
 type invocationOwner struct {
 	cancel       context.CancelFunc
 	asynchronous bool
+	metadata     InvocationMetadata
+	pythonStacks *pythonStackSession
 }
 
 func New(filename, workDir string) (*Service, error) {
@@ -363,6 +366,7 @@ type invocation struct {
 	attempt                                              int
 	onAdmission                                          func(InvocationMetadata) error
 	diagnostics                                          bool
+	pythonStacks                                         *pythonStackSession
 }
 
 type invocationResult struct {
@@ -386,8 +390,11 @@ func (service *Service) invoke(parent context.Context, entry executableFunction,
 	return service.invokeOwned(parent, entry, input, false)
 }
 func (service *Service) invokeOwned(parent context.Context, entry executableFunction, input invocation, asynchronous bool) (result invocationResult, err error) {
-	ctx, cancel := context.WithTimeout(parent, entry.timeout)
-	defer cancel()
+	budget, stopBudget := context.WithTimeoutCause(parent, entry.timeout, errFunctionBudget)
+	defer stopBudget()
+	ctx, stop := context.WithCancelCause(budget)
+	defer stop(nil)
+	cancel := func() { stop(errServiceCancellation) }
 	input.deadline, _ = ctx.Deadline()
 	service.mu.Lock()
 	if service.closed && !asynchronous || service.aborted || asynchronous && service.asyncAborted {
@@ -404,10 +411,14 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	}
 	service.next++
 	id := service.next
-	service.active[id] = invocationOwner{cancel: cancel, asynchronous: asynchronous}
+	started := time.Now()
+	if entry.runtime == "python" && service.pythonStacks != nil {
+		input.pythonStacks = newPythonStackSession(service, invocationMetadata(entry, input), started, input.deadline, *service.pythonStacks)
+	}
+	service.active[id] = invocationOwner{cancel: cancel, asynchronous: asynchronous, metadata: invocationMetadata(entry, input), pythonStacks: input.pythonStacks}
 	service.inflight.Add(1)
 	service.mu.Unlock()
-	started := time.Now()
+	var completion diagnosticCompletion
 	normalCompletion, runnerEntered, diagnosticCompletion := false, false, false
 	input.diagnostics = service.diagnosticCapture != nil
 	defer func() {
@@ -442,14 +453,17 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 				result.state = InvocationFailed
 			}
 		}
-		contextError := ""
-		if ctx.Err() != nil {
-			contextError = "canceled"
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				contextError = "deadline_exceeded"
-			}
+		if input.pythonStacks != nil {
+			result.ownershipErr = errors.Join(result.ownershipErr, input.pythonStacks.finish())
 		}
-		result.ownershipErr = errors.Join(result.ownershipErr, service.captureDiagnostics(entry, input, result, asynchronous, started, contextError))
+		if completion.at.IsZero() {
+			completion = snapshotDiagnosticCompletion(ctx, false)
+		}
+		// Cause/native projection is frozen at runner completion. Optional
+		// evidence may hold this lifetime through append/join, never turn an
+		// already completed function into a configured-budget timeout.
+		completion.at = time.Now()
+		result.ownershipErr = errors.Join(result.ownershipErr, service.captureDiagnostics(entry, input, result, asynchronous, started, completion))
 		diagnosticCompletion = true
 	}()
 	if input.onAdmission != nil {
@@ -464,12 +478,13 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	} else {
 		result = runCommand(ctx, entry, input, service.processCleanup)
 	}
-	if ctx.Err() != nil {
+	completion = snapshotDiagnosticCompletion(ctx, true)
+	if completion.contextError != "" {
 		logs, ownershipErr, diagnostics := result.logs, result.ownershipErr, result.diagnostics
 		result = failure("Sandbox.Timedout", fmt.Sprintf("Task timed out after %.2f seconds", entry.timeout.Seconds()))
 		result.logs, result.ownershipErr, result.diagnostics = logs, ownershipErr, diagnostics
 		result.state = InvocationCanceled
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if completion.contextError == "deadline_exceeded" {
 			result.state = InvocationTimedOut
 		}
 	}
@@ -504,7 +519,7 @@ func (service *Service) Close(ctx context.Context) error {
 		go func() {
 			<-service.asyncDrainDone
 			service.inflight.Wait()
-			service.asyncCancel()
+			service.asyncCancel(errServiceCancellation)
 			captureErr := service.asyncCapture.Close()
 			if service.diagnosticCapture != nil {
 				// Serialize terminal health with completed closure. No invocation

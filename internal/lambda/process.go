@@ -129,6 +129,11 @@ func environment(entry executableFunction, input invocation, runtimeAPI string) 
 	for name, value := range entry.environment {
 		values[name] = value
 	}
+	// This channel is solely selected by owned development configuration.
+	delete(values, "EVENTBUS_DEV_PYTHON_STACKS")
+	if input.pythonStacks != nil {
+		values["EVENTBUS_DEV_PYTHON_STACKS"] = "1"
+	}
 	version := "$LATEST"
 	name := input.name
 	if base, qualifier, found := strings.Cut(name, ":"); found {
@@ -193,7 +198,12 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 	if entry.runtime == "node" {
 		arguments = append(arguments, "--input-type=module", "--eval", nodeWrapper, "--", entry.module, entry.exported)
 	} else if entry.runtime == "python" {
-		arguments = append(arguments, "-c", pythonWrapper, entry.module, entry.exported)
+		wrapper := pythonWrapper
+		if input.pythonStacks != nil {
+			source, _ := json.Marshal(pythonStackCollector)
+			wrapper = "def _eventbus_start_python_stacks():\n    pass\ntry:\n    import types as _eventbus_types\n    _eventbus_stack_module = _eventbus_types.ModuleType('_eventbus_python_stacks')\n    exec(compile(" + string(source) + ", '<eventbus-python-stacks>', 'exec'), _eventbus_stack_module.__dict__)\n    _eventbus_start_python_stacks = _eventbus_stack_module._eventbus_start_python_stacks\nexcept BaseException:\n    pass\n" + wrapper
+		}
+		arguments = append(arguments, "-c", wrapper, entry.module, entry.exported)
 	}
 	command, err := newCommand(ctx, entry, input, arguments, "")
 	if err != nil {
@@ -247,12 +257,50 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 			readerMu.Unlock()
 		}()
 	}
+	var stackReader, stackWriter, childStackReader, childStackWriter *os.File
+	if input.pythonStacks != nil {
+		var pipeErr error
+		childStackReader, stackWriter, pipeErr = os.Pipe()
+		if pipeErr == nil {
+			stackReader, childStackWriter, pipeErr = os.Pipe()
+		}
+		if pipeErr != nil {
+			for _, file := range []*os.File{childStackReader, stackWriter, stackReader, childStackWriter} {
+				if file != nil {
+					_ = file.Close()
+				}
+			}
+			// Optional collection setup cannot replace a native function result.
+			input.pythonStacks.unavailableReason = "channel_failed"
+			stackReader, stackWriter, childStackReader, childStackWriter = nil, nil, nil, nil
+			command.Args = append(command.Args[:len(command.Args)-3], pythonWrapper, entry.module, entry.exported)
+			for index, value := range command.Env {
+				if strings.HasPrefix(value, "EVENTBUS_DEV_PYTHON_STACKS=") {
+					command.Env = append(command.Env[:index], command.Env[index+1:]...)
+					break
+				}
+			}
+		} else {
+			command.ExtraFiles = append(command.ExtraFiles, childStackReader, childStackWriter)
+		}
+	}
 	startErr := command.Start()
+	if childStackReader != nil {
+		_ = childStackReader.Close()
+		_ = childStackWriter.Close()
+	}
+	if stackReader != nil && startErr == nil {
+		input.pythonStacks.attach(stackReader, stackWriter)
+	}
 	if writer != nil {
 		// Only the child retains the writing descriptor after launch.
 		_ = writer.Close()
 	}
 	if startErr != nil {
+		if stackReader != nil {
+			_ = stackReader.Close()
+			_ = stackWriter.Close()
+		}
 		if readDone != nil {
 			<-readDone
 		}

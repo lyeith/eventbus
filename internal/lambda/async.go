@@ -295,7 +295,7 @@ func (service *Service) abortAsyncLocked(reason error) {
 	service.asyncClosed = true
 	service.asyncAborted = true
 	service.asyncAbortErr = reason
-	service.asyncCancel()
+	service.asyncCancel(errServiceCancellation)
 	for _, owner := range service.active {
 		if owner.asynchronous {
 			owner.cancel()

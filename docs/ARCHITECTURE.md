@@ -95,6 +95,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   `app` injects it into the service dispatcher and closes it after background Event drain and HTTP drain.
   `dev_diagnostics.go` owns opt-in private attempt logs after actual cleanup;
   native results/retries and redacted async metadata keep their existing contracts.
+  `dev_python_stacks.go` and its Python collector own bounded live wait snapshots
+  in that same sink; live evidence cannot attest invocation join or business success.
 - `secrets` owns a narrow RotationInvoker port and its step/state policy;
   `scheduler` owns a narrow TargetInvoker port and admission retry/time policy.
   `app/service_invocations.go` shares redacted Execute/Admit mechanics with SNS

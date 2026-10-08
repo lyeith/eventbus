@@ -123,6 +123,9 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
 - Select recipe `dev_diagnostics.log_path` for [private native handler diagnostics](LAMBDA.md#private-invocation-diagnostics).
   Correlate actual request IDs/attempts; runtime success and logs never replace
   application business assertions. Keep these potentially sensitive files private.
+  Inspect `termination_cause` and `elapsed_ms` before attributing a timeout;
+  opt into [Python wait snapshots](LAMBDA.md#python-wait-snapshots) before a known
+  shorter caller budget when terminal logs cannot locate a wait.
 - Read Cognito notification JSONL from `--cognito-log`; native signup, recovery
   and invitation flows expose local codes/passwords there. Use schema and resource
   IDs to correlate requests; [Cognito](COGNITO.md) documents the evidence fields.

@@ -17,12 +17,16 @@ const maxDiagnosticFailure = 64 << 10
 const maxDiagnosticDetail = 8 << 10
 
 type DevDiagnosticsConfig struct {
-	LogPath string `yaml:"log_path"`
+	LogPath      string                 `yaml:"log_path"`
+	PythonStacks *DevPythonStacksConfig `yaml:"python_stacks,omitempty"`
 }
 
 func validateDevDiagnostics(config *DevDiagnosticsConfig) error {
 	if config != nil && (config.LogPath == "" || config.LogPath == "-") {
 		return errors.New("dev_diagnostics.log_path requires a private owned file")
+	}
+	if config != nil && config.PythonStacks != nil {
+		return validatePythonStacks(config.PythonStacks)
 	}
 	return nil
 }
@@ -45,27 +49,32 @@ func diagnosticBytes(data []byte, total int64) diagnosticOutput {
 }
 
 type invocationDiagnosticRecord struct {
-	SchemaVersion      string            `json:"schema_version"`
-	RequestID          string            `json:"request_id"`
-	FunctionName       string            `json:"function_name"`
-	FunctionARN        string            `json:"function_arn"`
-	Runtime            string            `json:"runtime"`
-	InvocationType     string            `json:"invocation_type"`
-	Attempt            int               `json:"attempt"`
-	StartedAt          time.Time         `json:"started_at"`
-	CompletedAt        time.Time         `json:"completed_at"`
-	State              InvocationState   `json:"state"`
-	FunctionError      bool              `json:"function_error"`
-	OwnershipConfirmed bool              `json:"ownership_confirmed"`
-	StdoutIsResponse   bool              `json:"stdout_is_response,omitempty"`
-	Stdout             *diagnosticOutput `json:"stdout,omitempty"`
-	Stderr             diagnosticOutput  `json:"stderr"`
-	Tail               diagnosticOutput  `json:"tail"`
-	FunctionDiagnostic *diagnosticOutput `json:"function_diagnostic,omitempty"`
-	ProcessError       string            `json:"process_error,omitempty"`
-	ContextError       string            `json:"context_error,omitempty"`
-	OwnershipError     string            `json:"ownership_error,omitempty"`
-	DetailTruncated    bool              `json:"detail_truncated,omitempty"`
+	SchemaVersion             string              `json:"schema_version"`
+	RequestID                 string              `json:"request_id"`
+	FunctionName              string              `json:"function_name"`
+	FunctionARN               string              `json:"function_arn"`
+	Runtime                   string              `json:"runtime"`
+	InvocationType            string              `json:"invocation_type"`
+	Attempt                   int                 `json:"attempt"`
+	StartedAt                 time.Time           `json:"started_at"`
+	CompletedAt               time.Time           `json:"completed_at"`
+	State                     InvocationState     `json:"state"`
+	FunctionError             bool                `json:"function_error"`
+	OwnershipConfirmed        bool                `json:"ownership_confirmed"`
+	StdoutIsResponse          bool                `json:"stdout_is_response,omitempty"`
+	Stdout                    *diagnosticOutput   `json:"stdout,omitempty"`
+	Stderr                    diagnosticOutput    `json:"stderr"`
+	Tail                      diagnosticOutput    `json:"tail"`
+	FunctionDiagnostic        *diagnosticOutput   `json:"function_diagnostic,omitempty"`
+	ProcessError              string              `json:"process_error,omitempty"`
+	ContextError              string              `json:"context_error,omitempty"`
+	TerminationCause          string              `json:"termination_cause,omitempty"`
+	ElapsedMS                 float64             `json:"elapsed_ms"`
+	ConfiguredTimeoutMS       int64               `json:"configured_timeout_ms"`
+	NativeResponseSynthesized bool                `json:"native_response_synthesized,omitempty"`
+	PythonStack               *pythonStackSummary `json:"python_stack,omitempty"`
+	OwnershipError            string              `json:"ownership_error,omitempty"`
+	DetailTruncated           bool                `json:"detail_truncated,omitempty"`
 }
 
 type invocationDiagnostics struct {
@@ -116,6 +125,13 @@ func (service *Service) configureDiagnostics(config *DevDiagnosticsConfig, async
 		return errors.Join(err, sink.Close())
 	}
 	service.diagnosticCapture, service.diagnosticPath = sink, path
+	if config.PythonStacks != nil {
+		copy := *config.PythonStacks
+		if copy.DeadlineLead == 0 {
+			copy.DeadlineLead = 200 * time.Millisecond
+		}
+		service.pythonStacks = &copy
+	}
 	return nil
 }
 
@@ -161,7 +177,7 @@ func boundedDiagnosticDetail(value string) (string, bool) {
 	return value[:maxDiagnosticDetail], true
 }
 
-func (service *Service) captureDiagnostics(entry executableFunction, input invocation, result invocationResult, asynchronous bool, started time.Time, contextError string) error {
+func (service *Service) captureDiagnostics(entry executableFunction, input invocation, result invocationResult, asynchronous bool, started time.Time, completion diagnosticCompletion) error {
 	if service.diagnosticCapture == nil {
 		return nil
 	}
@@ -174,10 +190,15 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		SchemaVersion: "eventbus.lambda.invocation-diagnostic.v1",
 		RequestID:     identity.RequestID, FunctionName: identity.FunctionName, FunctionARN: identity.FunctionARN,
 		Runtime: entry.runtime, InvocationType: "RequestResponse", Attempt: identity.Attempt,
-		StartedAt: started.UTC(), CompletedAt: time.Now().UTC(), State: result.state,
+		StartedAt: started.UTC(), CompletedAt: completion.at.UTC(), State: result.state,
 		FunctionError: result.functionError, OwnershipConfirmed: result.ownershipErr == nil,
 		Stderr: diagnosticBytes(result.diagnostics.stderr, result.diagnostics.stderrBytes),
-		Tail:   diagnosticBytes(logs, result.diagnostics.tailBytes), ContextError: contextError,
+		Tail:   diagnosticBytes(logs, result.diagnostics.tailBytes), ContextError: completion.contextError,
+		TerminationCause: completion.cause, ElapsedMS: float64(completion.at.Sub(started)) / float64(time.Millisecond),
+		ConfiguredTimeoutMS: entry.timeout.Milliseconds(), NativeResponseSynthesized: completion.synthesized,
+	}
+	if input.pythonStacks != nil {
+		record.PythonStack = input.pythonStacks.summary()
 	}
 	if asynchronous {
 		record.InvocationType = "Event"
@@ -188,7 +209,7 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		stdout := diagnosticBytes(result.diagnostics.stdout, result.diagnostics.stdoutBytes)
 		record.Stdout = &stdout
 	}
-	if result.functionError {
+	if result.functionError && (!completion.synthesized || completion.cause == "function_timeout") {
 		failure := result.payload
 		if len(failure) > maxDiagnosticFailure {
 			failure = failure[:maxDiagnosticFailure]
@@ -203,6 +224,10 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		record.OwnershipError, truncated = boundedDiagnosticDetail(result.ownershipErr.Error())
 		record.DetailTruncated = record.DetailTruncated || truncated
 	}
+	return service.appendDiagnostic(record)
+}
+
+func (service *Service) appendDiagnostic(record any) error {
 	if err := service.diagnosticCapture.Append(record); err != nil {
 		service.mu.Lock()
 		if service.diagnosticEvidenceErr == nil {

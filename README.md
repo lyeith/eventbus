@@ -12,7 +12,7 @@ LocalStack or native backends. Apps own their scenarios and assertions.
 ## Start
 
 Download the checksummed service and gateway binaries from
-[v0.5.1](https://github.com/lyeith/eventbus/releases/tag/v0.5.1), or build current
+[the latest release](https://github.com/lyeith/eventbus/releases/latest), or build current
 source with Go 1.25 or newer. Run on an unused port:
 
 ```sh

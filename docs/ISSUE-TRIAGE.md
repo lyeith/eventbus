@@ -111,6 +111,18 @@ assertions. See [gateway continuations](GATEWAY.md#trusted-http-continuations).
 Final regression acceptance passed; released in [v0.9.0](https://github.com/lyeith/eventbus/releases/tag/v0.9.0); [HANDOFF](../HANDOFF.md)
 records current verification.
 
+## Completed: cancellation cause and Python wait diagnostics
+
+[#25](https://github.com/lyeith/eventbus/issues/25) separates the actual private
+termination cause/elapsed time from the preserved legacy native timeout response.
+[#26](https://github.com/lyeith/eventbus/issues/26) adds opt-in, bounded Python
+thread/task snapshots to the same Lambda-owned private sink. These development
+diagnostics leave native deadlines, results, retries and joins unchanged; a
+snapshot cannot identify an unproven business cause or attest completion. See
+[private diagnostics](LAMBDA.md#private-invocation-diagnostics) and
+[Python snapshots](LAMBDA.md#python-wait-snapshots). Final regression acceptance
+passed; [HANDOFF](../HANDOFF.md) records verification and release status.
+
 ## Core versus harness code
 
 | Concern | Owner |
