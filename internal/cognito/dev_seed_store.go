@@ -22,6 +22,7 @@ func (s *CognitoStore) UpsertSeedUser(ctx context.Context, poolID, username, ema
 	if config.EmailAsUsername && errors.Is(err, sql.ErrNoRows) {
 		user, err = s.lookupSignInEmail(ctx, poolID, email, config)
 	}
+	created := false
 	if errors.Is(err, sql.ErrNoRows) {
 		user, err = s.CreateUserIdentity(ctx, poolID, username, email, plaintext, "CONFIRMED", nil)
 		if errors.Is(err, errUsernameExists) {
@@ -30,10 +31,14 @@ func (s *CognitoStore) UpsertSeedUser(ctx context.Context, poolID, username, ema
 		if err != nil {
 			return "", err
 		}
+		created = true
 	} else if err != nil {
 		return "", err
 	}
-	samePassword := compareUserPasswordHash(user.PasswordHash, plaintext) == nil
+	// Successful creation already persisted bcrypt and SRP credentials for this
+	// password. Existing users (including concurrent-create retries) still need
+	// comparison before preserving lifecycle state or replacing credentials.
+	samePassword := created || compareUserPasswordHash(user.PasswordHash, plaintext) == nil
 	if !samePassword {
 		if err = s.SetUserPassword(ctx, user.Sub, plaintext, "CONFIRMED"); err != nil {
 			return "", err

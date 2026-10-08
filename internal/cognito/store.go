@@ -133,8 +133,15 @@ func (s *CognitoStore) bootstrap() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	// Startup owns one atomic schema transaction. The store is not published
+	// until every schema change and identity repair succeeds.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin cognito schema: %w", err)
+	}
+	defer tx.Rollback()
 	for _, stmt := range stmts {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("exec %q: %w", firstLine(stmt), err)
 		}
 	}
@@ -173,7 +180,7 @@ func (s *CognitoStore) bootstrap() error {
 		`ALTER TABLE challenge_sessions ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range migrations {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			// modernc.org/sqlite reports duplicate columns via the message
 			// "duplicate column name". Tolerate that, fail anything else.
 			if !strings.Contains(err.Error(), "duplicate column name") {
@@ -182,10 +189,16 @@ func (s *CognitoStore) bootstrap() error {
 		}
 	}
 
-	if err := s.migrateUserIdentity(ctx); err != nil {
+	if err := s.migrateUserIdentity(ctx, tx); err != nil {
 		return err
 	}
-	return s.bootstrapVerification(ctx)
+	if err := s.bootstrapVerification(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cognito schema: %w", err)
+	}
+	return nil
 }
 
 // --- Pool / Client CRUD --------------------------------------------------

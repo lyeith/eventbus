@@ -16,8 +16,9 @@ import (
 // Workflow codes are persisted independently of sign-in challenge sessions.
 // Each replaces its predecessor for one user/purpose and binds the identity,
 // destination and grant revision. Only a digest is stored in the identity DB.
-func (s *CognitoStore) bootstrapVerification(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS verification_codes (
+// bootstrapVerification shares startup's atomic schema transaction.
+func (s *CognitoStore) bootstrapVerification(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS verification_codes (
   sub TEXT NOT NULL,purpose TEXT NOT NULL,attribute_name TEXT NOT NULL,destination TEXT NOT NULL,
   code_salt TEXT NOT NULL,code_hash TEXT NOT NULL,expires_at INTEGER NOT NULL,
   auth_version INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,

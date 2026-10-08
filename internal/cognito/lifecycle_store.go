@@ -73,12 +73,9 @@ func (s *CognitoStore) SetPoolSignInConfig(ctx context.Context, poolID string, c
 	return err
 }
 
-func (s *CognitoStore) migrateUserIdentity(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+// migrateUserIdentity participates in bootstrap's transaction. Startup owns
+// commit and rollback so identity repair cannot leave a partial schema behind.
+func (s *CognitoStore) migrateUserIdentity(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
 		`UPDATE users SET username=email WHERE username=''`,
 		`UPDATE users SET username_key=username WHERE username_key=''`,
@@ -86,11 +83,11 @@ func (s *CognitoStore) migrateUserIdentity(ctx context.Context) error {
 		`UPDATE users SET password_changed_at=created_at WHERE password_changed_at=0 AND password_hash!=''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_pool_username ON users(pool_id,username_key)`,
 	} {
-		if _, err = tx.ExecContext(ctx, statement); err != nil {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("migrate user identity: %w", err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *CognitoStore) lookupUserByUsername(ctx context.Context, poolID, username string, config PoolSignInConfig) (*CognitoUser, error) {
