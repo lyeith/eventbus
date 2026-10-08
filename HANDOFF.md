@@ -1,7 +1,8 @@
 # Handoff
 
-Canonical SSD main; current runtime/fixture source5186da3. Public MIT EventBus.
-Latest public v0.11.2; audited v0.11.3 binaries to build/publish next.
+Canonical SSD main; runtime/fixture source through 5186da3. Public MIT EventBus.
+Published v0.11.3: clean tagged 0ac08e2, Go 1.26.0, CGO_ENABLED=0.
+Eight EventBus/gateway binaries + SHA256SUMS; all downloaded hashes verified.
 No Plans/application data or default Cognito DB touched; no dependencies added.
 
 Owner commits:
@@ -24,29 +25,36 @@ Owner commits:
   current-ARN/Deny checks; same-key concurrent insertion avoids unrelated eviction.
 
 docs/PERFORMANCE-AUDIT.md owns distributions, native scopes, reproduction and limits.
-Local medians: empty bootstrap153→34ms; async DescribeTarget11ms→4µs;
-FIFO10k native receive1.27→0.16ms; SNS100queues disabled1.16→0.61ms;
-gateway1000route miss142→14µs; full-cache exact IAM hit27→1.4µs.
-Seed numbers include random RSA; async durable throughput remains similar.
-Crypto/key caches, queue dedup indexes, cache expiry/routing structures and runtime
-reuse remain separate priorities, not required unfinished implementation.
+Local medians: empty bootstrap 153→34ms; async DescribeTarget 11ms→4µs;
+FIFO 10k native receive 1.27→0.16ms; SNS 100 queues disabled 1.16→0.61ms;
+gateway 1000-route miss 142→14µs; full-cache exact IAM hit 27→1.4µs.
+Seed includes random RSA; durable throughput remains similar. Larger crypto/key
+cache, queue dedup index, routing/cache structure and runtime reuse designs are
+separate priorities, not required unfinished work. Open issue board is empty.
 
-PASS saved SSD /tmp/eventbus-audit-*-20261008.log, existing24h lifetime:
-- Cognito fullnon42.474s; focused bootstrap/seed/legacy/persistence race35.022s.
-- Lambda fullrace96.269s /devcapture1.202s /localexec2.076s.
-- Messaging fullrace5.594s; gateway fullrace20.301s.
-- Eventsource1.593s /app19.444s /server2.732s /devquiescence1.052s races.
-- Ten native Python/Node SDK + retained-stack cases118.583s, no selected skips:
+PASS saved SSD /tmp/eventbus-audit-*-20261008.log, existing 24h lifetime:
+- Cognito full non-race 42.474s; focused bootstrap/seed/legacy/persistence race 35.022s.
+- Lambda full race 96.269s / devcapture 1.202s / localexec 2.076s.
+- Messaging full race 5.594s; gateway full race 20.301s.
+- Eventsource 1.593s / app 19.444s / server 2.732s / devquiescence 1.052s races.
+- Ten native Python/Node SDK + retained-stack cases 118.583s, no selected skips:
   provision/restart/JWT, SQS/SNS/Event, batches/FIFO/retries/settlement, evidence,
   retained resume, authenticated gateway callbacks and actual owned RustFS cleanup.
-- Vet all packages with sdksmoke,integration,performance tags; matrices and diff checks.
-Full Cognito race timed out4m during bcrypt; current test had run1s.
-No race/assertion failure was reported before timeout; full package race is a gap.
-Initial gateway mixed fixture expected greedy over full parameter route; corrected
-before production edits and reran only failed case; other baseline data retained.
+- Vet all packages with sdksmoke,integration,performance tags; matrices/diff checks.
+Full Cognito race timed out at 4m during bcrypt; current test had run 1s.
+No warning/assertion before timeout; complete package race remains a gap.
+Initial mixed gateway fixture expected greedy over full parameter route; corrected
+before production edits; only failed case reran, other baseline data retained.
 
-No owned environments/worktrees or active processes remain. Successful fixtures
-close/join before temp deletion. Failed owned operations72b1f2fa/ae026ad1 verified
-quiescent/unpinned, GC expiry Oct9 14:15:15/14:22:51UTC under host24h policy.
-Raw logs share finite24h retention; no new retention/migration/cleanup machinery.
-Prior empty failed-tooling scratch receipts keep Oct9 13:25/13:29UTC expiry.
+Actual packaged Linux amd64/macOS arm64 seed/reopen/JWKS, two-queue SNS, five
+Events/native execution IDs/terminal capture/actual child absence, 1000-route
+gateway and joined shutdown passed. Other targets cross-built, not executed.
+Initial packaged fixture wrongly equated HTTP request IDs with execution IDs;
+corrected correlation to actual child IDs without changing service contracts.
+Release source/metadata/checksum/package logs: /tmp/eventbus-v0.11.3-*-20261008.log.
+
+No owned environments/worktrees/processes remain; fixtures closed/joined before
+temp deletion. Both release stages/probes/downloaded duplicates were removed.
+Failed operations 72b1f2fa/ae026ad1/7aee0bfe verified quiescent/unpinned, normal GC
+expiry Oct9 14:15:15/14:22:51/14:57:04 UTC under host 24h policy.
+Prior empty tooling scratch receipts retain Oct9 13:25/13:29 UTC expiry.

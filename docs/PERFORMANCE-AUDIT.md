@@ -246,6 +246,24 @@ was corrected to existing native full-route precedence before production edits.
 Only the failed mixed case was rerun; the unchanged literal/cache baseline was
 retained.
 
+Published [v0.11.3](https://github.com/lyeith/eventbus/releases/tag/v0.11.3)
+contains eight binaries from clean tagged
+[0ac08e2](https://github.com/lyeith/eventbus/commit/0ac08e2a53f88d58262e1b3b9bc94724fec530a5),
+Go 1.26.0, CGO_ENABLED=0 and module version v0.11.3. Every uploaded binary was
+downloaded and verified against the build's SHA256SUMS.
+
+The actual packaged Linux amd64 and macOS arm64 EventBus/gateway binaries passed
+private Cognito seed/reopen and persisted JWKS; two-queue SNS envelope fanout;
+five async Event executions correlated through native IDs, three transition
+records per execution and actual child absence; a 1,000-literal-route gateway;
+and joined server shutdown. Linux arm64 and macOS amd64 were cross-built and
+metadata-checked but not executed.
+
+The initial packaged fixture incorrectly equated the HTTP API request ID with
+the native execution ID. The corrected fixture separately validates HTTP IDs and
+correlates capture to the IDs recorded by actual children. The service contract
+was unchanged.
+
 ## Reproduce
 
 Run each command serially, saving full output before filtering. Frozen SDK setup
@@ -271,11 +289,14 @@ env GOMAXPROCS=4 GOFLAGS=-p=2 ssd-dev operation --purpose test -- \
   2>&1 | tee /tmp/eventbus-audit-gateway.log | tail -30
 ```
 
-Saved SSD evidence is `/tmp/eventbus-audit-*-20261008.log`, including the separate
-corrected mixed-route baseline and failed full Cognito race log. Existing evidence
-retention is 24 hours. Successful fixtures close services, databases, writers,
-listeners and actual native child groups before removing owned temporary state.
-Failed operations retain diagnostic scratch under the same finite host policy.
+Saved SSD evidence is `/tmp/eventbus-audit-*-20261008.log` and
+`/tmp/eventbus-v0.11.3-*-20261008.log`, including corrected fixture baselines,
+failed attempts and packaged/release checksum results. Existing evidence retention
+is 24 hours. Successful fixtures close services, databases, writers, listeners
+and actual native child groups before removing owned temporary state. Release
+stages, probes and downloaded duplicates were removed on both hosts. Failed
+operations are verified quiescent/unpinned and retain diagnostic scratch under
+the same finite host policy; their expiry is recorded in STATE/HANDOFF.
 
 ## Remaining priorities
 
