@@ -82,13 +82,14 @@ type secretState struct {
 }
 type SecretsStore struct {
 	secrets           map[string]*secretState
+	secretsByARN      map[string]*secretState // Exact ARN aliases of the same state, guarded by mu.
 	region, accountID string
 	mu                sync.RWMutex
 	now               func() time.Time
 }
 
 func NewSecretsStore(region, accountID string) *SecretsStore {
-	return &SecretsStore{secrets: map[string]*secretState{}, region: region, accountID: accountID, now: time.Now}
+	return &SecretsStore{secrets: map[string]*secretState{}, secretsByARN: map[string]*secretState{}, region: region, accountID: accountID, now: time.Now}
 }
 
 var secretName = regexp.MustCompile(`^[A-Za-z0-9/_+=.@-]+$`)
@@ -221,6 +222,7 @@ func (ss *SecretsStore) Create(input CreateInput) (*Secret, error) {
 		state.labels["AWSCURRENT"] = id
 	}
 	ss.secrets[input.Name] = state
+	ss.secretsByARN[state.arn] = state
 	return state.snapshot(id), nil
 }
 func (ss *SecretsStore) GetValue(secretID, versionID, stage string) (*Secret, error) {
@@ -436,12 +438,7 @@ func (ss *SecretsStore) findLocked(id string) *secretState {
 	if state := ss.secrets[id]; state != nil {
 		return state
 	}
-	for _, state := range ss.secrets {
-		if state.arn == id {
-			return state
-		}
-	}
-	return nil
+	return ss.secretsByARN[id]
 }
 
 // Compatibility entry points are used by existing embedded hosts and tests.
@@ -465,5 +462,6 @@ func (ss *SecretsStore) DeleteSecret(id string, force bool) error {
 		return notFound()
 	}
 	delete(ss.secrets, state.name)
+	delete(ss.secretsByARN, state.arn)
 	return nil
 }

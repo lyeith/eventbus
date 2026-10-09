@@ -76,6 +76,9 @@ func (service *RotationService) Rotate(ctx context.Context, input RotateInput) (
 	if err != nil {
 		return nil, err
 	}
+	// Validation calls an external owner. Bind subsequent store transitions to
+	// this resolved generation if the name is deleted/recreated while it runs.
+	input.SecretID = existing.ARN
 	function := input.RotationLambdaARN
 	if function == "" {
 		function = existing.RotationLambdaARN
