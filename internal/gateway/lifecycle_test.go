@@ -161,7 +161,7 @@ func TestFrontendSPAFallbackAndConfigStrictness(t *testing.T) {
 }
 
 func TestIntegrationURIWithoutPathTargetsRoot(t *testing.T) {
-	target, _, err := mapIntegration(IntegrationConfig{Type: "HTTP_PROXY", URI: "http://backend"}, mappingInput{request: httptest.NewRequest("GET", "/source", nil)})
+	target, _, err := compileTestIntegration(t, IntegrationConfig{Type: "HTTP_PROXY", URI: "http://backend"}).mapRequest(mappingInput{request: httptest.NewRequest("GET", "/source", nil)})
 	if err != nil || target.Path != "/" {
 		t.Fatalf("root integration: target=%v err=%v", target, err)
 	}

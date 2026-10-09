@@ -30,14 +30,16 @@ type Options struct {
 }
 
 type compiledRoute struct {
-	config   RouteConfig
-	template pathTemplate
-	proxy    *httputil.ReverseProxy
+	config      RouteConfig
+	template    pathTemplate
+	integration *compiledIntegration
+	proxy       *httputil.ReverseProxy
 }
 type Gateway struct {
 	config       Config
 	options      Options
 	routes       []compiledRoute
+	redactions   []pathTemplate
 	authorizers  map[string]*lambdaAuthorizer
 	frontend     http.Handler
 	invokeClient *http.Client
@@ -76,6 +78,10 @@ func New(cfg Config, options Options) (*Gateway, error) {
 	result := &Gateway{config: cfg, options: options, transport: transport, connections: connections, authorizers: make(map[string]*lambdaAuthorizer), retained: retained}
 	invokeClient := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	result.invokeClient = invokeClient
+	for _, redaction := range cfg.LogRedactions {
+		template, _ := parseTemplate(redaction) // Validated before allocating owners.
+		result.redactions = append(result.redactions, template)
+	}
 	for name, configuration := range cfg.Authorizers {
 		result.authorizers[name] = &lambdaAuthorizer{config: configuration, client: invokeClient, cache: make(map[string]cachedAuthorization), now: time.Now}
 	}
@@ -84,6 +90,11 @@ func New(cfg Config, options Options) (*Gateway, error) {
 		if configuration.Integration.Type == "AWS_PROXY" {
 			result.routes = append(result.routes, compiledRoute{config: configuration, template: template})
 			continue
+		}
+		integration, err := compileIntegration(configuration.Integration)
+		if err != nil {
+			_ = result.Close()
+			return nil, err
 		}
 		proxy := &httputil.ReverseProxy{
 			Transport: transport,
@@ -111,7 +122,7 @@ func New(cfg Config, options Options) (*Gateway, error) {
 			ModifyResponse: removeBackendRequestID,
 			FlushInterval:  -1,
 		}
-		result.routes = append(result.routes, compiledRoute{config: configuration, template: template, proxy: proxy})
+		result.routes = append(result.routes, compiledRoute{config: configuration, template: template, integration: integration, proxy: proxy})
 	}
 	sort.SliceStable(result.routes, func(i, j int) bool {
 		left, right := result.routes[i], result.routes[j]
@@ -228,10 +239,13 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routeLabel = route.config.Path
-	for _, redaction := range gateway.config.LogRedactions {
-		template, _ := parseTemplate(redaction)
-		if _, ok := template.match(r.URL.Path); ok {
-			routeLabel = redaction
+	var redactionParts []string
+	for _, template := range gateway.redactions {
+		if !template.literal && redactionParts == nil {
+			redactionParts = splitRequestPath(r.URL.Path)
+		}
+		if _, ok := template.matchSegments(r.URL.Path, redactionParts); ok {
+			routeLabel = template.original
 			break
 		}
 	}
@@ -249,7 +263,7 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		gateway.serveLambda(w, r, route.config, event, response)
 		return
 	}
-	target, headers, err := mapIntegration(route.config.Integration, mappingInput{request: r, parameters: parameters, authorizer: response, config: gateway.config, requestID: requestID})
+	target, headers, err := route.integration.mapRequest(mappingInput{request: r, parameters: parameters, authorizer: response, config: gateway.config, requestID: requestID})
 	if err != nil {
 		writeGatewayError(w, http.StatusInternalServerError)
 		return

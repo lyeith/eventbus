@@ -222,7 +222,7 @@ func TestMappingCannotChangeTargetHostOrInjectQuery(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			cfg := IntegrationConfig{Type: "HTTP_PROXY", URI: "http://backend/{proxy}", RequestParameters: map[string]string{"integration.request.path.proxy": "context.authorizer.path"}}
 			request := httptest.NewRequest("GET", "/source?original=yes", nil)
-			target, _, err := mapIntegration(cfg, mappingInput{request: request, authorizer: authorizerResponse{Context: map[string]string{"path": value}}})
+			target, _, err := compileTestIntegration(t, cfg).mapRequest(mappingInput{request: request, authorizer: authorizerResponse{Context: map[string]string{"path": value}}})
 			if strings.HasPrefix(value, "//") || strings.Contains(value, "..") || strings.Contains(value, "\\") {
 				if err == nil {
 					t.Fatal("ambiguous mapping accepted")
