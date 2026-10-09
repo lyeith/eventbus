@@ -31,11 +31,16 @@ func sesValidateRaw(api, encoded string, limit int64) (map[string]any, *sesAPIEr
 	if !bytes.Contains(data, []byte("\r\n\r\n")) && !bytes.Contains(data, []byte("\n\n")) {
 		return nil, sesInvalid(api, "Raw message must contain headers and body separated by a blank line")
 	}
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for remaining := data; ; {
+		line, rest, found := bytes.Cut(remaining, []byte("\n"))
 		line = bytes.TrimSuffix(line, []byte("\r"))
 		if len(line)+2 > 1000 {
 			return nil, sesInvalid(api, "Raw message lines must not exceed 1000 characters including CRLF")
 		}
+		if !found {
+			break
+		}
+		remaining = rest
 	}
 	message, err := mail.ReadMessage(bytes.NewReader(data))
 	if err != nil {
