@@ -78,7 +78,7 @@ func (s *Handler) handleAssociateSoftwareToken(w http.ResponseWriter, r *http.Re
 			"AssociateSoftwareToken with Session (MFA_SETUP) is not supported by the local Cognito dev service")
 		return
 	}
-	user, ok := s.authorizeAccessToken(w, r, req.AccessToken, "AssociateSoftwareToken")
+	user, claims, ok := s.checkedAccessToken(w, r, req.AccessToken, "AssociateSoftwareToken")
 	if !ok {
 		return
 	}
@@ -87,9 +87,8 @@ func (s *Handler) handleAssociateSoftwareToken(w http.ResponseWriter, r *http.Re
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", "failed to generate secret")
 		return
 	}
-	if err := s.cognito.SetPendingTOTPSecret(r.Context(), user.Sub, secret); err != nil {
-		log.Error().Err(err).Msg("SetPendingTOTPSecret failed")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+	if err := s.cognito.setPendingTOTPSecret(r.Context(), user.Sub, secret, mfaGrantAuthorization(user, claims)); err != nil {
+		writeMFATransitionError(w, err, "AssociateSoftwareToken", true)
 		return
 	}
 	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{"SecretCode": secret})
@@ -105,23 +104,28 @@ func (s *Handler) handleVerifySoftwareToken(w http.ResponseWriter, r *http.Reque
 			"VerifySoftwareToken with Session (MFA_SETUP) is not supported by the local Cognito dev service")
 		return
 	}
-	user, ok := s.authorizeAccessToken(w, r, req.AccessToken, "VerifySoftwareToken")
+	user, claims, ok := s.checkedAccessToken(w, r, req.AccessToken, "VerifySoftwareToken")
 	if !ok {
 		return
 	}
+	s.verifySoftwareTokenForUser(w, r, user, mfaGrantAuthorization(user, claims), req.UserCode)
+}
+
+// verifySoftwareTokenForUser binds code validation to the authorized account
+// snapshot. The store admits only that secret and authorization at promotion.
+func (s *Handler) verifySoftwareTokenForUser(w http.ResponseWriter, r *http.Request, user *CognitoUser, authorization mfaAuthorization, code string) {
 	if user.PendingTOTPSecret == "" {
 		cognitoJSONError(w, http.StatusBadRequest, "SoftwareTokenMFANotFoundException",
 			"Software token MFA has not been associated")
 		return
 	}
-	if !isSixDigits(req.UserCode) || validateTOTPCodeAt(user.PendingTOTPSecret, req.UserCode, s.cognito.now()) != nil {
+	if !isSixDigits(code) || validateTOTPCodeAt(user.PendingTOTPSecret, code, s.cognito.now()) != nil {
 		// Cognito reports a wrong enrolment code as EnableSoftwareTokenMFAException.
 		cognitoJSONError(w, http.StatusBadRequest, "EnableSoftwareTokenMFAException", "Code mismatch")
 		return
 	}
-	if err := s.cognito.ConfirmPendingTOTPSecret(r.Context(), user.Sub); err != nil {
-		log.Error().Err(err).Msg("ConfirmPendingTOTPSecret failed")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+	if err := s.cognito.confirmPendingTOTPSecret(r.Context(), user.Sub, user.PendingTOTPSecret, authorization); err != nil {
+		writeMFATransitionError(w, err, "VerifySoftwareToken", true)
 		return
 	}
 	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{"Status": "SUCCESS"})
@@ -129,7 +133,7 @@ func (s *Handler) handleVerifySoftwareToken(w http.ResponseWriter, r *http.Reque
 
 // applyMFAPreference applies software-token settings to a user. Enabling
 // requires a verified software token; nil settings change nothing.
-func (s *Handler) applyMFAPreference(w http.ResponseWriter, r *http.Request, user *CognitoUser, settings *mfaSettings) bool {
+func (s *Handler) applyMFAPreference(w http.ResponseWriter, r *http.Request, user *CognitoUser, authorization mfaAuthorization, settings *mfaSettings) bool {
 	if settings == nil {
 		return true
 	}
@@ -138,9 +142,12 @@ func (s *Handler) applyMFAPreference(w http.ResponseWriter, r *http.Request, use
 			"User has not verified software token mfa")
 		return false
 	}
-	if err := s.cognito.SetMFAEnabled(r.Context(), user.Sub, settings.Enabled); err != nil {
-		log.Error().Err(err).Msg("SetMFAEnabled failed")
-		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
+	if err := s.cognito.setMFAPreference(r.Context(), user.Sub, settings.Enabled, authorization); err != nil {
+		action := "SetUserMFAPreference"
+		if !authorization.SelfService {
+			action = "AdminSetUserMFAPreference"
+		}
+		writeMFATransitionError(w, err, action, authorization.SelfService)
 		return false
 	}
 	return true
@@ -151,11 +158,11 @@ func (s *Handler) handleSetUserMFAPreference(w http.ResponseWriter, r *http.Requ
 	if !readCognitoJSON(w, r, &req) {
 		return
 	}
-	user, ok := s.authorizeAccessToken(w, r, req.AccessToken, "SetUserMFAPreference")
+	user, claims, ok := s.checkedAccessToken(w, r, req.AccessToken, "SetUserMFAPreference")
 	if !ok {
 		return
 	}
-	if !s.applyMFAPreference(w, r, user, req.SoftwareTokenMfaSettings) {
+	if !s.applyMFAPreference(w, r, user, mfaGrantAuthorization(user, claims), req.SoftwareTokenMfaSettings) {
 		return
 	}
 	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{})
@@ -170,10 +177,35 @@ func (s *Handler) handleAdminSetUserMFAPreference(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	if !s.applyMFAPreference(w, r, user, req.SoftwareTokenMfaSettings) {
+	if !s.applyMFAPreference(w, r, user, mfaAuthorization{AuthVersion: user.AuthVersion}, req.SoftwareTokenMfaSettings) {
 		return
 	}
 	cognitoJSONResponse(w, http.StatusOK, map[string]interface{}{})
+}
+
+func mfaGrantAuthorization(user *CognitoUser, claims map[string]interface{}) mfaAuthorization {
+	originJTI, _ := claims["origin_jti"].(string)
+	return mfaAuthorization{AuthVersion: user.AuthVersion, OriginJTI: originJTI, SelfService: true}
+}
+
+func writeMFATransitionError(w http.ResponseWriter, err error, action string, selfService bool) {
+	switch {
+	case errors.Is(err, errTokenRevoked), selfService && errors.Is(err, sql.ErrNoRows):
+		message := "User authorization state changed"
+		if selfService {
+			message = "Access Token has been revoked"
+		}
+		cognitoJSONError(w, http.StatusBadRequest, "NotAuthorizedException", message)
+	case errors.Is(err, sql.ErrNoRows):
+		cognitoJSONError(w, http.StatusBadRequest, "UserNotFoundException", "User does not exist")
+	case errors.Is(err, errTOTPEnrollmentChanged):
+		cognitoJSONError(w, http.StatusBadRequest, "EnableSoftwareTokenMFAException", "Software token association changed; associate and verify again")
+	case errors.Is(err, errSoftwareTokenNotVerified):
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "User has not verified software token mfa")
+	default:
+		log.Error().Err(err).Str("action", action).Msg("MFA state transition failed")
+		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", "Failed to update software token MFA")
+	}
 }
 
 func (s *Handler) handleGlobalSignOut(w http.ResponseWriter, r *http.Request) {

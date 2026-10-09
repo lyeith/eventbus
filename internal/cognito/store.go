@@ -458,29 +458,6 @@ func (s *CognitoStore) LookupUserBySub(ctx context.Context, sub string) (*Cognit
 	return scanUserRow(row)
 }
 
-// SetPendingTOTPSecret records the secret AssociateSoftwareToken issued.
-func (s *CognitoStore) SetPendingTOTPSecret(ctx context.Context, sub, secret string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET totp_pending_secret = ? WHERE sub = ?`, secret, sub)
-	return err
-}
-
-// ConfirmPendingTOTPSecret makes the pending secret the user's software
-// token, as a successful VerifySoftwareToken does.
-func (s *CognitoStore) ConfirmPendingTOTPSecret(ctx context.Context, sub string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE users SET totp_secret = totp_pending_secret, totp_pending_secret = '',
-			software_token_verified = 1
-		WHERE sub = ? AND totp_pending_secret != ''
-	`, sub)
-	return err
-}
-
-// SetMFAEnabled records the user's software-token MFA preference.
-func (s *CognitoStore) SetMFAEnabled(ctx context.Context, sub string, enabled bool) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE users SET mfa_enabled = ? WHERE sub = ?`, boolToInt(enabled), sub)
-	return err
-}
-
 // RevokeUserTokens advances the grant revision atomically with invalidating
 // challenges. The seconds cutoff remains monotonic for legacy grants.
 func (s *CognitoStore) RevokeUserTokens(ctx context.Context, sub string, at int64) error {
