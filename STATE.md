@@ -1,51 +1,54 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT standalone AWS
-emulator and agent harness. Plans/application state remains untouched.
-Latest public release: https://github.com/lyeith/eventbus/releases/tag/v0.11.3
-Eight binaries + SHA256SUMS; downloaded assets verified against local builds.
-Clean tagged source 0ac08e2; Go 1.26.0, CGO_ENABLED=0, module v0.11.3.
+emulator and agent harness. Plans/application data remains untouched.
+Current public release: https://github.com/lyeith/eventbus/releases/tag/v0.11.3
+All Oct9 bounded performance/ownership fixes are committed through f92de66.
+Next: package and publish verified v0.11.4 under existing release authorization.
 
-General audit: docs/PERFORMANCE-AUDIT.md; prior runtime/launcher evidence is
-docs/PERFORMANCE-REVIEW.md. Seven owner commits through 5186da3: reporting;
-Cognito atomic bootstrap/seed; SQS waiting order/compaction; SNS envelope reuse;
-Lambda count-only logs; Lambda async capture ownership; gateway matching/cache.
-No API/schema/dependency/crypto/durability changes. Board was empty at publication.
+Owners now enforce:
+- Cognito atomic exact-secret MFA promotion with current authorization admission.
+- Contextual consumer polling; sticky cleanup faults fence launches and retain
+  app SQLite/capture dependencies after actual shutdown joins.
+- localexec output-copy evidence independent of exit/cancellation errors;
+  merged pipes and native Lambda/trigger result/retry policies preserved.
+- SQS removed-reference clearing, scoped dedup expiry, shared current deletion
+  and field/MD5 projection; Lambda avoids discarded receive snapshots.
+- Firehose prepared jq and immutable flush snapshots; quotas count construction,
+  retries and pending delivery; compression runs outside admission locks.
+- Gateway immutable mapping/redaction plans; Secrets exact ARN index and
+  rotation generation binding before external validation.
+- Lambda shared HTTP preparation; Scheduler owns group capability refusal.
+- Production import-boundary guard; PR/main CI with explicit Python/Node setup
+  and SDK/Swagger checks scoped to their owner.
 
-Local medians, fixed before→after fixtures (ms):
-- Empty Cognito bootstrap 152.772→33.553; first tiny seed 204.766→135.574.
-  RSA randomness limits seed attribution; existing bcrypt comparison remains.
-- Lambda DescribeTarget during durable Event capture 11.120→0.003692.
-  Accepted batches still serialize durable records; no throughput claim.
-- FIFO depth 10k native receive 1.266→0.158; Lambda receive 1.546→0.349.
-  Native receive excludes projection; Lambda includes byte admission/projection.
-- SNS 100-queue publish: capture disabled 1.162→0.609; durable 6.172→4.949.
-- Gateway 1000-route miss 0.142260→0.014339; cached IAM hit 0.026808→0.001418.
-  Gateway values are normalized ten-call batch observations.
-- Disabled private log projection / 64KiB merged tail: 65536→0 bytes/op.
+Fixed before/after fixture medians (local milliseconds):
+- Firehose admission during 32MiB GZIP: 553.901 -> 0.032993.
+  Build/read remains about 0.6s; no compression throughput gain claimed.
+- FIFO 10k unique send: 0.146274 -> 0.016211;
+  ten strict deletes: 1.096823 -> 0.002540.
+- Gateway 100 redactions/12 mappings: 0.127608 -> 0.058293;
+  allocations 636 -> 128/op.
+- Secrets 10k canonical ARN GetValue: 0.116544 -> 0.001143.
+- Lambda binary projection: similar wall time, fewer detached copies/allocations.
+Full distributions, workloads and caveats: docs/PERFORMANCE-AUDIT.md.
 
-PASS: full Cognito non-race 42.474s, focused startup/seed/legacy/persistence
-race 35.022s; Lambda full race 96.269s, capture 1.202s/localexec 2.076s;
-messaging race 5.594s/gateway race 20.301s; affected consumer race suites.
-Ten native Python/Node SDK + retained-stack cases 118.583s, no selected skips;
-owned RustFS delivery/cleanup and authenticated gateway continuations included.
-All-package vet with sdksmoke/integration/performance tags PASS.
-Full Cognito race hit its 4m budget in bcrypt; no warning/assertion before timeout.
-Complete package-wide Cognito race remains unverified; scoped race/full non pass.
+PASS: full Cognito race 295.735s (prior gap closed); messaging/Firehose,
+gateway/Secrets, Scheduler/dispatcher, final full localexec/consumer/trigger/
+Lambda/app/quiescence/architecture races. Tagged all-package vet passed.
+Full SDK/retained stack race 278.385s; unchanged Swagger 9.179s;
+older unmodified boto3/botocore 1.39.4 mapping proof 25.023s.
+Both owned RustFS Firehose integrations passed; native process/group joined.
+macOS arm64 localexec race passed 6.873s; Linux FD fault tests are Linux-only.
 
-Actual packaged Linux amd64 and macOS arm64: private Cognito seed/reopen/JWKS,
-SNS fanout, async native IDs/terminal capture/actual child absence, 1000-route
-gateway and joined shutdown PASS. Other two targets cross-built, not executed.
+Cold native consumer/trigger/SRP-email-token fixtures passed with fixed
+interpreter/environment, actual effects and process joins. No warm pool added.
+Managed consumer total median 1.20s vs native-uv attribution 0.25s;
+repeated project-mode ownership/workspace/digest work belongs to ssd-dev-tools.
+#30 opt-in warm Lambda workers remains a separate runtime design.
 
-One serial SSD lane, GOMAXPROCS=4/GOFLAGS=-p=2; owned private fixtures only.
-No default DB/live stack/new environment/worktree/owned process remains.
-Release stages, downloaded duplicates and probes removed on both hosts.
-Audit/release logs in SSD /tmp have existing 24h TTL. Failed operations are
-quiescent/unpinned: gateway baseline, Cognito race and initial packaged fixture;
-GC expiry Oct9 14:15:15 / 14:22:51 / 14:57:04 UTC respectively.
-Prior empty tooling scratch receipts retain Oct9 13:25/13:29 UTC TTL.
-
-Read-only Oct9 follow-up at58d27a1, recorded in PERFORMANCE-AUDIT.md.
-Next: atomic Cognito MFA promotion; consumer cancellation/sticky cleanup errors;
-SQS removed-payload roots; import/CI boundaries; then FIFO expiry and Firehose
-prepared jq/flush contention. New speedups are unmeasured; no runtime edits/tests.
+No default DB/live stack/new retained environment/worktree touched.
+Successful private archives/legacy SDK environment/RustFS data were removed;
+macOS scratch removed. Failed runs verified quiescent/unpinned, existing 24h TTL:
+47266c55 / a396cb0b / 044356a5 expire Oct10 08:16:37 / 08:31:29 / 08:35:11 UTC.
+One serial SSD test/build lane; no owned active test process remains.
