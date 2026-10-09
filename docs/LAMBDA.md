@@ -135,6 +135,27 @@ and service shutdown stop its process group and join its launched child.
 There is no warm-runtime cache. This executes local application code and is
 not an operating-system sandbox.
 
+## Registered GetFunction metadata
+
+`GET /2015-03-31/functions/{name}` implements the read-only
+[GetFunction API](https://docs.aws.amazon.com/lambda/latest/api/API_GetFunction.html)
+for registered targets. Names, ARNs and explicit aliases/versions resolve through
+the same registry as Invoke; optional `Qualifier` selects a registered entry.
+Missing targets return `ResourceNotFoundException`; malformed names or qualifiers
+return `InvalidParameterValueException`. Lookup never starts a handler.
+
+The response contains only `Configuration`: `FunctionName`, `FunctionArn`,
+`Runtime`, `Handler` when applicable, `Timeout`, `Version` and `State: Active`.
+Runtime is the configured family (`python`, `node`, `provided` or `command`);
+it does not assert an AWS runtime version. Handler is a basename/export reference,
+and fractional local timeouts round up to seconds. Explicit numeric versions
+are preserved; aliases report `$LATEST`. Local source paths, command arguments,
+environment variables and downloadable `Code` are omitted.
+
+This subset supports normal LocalStack S3 notification validation alongside
+Invoke `DryRun` and `Event`. See [S3 notifications](S3-NOTIFICATIONS.md) for
+the required mixed-provider routing and the actual upload integration proof.
+
 ## Async execution evidence
 
 Accepted events execute in an instance-owned, bounded queue. Capacity includes
@@ -380,7 +401,7 @@ errors rather than claiming a healthy shutdown.
 
 The queue and history are in-memory: restart recovery, durable payload storage,
 exactly-once execution and cloud system/throttle retry infrastructure are not
-implemented. Capture files retain evidence, not replayable events. Function
+implemented. Capture files retain evidence, not replayable events. Remaining function
 management/provisioning and event-invoke configuration APIs, cloud destinations/
 DLQs, response streaming, extensions and CloudWatch delivery remain outside scope.
 See [working authorizer examples](../examples/lambda/functions.yaml), the

@@ -31,6 +31,7 @@ type Function struct {
 	WorkDir     string            `yaml:"work_dir"`
 }
 
+var functionARNReference = regexp.MustCompile(`^arn:aws(?:-[a-z0-9-]+)?:lambda:[a-z]{2}(?:-[a-z0-9]+)+-[0-9]+:[0-9]{12}:function:(.+)$`)
 var functionName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}(?::[A-Za-z0-9_-]{1,128}|:\$LATEST)?$`)
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var exportedName = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)

@@ -201,6 +201,10 @@ func (service *Service) Match(request *http.Request) bool {
 func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Amzn-RequestId", uuid.NewString())
 	writer.Header().Set("Content-Type", "application/json")
+	if getFunctionPath(request) {
+		service.serveGetFunction(writer, request)
+		return
+	}
 	if !service.Match(request) || !strings.HasSuffix(request.URL.Path, invokeSuffix) {
 		invokeError(writer, http.StatusNotFound, "ResourceNotFoundException", "Lambda operation not found")
 		return
@@ -316,11 +320,11 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 
 func resolveName(name, qualifier string) (string, error) {
 	if strings.HasPrefix(name, "arn:") {
-		parts := strings.SplitN(name, ":", 7)
-		if len(parts) != 7 || parts[2] != "lambda" || parts[5] != "function" || parts[3] == "" || parts[4] == "" {
+		parts := functionARNReference.FindStringSubmatch(name)
+		if parts == nil {
 			return "", errors.New("Invalid Lambda function ARN")
 		}
-		name = parts[6]
+		name = parts[1]
 	} else if account, suffix, found := strings.Cut(name, ":function:"); found {
 		if len(account) != 12 || strings.Trim(account, "0123456789") != "" {
 			return "", errors.New("Invalid partial Lambda function ARN")
