@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ var (
 
 type SSMStore struct {
 	parameters map[string][]storedParameter // immutable versions, oldest first
+	names      []string                     // raw names, sorted; updated with parameters under mu
 	mu         sync.RWMutex
 	sealer     cipher.AEAD
 	cursorKey  [32]byte
@@ -155,6 +157,10 @@ func (s *SSMStore) putParameterValue(parameter SSMParameter, overwrite bool, des
 		// supported, so no oldest-version label can prevent this deletion.
 		history = append([]storedParameter(nil), history[len(history)-100:]...)
 	}
+	if len(s.parameters[name]) == 0 {
+		index := sort.SearchStrings(s.names, name)
+		s.names = slices.Insert(s.names, index, name)
+	}
 	s.parameters[name] = history
 	result := parameter // independent public value snapshot, never cipher material
 	return &result, nil
@@ -216,28 +222,12 @@ func canonicalPath(path string) string {
 	return path
 }
 
-func parameterUnderPath(name, path string, recursive bool) bool {
-	prefix := canonicalPath(path)
-	if prefix != "/" {
-		prefix += "/"
-	}
-	hierarchicalName := name
-	if !strings.HasPrefix(hierarchicalName, "/") {
-		hierarchicalName = "/" + hierarchicalName
-	}
-	if !strings.HasPrefix(hierarchicalName, prefix) {
-		return false
-	}
-	remainder := strings.TrimPrefix(hierarchicalName, prefix)
-	return remainder != "" && (recursive || !strings.Contains(remainder, "/"))
-}
-
 // GetParametersByPath retains the internal recursive plaintext snapshot API.
 // Native reads use ListParametersByPath for recursive selection and pagination.
 func (s *SSMStore) GetParametersByPath(path string) []*SSMParameter {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	names := s.pathNames(path, true)
+	names := s.pathNames(path, true, "", 0)
 	result := make([]*SSMParameter, 0, len(names))
 	for _, name := range names {
 		history := s.parameters[name]
@@ -250,14 +240,82 @@ func (s *SSMStore) GetParametersByPath(path string) []*SSMParameter {
 	return result
 }
 
-func (s *SSMStore) pathNames(path string, recursive bool) []string {
-	names := make([]string, 0)
-	for name := range s.parameters {
-		if parameterUnderPath(name, path, recursive) {
-			names = append(names, name)
+type parameterNameRange struct {
+	start, end int
+	prefix     string
+}
+
+// pathNameRanges selects only the matching raw-name ranges. Bare and slash
+// names share hierarchy semantics but retain their original lexical order.
+// Callers hold mu for both the index and the associated stored versions.
+func (s *SSMStore) pathNameRanges(path string) []parameterNameRange {
+	path = canonicalPath(path)
+	if path == "/" {
+		return []parameterNameRange{{start: 0, end: len(s.names)}}
+	}
+	if !strings.HasPrefix(path, "/") {
+		return nil
+	}
+	prefix := path + "/"
+	ranges := make([]parameterNameRange, 0, 2)
+	for _, rawPrefix := range []string{prefix, strings.TrimPrefix(prefix, "/")} {
+		// Only the first range may contain slash names. Invalid internal
+		// double-slash paths must not accidentally match ordinary names.
+		if rawPrefix != prefix && strings.HasPrefix(rawPrefix, "/") {
+			continue
+		}
+		start := sort.SearchStrings(s.names, rawPrefix)
+		end := start + sort.Search(len(s.names)-start, func(offset int) bool {
+			return !strings.HasPrefix(s.names[start+offset], rawPrefix)
+		})
+		if start != end {
+			ranges = append(ranges, parameterNameRange{start: start, end: end, prefix: rawPrefix})
 		}
 	}
-	sort.Strings(names)
+	if len(ranges) == 2 && ranges[1].start < ranges[0].start {
+		ranges[0], ranges[1] = ranges[1], ranges[0]
+	}
+	return ranges
+}
+
+// pathNames returns detached names after the cursor. A positive limit stops
+// after the page and its lookahead; zero selects all names for the fixture API.
+func (s *SSMStore) pathNames(path string, recursive bool, lastName string, limit int) []string {
+	capacity := limit
+	if capacity == 0 {
+		capacity = 10
+	}
+	names := make([]string, 0, capacity)
+	after := 0
+	if lastName != "" {
+		after = sort.Search(len(s.names), func(index int) bool { return s.names[index] > lastName })
+	}
+	for _, span := range s.pathNameRanges(path) {
+		for index := max(span.start, after); index < span.end; {
+			name := s.names[index]
+			remainder := name[len(span.prefix):]
+			if span.prefix == "" {
+				remainder = strings.TrimPrefix(remainder, "/")
+			}
+			if !recursive {
+				first, _, nested := strings.Cut(remainder, "/")
+				if nested {
+					// All descendants of this immediate child are contiguous.
+					// Skip the subtree rather than revisiting it on every page.
+					subtree := name[:len(name)-len(remainder)+len(first)+1]
+					index += sort.Search(span.end-index, func(offset int) bool {
+						return !strings.HasPrefix(s.names[index+offset], subtree)
+					})
+					continue
+				}
+			}
+			names = append(names, name)
+			if limit > 0 && len(names) == limit {
+				return names
+			}
+			index++
+		}
+	}
 	return names
 }
 
@@ -296,14 +354,10 @@ func (s *SSMStore) ListParametersByPath(path string, recursive, withDecryption b
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	names := s.pathNames(path, recursive)
-	start := sort.SearchStrings(names, cursor.LastName)
-	if cursor.LastName != "" && start < len(names) && names[start] == cursor.LastName {
-		start++
-	}
-	end := min(start+maxResults, len(names))
-	parameters := make([]*SSMParameter, 0, end-start)
-	for _, name := range names[start:end] {
+	names := s.pathNames(path, recursive, cursor.LastName, maxResults+1)
+	end := min(maxResults, len(names))
+	parameters := make([]*SSMParameter, 0, end)
+	for _, name := range names[:end] {
 		history := s.parameters[name]
 		parameter, err := s.snapshot(history[len(history)-1], withDecryption)
 		if err != nil {
@@ -336,5 +390,7 @@ func (s *SSMStore) DeleteParameterIfExists(name string) bool {
 		return false
 	}
 	delete(s.parameters, name)
+	index := sort.SearchStrings(s.names, name)
+	s.names = slices.Delete(s.names, index, index+1)
 	return true
 }
