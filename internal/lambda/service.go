@@ -61,6 +61,7 @@ type Service struct {
 	asyncQueue                                         []*asyncTask
 	asyncTasks                                         map[string]*asyncTask
 	asyncHistory                                       []AsyncRecord
+	asyncHistoryNext                                   int
 	asyncOutstanding, asyncCapacity, asyncHistoryLimit int
 	asyncRetryDelays                                   [2]time.Duration
 	asyncWake                                          chan struct{}

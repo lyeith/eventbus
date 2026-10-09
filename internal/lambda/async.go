@@ -147,11 +147,12 @@ func (service *Service) wakeAsyncLocked() {
 // bounded diagnostic history; an optional dev_async.log_path retains JSONL.
 func (service *Service) AsyncSnapshot() []AsyncRecord {
 	service.mu.Lock()
-	defer service.mu.Unlock()
-	records := append([]AsyncRecord(nil), service.asyncHistory...)
+	records := make([]AsyncRecord, len(service.asyncHistory), len(service.asyncHistory)+len(service.asyncTasks))
+	copy(records, service.asyncHistory)
 	for _, task := range service.asyncTasks {
 		records = append(records, task.record)
 	}
+	service.mu.Unlock()
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].QueuedAt.Equal(records[j].QueuedAt) {
 			return records[i].RequestID < records[j].RequestID
@@ -206,16 +207,27 @@ func (service *Service) finishAsync(task *asyncTask, state, errorType string) {
 	task.record = record
 	delete(service.asyncTasks, task.record.RequestID)
 	service.asyncOutstanding--
-	service.asyncHistory = append(service.asyncHistory, task.record)
-	if excess := len(service.asyncHistory) - service.asyncHistoryLimit; excess > 0 {
-		copy(service.asyncHistory, service.asyncHistory[excess:])
-		service.asyncHistory = service.asyncHistory[:service.asyncHistoryLimit]
-	}
+	service.appendAsyncHistoryLocked(task.record)
 	service.wakeAsyncLocked()
 	if task.release != nil {
 		task.release(errors.Join(task.ownershipErr, service.asyncEvidenceErr))
 		task.release = nil
 	}
+}
+
+// appendAsyncHistoryLocked retains the most recently completed records without
+// shifting the entire bounded history on every completion. Snapshot ordering is
+// independent of this physical ring layout and is applied to detached copies.
+func (service *Service) appendAsyncHistoryLocked(record AsyncRecord) {
+	if service.asyncHistoryLimit <= 0 {
+		return
+	}
+	if len(service.asyncHistory) < service.asyncHistoryLimit {
+		service.asyncHistory = append(service.asyncHistory, record)
+		return
+	}
+	service.asyncHistory[service.asyncHistoryNext] = record
+	service.asyncHistoryNext = (service.asyncHistoryNext + 1) % service.asyncHistoryLimit
 }
 
 // pollAsync owns one selection/capture transaction. A nil wake with no task
