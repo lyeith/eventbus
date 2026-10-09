@@ -1,63 +1,62 @@
 # Handoff
 
-Canonical SSD /home/spite/Projects/eventbus, main; public MIT EventBus.
-Published v0.12.0: https://github.com/lyeith/eventbus/releases/tag/v0.12.0
-Clean tagged source 953ca65; Go 1.26.0, CGO_ENABLED=0, module v0.12.0.
-Eight service/gateway binaries + SHA256SUMS; all downloaded assets match builds.
-All new tickets #30/#31/#32 implemented, pushed and closed; board is clear.
+Canonical SSD /home/spite/Projects/eventbus, main. Published runtime remains
+v0.12.0 (tagged source 953ca65); no release change in this audit round.
+Previous tickets #30/#31/#32 remain implemented; see Git/release documentation.
 
-Owner commits:
-- 9f508f6: registered GetFunction metadata and validated LocalStack S3 proof.
-- 4f33bd7: bounded warm Python/Node workers, explicit local reload, completion
-  scopes, worker leases, native messaging proof and measured SDK latency/RSS.
-- b6f94cb: six v1 SES configuration-set/destination operations and native Send/
-  explicit local Open/Bounce through the existing SNS delivery owner.
-- 953ca65: agent contracts, common ownership and verification guides.
+Completed second performance audit against main 1a842d1:
+docs/PERFORMANCE-AUDIT-ROUND-2.md leads with ranked remaining work and gives
+native measurements, exact owner boundaries, required contracts and reproduction.
+README links current and historical reports. Seven performance_round2_test.go
+files belong to devcapture, firehose, gateway, lambda, messaging, ses and ssm.
+Production source and dependencies are unchanged.
 
-Warm success joins response/log/per-request RPC boundaries; a separate lease
-owns the worker until error/timeout/reload/drain/Close joins process and children.
-Global capacity counts retired generations and fresh fallbacks. Registry
-snapshots are immutable; source reload refuses a concurrent registration change.
-Exact Python primary-source loading preserves package import/re-export semantics
-and avoids stale same-timestamp bytecode. Dependencies import normally.
+Strongest bounded targets:
+1. SSM ordered-name index/prefix-cursor selection: 10k SDK traversal 4.397s,
+   core 3.338s. Each current ten-item page rescans/sorts all names.
+2. SNS immutable filter inputs per publication: 100 destinations/64KiB body
+   124.020ms and 40.446MB allocated vs 31.310ms/7.796MB without filters.
+3. Firehose stream-owned prepared location: 500 records UTC 1.545ms,
+   Singapore 6.630ms, New York 10.214ms.
+Then: Lambda warm encode-once/bounded response capacity; SNS FIFO expiry;
+SES MIME line-index removal; gateway cached-identity in-flight coalescing.
+Gateway 16 forced misses caused 16 actual authorizer invocations; fresh/warm-
+cap-one bursts 719.401/70.697ms. This is controlled structural evidence.
+Do not equate separate workload timings or claim unmeasured speedups.
 
-SES separates management from durable send capture, snapshots Send routing and
-retains bounded metadata-only correlations. Concurrent updates preserve resource
-identity; delete/recreate is fenced. Accepted Send survives caller disconnect.
-Downstream SNS admission failure cannot undo captured SES acceptance.
-GetFunction shares Invoke selection; private paths/environment/code are omitted.
-
-Independent integrated review accepted all ownership, contract and lifecycle
-fixes: cancellation before launch, stale bytecode, exited-worker reuse, ordered
-logs, stalled Runtime API body, truthful completion scope, SES cancellation,
-bounded correlation expiry and concurrent destination updates.
+Larger seam: Cognito triggers still launch Node each step (prior five-step
+median 895.680ms). App should compose a consumer-owned execution port into
+the trigger adapter backed by the existing Lambda managed execution owner.
+Preserve trigger-specific privacy, strict event validation, deadlines/output
+caps and actual joins; avoid a second pool or peer-package imports.
+Cognito key decoding remains uncached; immutable pool keys need deletion/
+generation invalidation and final account/revocation checks.
+Capture throughput 195–235 durable records/s on owned XFS is Sync-limited;
+more producers mostly add waiting. Any group commit must await actual durable
+completion and retain sticky failures, order, drain/Close and evidence.
 
 Verification:
-- Release-source CI passed both jobs; full unit race/vet, frozen Python/JS SDK
-  checks and unchanged Express/Swagger:
-  https://github.com/lyeith/eventbus/actions/runs/37941175215
-  CI Lambda 103.356s / SES 11.294s / SDK 231.840s / Swagger 4.603s.
-- Local full SDK race 277.526s, including actual warm SNS/SQS delivery/ACK/drain.
-- Linux allWarm race 9.077s; macOS arm64 allWarm 5.206s.
-- Local app 32.762s / eventsource 2.301s / architecture 1.115s races passed.
-- Initial full Lambda run failed Node fallback fixtures before module markers;
-  realistic deliberate phase margins/actual shared-budget assertions fixed the
-  fixture only. Targeted fallback 17.145s and full CI Lambda now pass.
-- SES core 13.721s; cancellation 1.018s; accepted bulk/concurrent updates 1.025s;
-  unchanged SES/SNS/Lambda SDK proof 2.081s.
-- Actual LocalStack 3.8.1 S3 race 13.134s: validation enabled, original Put/Copy/
-  multipart/version/filter records, native retries, pending graceful drain.
-- Vet with sdksmoke/integration/performance tags; five Python contracts.
-- Actual packaged Linux amd64/macOS arm64 metadata, warm/reload, native SES/
-  SNS/SQS Send/Open/Bounce and process shutdown. Other targets not executed.
-- Performance fixture: 32 accepted SDK sends; eight calls per runtime/mode,
-  including first. Python fresh/warm medians 216.078/8.565ms; Node 272.591/12.150ms.
-  Idle RSS medians 46,610,432/97,937,408 bytes; no sustained stability claim.
+- Non-race owner measurements: messaging 14.342s, Firehose 0.531s,
+  Lambda 10.632s incl isolated benchmarks, SSM 23.398s, gateway 5.800s,
+  capture 1.991s, SES 1.514s. All native assertions passed.
+- Runtime API 4MiB attribution: ReadAll 90.71% sampled allocation space;
+  required JSON validation 73.28% cumulative CPU. Profiles removed.
+- Scoped new-fixture races: capture 4.422s, Firehose 3.137s, gateway 9.296s,
+  Lambda 60.725s, messaging 110.069s, SES 20.455s.
+- Initial SSM race 30s SDK deadline failed; instrumentation magnified known
+  store cost. -short now runs one full traversal, bounded 2m context and exact
+  page-count guards; all sizes/paths passed in 51.332s.
+- Final FIFO fixture race 19.067s after moving fatal assertions outside locks.
+- Performance-tag vet across all seven owners and formatting/diff checks passed.
+- Independent fixture/report review accepted after bounded failure paths and
+  precise warm-serialization/store-timing/native-deny-cache wording.
+- Full SDK suite/release rebuild not rerun: production behavior unchanged.
 
-Cleanup: exact S3 resources/containers and introduced 636MB image removed;
-macOS archive/binary, release stage, probes and downloaded duplicates removed.
-No owned process, temporary worktree, dependency or application/default DB change.
-Task logs retained under receipt 4eaefff6, quiescent/unpinned, expire Oct10
-13:43:54 UTC; S3 fixture failures 779b0793/20a07398 expire 13:26:28/13:27:22 UTC.
-Successful SSD scratch removes automatically. Host launcher work is separate.
-Preserve unrelated laptop Plans edits; no remaining work for these tickets.
+Cleanup: private fixtures, actual children/listeners and profiles joined/removed;
+no temporary worktree, dependency, default DB or live stack change.
+Raw logs in /tmp/eventbus-audit-round2-*-20261009.log have existing 24h retention.
+Failure receipt 52df5492 verified quiescent/unpinned; expiry Oct10 14:36:28 UTC.
+Previous release receipt 4eaefff6 expires13:43:54 UTC; S3 failures 779b0793/
+20a07398 expire 13:26:28/13:27:22 UTC on Oct10. Success scratch auto-removes.
+Preserve unrelated laptop Plans changes. Remaining optimizations are proposals,
+not implemented behavior; this audit's requested work is complete.

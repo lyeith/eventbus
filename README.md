@@ -36,7 +36,8 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [API gateway](docs/GATEWAY.md): REST/HTTP REQUEST authorizers and HTTP/Lambda proxy integrations.
 - [Lambda execution](docs/LAMBDA.md): application-owned handlers, opt-in warm Python/Node workers and explicit local reload.
 - [S3 notifications](docs/S3-NOTIFICATIONS.md): validated LocalStack uploads into registered EventBus Lambda targets.
-- [Performance audit](docs/PERFORMANCE-AUDIT.md): startup, capture, messaging and gateway fixes, measurements and limits.
+- [Current performance audit](docs/PERFORMANCE-AUDIT-ROUND-2.md): ranked remaining targets, measurements, owners and contracts.
+- [Previous performance audit](docs/PERFORMANCE-AUDIT.md): implemented startup, capture, messaging and gateway fixes.
 - [Runtime and launcher review](docs/PERFORMANCE-REVIEW.md): phase measurements and the separate SSD tooling fix.
 - [SQS Lambda mappings](docs/EVENT-SOURCES.md): native provisioning and completion-based acknowledgment.
 - [Scheduler](docs/SCHEDULER.md): one-time schedules targeting local Lambda events.

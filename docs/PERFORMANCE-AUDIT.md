@@ -1,5 +1,7 @@
 # Performance audit: startup, capture, messaging and routing
 
+For the remaining targets on v0.12.0, read the [second audit round](PERFORMANCE-AUDIT-ROUND-2.md).
+
 8 October 2026. This continues the [runtime and launcher review](PERFORMANCE-REVIEW.md).
 EventBus baseline was `c977806`, plus the opt-in measurement fixtures.
 After measurements used the same fixtures with the package fixes described here.
