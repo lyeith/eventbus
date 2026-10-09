@@ -18,7 +18,8 @@ import (
 )
 
 // Fixed total work distinguishes durable throughput from producer lock waiting.
-// Sync instrumentation still calls the real owned file's Sync on every append.
+// Every acknowledged append is covered by an actual owned-file Sync.
+// Instrumentation counts and times the opportunistic durable groups.
 func TestPerformanceRound2CaptureConcurrency(t *testing.T) {
 	const count = 64
 	type record struct {
@@ -92,9 +93,10 @@ func TestPerformanceRound2CaptureConcurrency(t *testing.T) {
 					testperf.Report(t, t.Name(), "fixed_64_records_wall_ms", []float64{float64(elapsed) / float64(time.Millisecond)})
 					t.Logf("PERFORMANCE_ROUND2_CAPTURE mode=%s payload_bytes=%d producers=%d records=%d throughput_records_per_second=%.3f joined=true append_samples=producer_index_order", mode, size, producers, count, float64(count)/elapsed.Seconds())
 					if mode == "private_file" {
-						if len(syncWall) != count {
-							t.Fatalf("real sync calls=%d want=%d", len(syncWall), count)
+						if len(syncWall) < 1 || len(syncWall) > count {
+							t.Fatalf("real sync calls=%d records=%d", len(syncWall), count)
 						}
+						t.Logf("PERFORMANCE_ROUND2_CAPTURE_DURABILITY records=%d real_sync_calls=%d records_per_sync=%.3f", count, len(syncWall), float64(count)/float64(len(syncWall)))
 						testperf.Report(t, t.Name(), "actual_sync_ms", syncWall)
 						info, err := os.Stat(path)
 						if err != nil || info.Mode().Perm() != 0600 {

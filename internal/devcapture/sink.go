@@ -12,17 +12,57 @@ import (
 	"sync"
 )
 
-// Sink serializes complete append/sync operations. A failed write or sync is
-// terminal, so a later append cannot obscure an incomplete or undurable record.
+// Sink serializes JSONL writes and acknowledges owned-file appends only after
+// a Sync covering the whole record. Records already waiting can share a Sync;
+// a failed write or Sync is terminal for the entire affected group.
 type Sink struct {
 	mu        sync.Mutex
+	changed   *sync.Cond
 	name      string
 	writer    io.Writer
 	syncFile  func() error
 	closeFile func() error
 	failure   error
 	closeErr  error
+	closing   bool
 	closed    bool
+
+	pending      []*appendRecord
+	pendingBytes int
+	writing      bool
+	admitted     uint64
+	completed    uint64
+}
+
+type appendRecord struct {
+	encoded []byte
+	done    bool
+	err     error
+}
+
+// A pending group is bounded independently of the active group. A record above
+// the byte limit occupies a group by itself; service admission owns record size.
+const (
+	maxPendingRecords = 64
+	maxPendingBytes   = 1 << 20
+)
+
+var (
+	errInterruptedWrite = errors.New("write or sync interrupted")
+	errInterruptedClose = errors.New("close interrupted")
+)
+
+func (sink *Sink) conditionLocked() *sync.Cond {
+	if sink.changed == nil {
+		sink.changed = sync.NewCond(&sink.mu)
+	}
+	return sink.changed
+}
+
+func (sink *Sink) canQueueLocked(size int) bool {
+	return len(sink.pending) == 0 ||
+		(len(sink.pending) < maxPendingRecords && sink.pendingBytes <= maxPendingBytes &&
+			size <= maxPendingBytes-sink.pendingBytes)
 }
 
 // Open owns an append-only regular file, or borrows stdout when path is "-".
@@ -71,7 +111,7 @@ func newFileSink(file *os.File, info os.FileInfo, name string) (*Sink, error) {
 }
 
 // NewWriter borrows writer. Closing the sink never closes the supplied writer;
-// Open and OpenPrivate own files and synchronize them after each append.
+// Open and OpenPrivate own files and synchronize every acknowledged record.
 func NewWriter(writer io.Writer, name string) *Sink {
 	return &Sink{name: name, writer: writer}
 }
@@ -87,37 +127,107 @@ func (sink *Sink) Append(record any) error {
 	encoded = append(encoded, '\n')
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if sink.closed {
-		return fmt.Errorf("%s capture is closed", sink.name)
+	changed := sink.conditionLocked()
+	for {
+		if sink.closing {
+			return fmt.Errorf("%s capture is closed", sink.name)
+		}
+		if sink.failure != nil {
+			return sink.failure
+		}
+		if sink.writer == nil {
+			return fmt.Errorf("%s capture writer is not configured", sink.name)
+		}
+		if sink.canQueueLocked(len(encoded)) {
+			break
+		}
+		changed.Wait()
 	}
-	if sink.failure != nil {
-		return sink.failure
+	request := &appendRecord{encoded: encoded}
+	sink.pending = append(sink.pending, request)
+	sink.pendingBytes += len(encoded)
+	sink.admitted++
+	changed.Broadcast()
+	for !request.done {
+		if sink.writing {
+			changed.Wait()
+			continue
+		}
+		// Any awaiting caller can lead one already-admitted group. Releasing
+		// leadership after that group lets completed callers return without
+		// waiting for later arrivals, and needs no background worker or sleep.
+		batch := sink.pending
+		sink.pending = nil
+		sink.pendingBytes = 0
+		sink.writing = true
+		changed.Broadcast()
+		sink.writeGroupLocked(batch)
 	}
-	if sink.writer == nil {
-		return fmt.Errorf("%s capture writer is not configured", sink.name)
-	}
-	written, err := sink.writer.Write(encoded)
-	if err == nil && written != len(encoded) {
-		err = io.ErrShortWrite
-	}
-	if err == nil && sink.syncFile != nil {
-		err = sink.syncFile()
-	}
-	if err != nil {
-		sink.failure = fmt.Errorf("append %s capture: %w", sink.name, err)
-	}
-	return sink.failure
+	return request.err
 }
 
-// Err reports capture availability and any retained delivery/close failure
-// without closing the sink. It waits for an in-progress append so an incomplete
-// or undurable record cannot be observed as healthy evidence.
+// writeGroupLocked returns with the state lock held, including during panic or
+// Goexit unwinding from a borrowed writer. Cleanup must fail every affected
+// admission before preserving the caller's original interruption.
+func (sink *Sink) writeGroupLocked(batch []*appendRecord) {
+	err := errInterruptedWrite
+	defer func() {
+		sink.mu.Lock()
+		if err != nil {
+			sink.failure = fmt.Errorf("append %s capture: %w", sink.name, err)
+		}
+		sink.completeLocked(batch)
+		if sink.failure != nil {
+			sink.completeLocked(sink.pending)
+			sink.pending = nil
+			sink.pendingBytes = 0
+		}
+		sink.writing = false
+		sink.conditionLocked().Broadcast()
+	}()
+	sink.mu.Unlock()
+	err = sink.writeBatch(batch)
+}
+
+func (sink *Sink) writeBatch(batch []*appendRecord) error {
+	for _, request := range batch {
+		written, err := sink.writer.Write(request.encoded)
+		if err == nil && written != len(request.encoded) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if sink.syncFile != nil {
+		return sink.syncFile()
+	}
+	return nil
+}
+
+func (sink *Sink) completeLocked(batch []*appendRecord) {
+	for _, request := range batch {
+		request.err = sink.failure
+		request.encoded = nil
+		request.done = true
+	}
+	sink.completed += uint64(len(batch))
+}
+
+// Err reports capture availability and retained delivery/close failures without
+// closing the sink. It waits for all records admitted before the check, so a
+// pending or undurable record cannot be observed as healthy evidence.
 func (sink *Sink) Err() error {
 	if sink == nil {
 		return errors.New("capture is not configured")
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
+	changed := sink.conditionLocked()
+	target := sink.admitted
+	for sink.completed < target || (sink.closing && !sink.closed) {
+		changed.Wait()
+	}
 	if sink.failure != nil {
 		return sink.failure
 	}
@@ -133,22 +243,44 @@ func (sink *Sink) Err() error {
 	return nil
 }
 
-// Close waits for an admitted append, closes an owned file once and retains both
-// delivery and close errors. Borrowed output, including stdout, remains open.
+// Close stops admission, joins all admitted append groups, closes an owned file
+// once and retains delivery/close errors. Borrowed output remains open.
 func (sink *Sink) Close() error {
 	if sink == nil {
 		return nil
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if sink.closed {
+	changed := sink.conditionLocked()
+	if sink.closing {
+		for !sink.closed {
+			changed.Wait()
+		}
 		return sink.closeErr
 	}
-	sink.closed = true
-	var err error
-	if sink.closeFile != nil {
+	sink.closing = true
+	changed.Broadcast()
+	for sink.writing || len(sink.pending) != 0 {
+		changed.Wait()
+	}
+	// Keep close itself outside the state lock. Concurrent Close/Err callers
+	// still join its completion, and late appends can reject immediately.
+	sink.closeOwnedFileLocked()
+	return sink.closeErr
+}
+
+func (sink *Sink) closeOwnedFileLocked() {
+	err := errInterruptedClose
+	defer func() {
+		sink.mu.Lock()
+		sink.closeErr = errors.Join(sink.failure, err)
+		sink.closed = true
+		sink.conditionLocked().Broadcast()
+	}()
+	sink.mu.Unlock()
+	if sink.closeFile == nil {
+		err = nil
+	} else {
 		err = sink.closeFile()
 	}
-	sink.closeErr = errors.Join(sink.failure, err)
-	return sink.closeErr
 }
