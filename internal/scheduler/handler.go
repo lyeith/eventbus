@@ -17,6 +17,10 @@ func NewHandler(service *Service) *Handler { return &Handler{service} }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	awsprotocol.EnsureRequestID(w)
 	w.Header().Set("Content-Type", "application/json")
+	if r.URL.Path == "/schedule-groups" || strings.HasPrefix(r.URL.Path, "/schedule-groups/") {
+		writeError(w, validation("Schedule group management is not supported"))
+		return
+	}
 	name := strings.TrimPrefix(r.URL.Path, "/schedules/")
 	if name == r.URL.Path || !namePattern.MatchString(name) {
 		writeError(w, validation("Unsupported Scheduler path or invalid schedule name"))

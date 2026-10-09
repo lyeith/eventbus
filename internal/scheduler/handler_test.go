@@ -3,6 +3,7 @@ package scheduler
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,4 +129,42 @@ func TestSchedulerRESTUnconfiguredAndPressureErrors(t *testing.T) {
 			requireSchedulerWireError(t, response, 402, "ServiceQuotaExceededException")
 		}
 	}
+}
+
+type schedulerGroupUnreadBody struct{ reads int }
+
+func (body *schedulerGroupUnreadBody) Read([]byte) (int, error) {
+	body.reads++
+	return 0, io.EOF
+}
+func (*schedulerGroupUnreadBody) Close() error { return nil }
+
+func TestSchedulerRESTOwnsExactGroupManagementRefusalBeforeBodyRead(t *testing.T) {
+	service := testService(t, testInvoker{}, DevOptions{Groups: []string{"fixture"}})
+	for _, test := range []struct {
+		name    string
+		handler http.Handler
+	}{
+		{"configured", NewHandler(service)}, {"unconfigured-service", NewHandler(nil)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodHead} {
+				for _, path := range []string{"/schedule-groups", "/schedule-groups/fixture", "/schedule-groups/fixture/extra", "/schedule-groups/"} {
+					body := &schedulerGroupUnreadBody{}
+					request := httptest.NewRequest(method, path, nil)
+					request.Body = body
+					response := httptest.NewRecorder()
+					response.Header().Set("X-Amzn-RequestId", "actual-group-request")
+					test.handler.ServeHTTP(response, request)
+					requireSchedulerWireError(t, response, 400, "ValidationException")
+					assert.Equal(t, "application/json", response.Header().Get("Content-Type"))
+					assert.Equal(t, "actual-group-request", response.Header().Get("X-Amzn-RequestId"))
+					assert.JSONEq(t, `{"message":"Schedule group management is not supported"}`, response.Body.String())
+					assert.Zero(t, body.reads, "unsupported group operation read its request body")
+				}
+			}
+		})
+	}
+	assert.Empty(t, service.entries)
+	assert.Empty(t, service.creates)
 }

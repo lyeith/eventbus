@@ -76,16 +76,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if r.URL.Path == "/schedules" || strings.HasPrefix(r.URL.Path, "/schedules/") {
+	if r.URL.Path == "/schedules" || strings.HasPrefix(r.URL.Path, "/schedules/") ||
+		r.URL.Path == "/schedule-groups" || strings.HasPrefix(r.URL.Path, "/schedule-groups/") {
 		if s.services.Scheduler == nil {
 			writeRESTError(w, http.StatusServiceUnavailable, "InternalServerException", "Scheduler is not configured")
 		} else {
 			s.services.Scheduler.ServeHTTP(w, r)
 		}
-		return
-	}
-	if r.URL.Path == "/schedule-groups" || strings.HasPrefix(r.URL.Path, "/schedule-groups/") {
-		writeRESTError(w, http.StatusBadRequest, "ValidationException", "Schedule group management is not supported")
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/2015-03-31/functions/") {

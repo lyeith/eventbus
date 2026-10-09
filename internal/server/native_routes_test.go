@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -132,7 +134,7 @@ func TestServerSchedulerRoutesAndExplicitGroupRefusal(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"/schedules/owned", "/2015-03-31/functions/owned/invocations"} {
+	for _, path := range []string{"/schedules/owned", "/schedule-groups", "/schedule-groups/owned", "/2015-03-31/functions/owned/invocations"} {
 		response := httptest.NewRecorder()
 		server.New(server.Services{}).ServeHTTP(response, httptest.NewRequest("POST", path, strings.NewReader(`{}`)))
 		want := 503
@@ -141,6 +143,44 @@ func TestServerSchedulerRoutesAndExplicitGroupRefusal(t *testing.T) {
 		}
 		if response.Code != want || response.Header().Get("Content-Type") != "application/json" || response.Header().Get("X-Amzn-RequestId") == "" {
 			t.Fatalf("optional native service %s: %d %v", path, response.Code, response.Header())
+		}
+	}
+}
+
+func TestServerSchedulerHTTPPortOwnsNativePathDelegation(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
+		for _, path := range []string{"/schedules", "/schedules/owned", "/schedule-groups", "/schedule-groups/owned", "/schedule-groups/owned/extra"} {
+			t.Run(method+path, func(t *testing.T) {
+				payload := "native payload reaches its service without dispatcher parsing"
+				called := false
+				port := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					called = true
+					data, err := io.ReadAll(r.Body)
+					if err != nil || string(data) != payload || r.Method != method || r.URL.Path != path ||
+						r.URL.RawQuery != "groupName=fixture&clientToken=owned" || r.Header.Get("X-Native-Context") != "untouched" {
+						t.Errorf("dispatcher changed the native request: %s %s %v %q; %v", r.Method, r.URL, r.Header, data, err)
+					}
+					w.Header().Set("X-Scheduler-Owner", "injected-http-port")
+					w.WriteHeader(http.StatusAccepted)
+					_, _ = w.Write([]byte("service-owned response"))
+				})
+				request := httptest.NewRequest(method, path+"?groupName=fixture&clientToken=owned", strings.NewReader(payload))
+				request.Header.Set("X-Native-Context", "untouched")
+				response := httptest.NewRecorder()
+				server.New(server.Services{Scheduler: port}).ServeHTTP(response, request)
+				if !called || response.Code != http.StatusAccepted || response.Header().Get("X-Scheduler-Owner") != "injected-http-port" || response.Body.String() != "service-owned response" {
+					t.Fatalf("dispatcher kept service-owned operation/response behavior: called=%t; %d %v %s", called, response.Code, response.Header(), response.Body.String())
+				}
+			})
+		}
+	}
+	for _, path := range []string{"/schedules-other", "/schedule-groups-other"} {
+		response := httptest.NewRecorder()
+		called := false
+		port := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
+		server.New(server.Services{Scheduler: port}).ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader("Action=NoSuchAction")))
+		if called {
+			t.Fatalf("dispatcher broadened Scheduler's path boundary: %s", path)
 		}
 	}
 }
