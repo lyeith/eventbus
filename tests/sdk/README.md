@@ -6,7 +6,8 @@ Run from the repository root with Node >=20 installed:
 uv sync --frozen
 uv run --frozen python -m unittest discover -s tests/sdk/python -p 'test_*.py'
 (cd tests/sdk/javascript && npm ci --ignore-scripts --no-audit --no-fund)
-EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -tags sdksmoke ./...
+EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -timeout 15m -tags sdksmoke ./tests/sdk
+go test -race -count=1 -tags sdksmoke ./internal/gateway -run '^TestNativeGatewayUnchangedExpressSwagger$'
 ```
 
 Python dependencies come from `uv.lock`. JavaScript uses the exact Cognito IDP,

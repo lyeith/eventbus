@@ -84,6 +84,9 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   immutable receive snapshots. Both native mappings and dev consumers use it.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message
   types. It owns dev subprocess recipes, batch responses, retries and dead letters.
+  Contextual polling cancels promptly; ownership faults fence further launches,
+  remain sticky through Wait, and prevent shutdown from releasing dependencies.
+  Ordinary handler failures keep their existing retry/dead-letter policy.
 - `cognito` declares its TriggerInvoker port and owns challenge state and decisions.
   `cognitotrigger` executes configured app handlers; it imports no Cognito package.
   `app` injects and joins the runner before releasing stores/capture.
@@ -128,10 +131,19 @@ and [ticket ownership](ISSUE-TRIAGE.md).
 - `localexec` owns OS process groups, cancellation, retained-pipe bounds,
   descendant cleanup and capped output buffers. Lambda, triggers and consumers
   own their protocols, results, deadlines, environment and retries; each runner
-  must Wait its directly launched child. Darwin may return EPERM for an
+  must Wait its directly launched child. Output-copy completion must also be
+  checked independently: Go can hide a forced pipe cutoff behind a nonzero exit
+  or cancellation error. Services preserve native results and retain uncertainty.
+  Darwin may return EPERM for an
   unreaped, exited group; the shared owner probes absence for at most 1s using
   signal 0 while the runner reaps. Only ESRCH resolves that error; a remaining
   group or another probe error preserves ownership uncertainty.
+
+Production import rules are enforced by `tests/architecture_test.go`, including
+platform and optional-build sources. New state owners require explicit
+classification; composition tests may import multiple real services. PR/main CI
+runs this guard with unit race checks, while SDK checks run only their owner
+and the tagged unchanged Swagger proof.
 
 Add an interface at a real consumer boundary; keep store implementation details
 private. Application acceptance behavior belongs in the consuming application.
@@ -146,8 +158,13 @@ private. Application acceptance behavior belongs in the consuming application.
 | Resumable retained-suite ownership barrier | `devquiescence` plus `devactivity` ports; app composes profile/cleanup, service seams retain custody/lifetimes, gateway leases roots/trusted continuations, consuming app owns effects |
 | Operation extraction and bounded body reading | `awsprotocol`; service prefix, transport budget and native validation remain caller-owned |
 | Token issuance across password/SRP/custom/MFA/refresh | Cognito `auth.go` and `client_validity.go`; every flow uses persisted client policy |
+| MFA enrollment and preferences | Cognito `mfa_store.go` owns atomic authorization and exact-secret promotion; HTTP maps refusals |
 | Shared challenge continuation state | Cognito `challenge_state.go`; custom trigger decisions stay in `custom_auth.go` |
 | Password policy and credential revision | Cognito `password_policy.go` and store lifecycle; keep existing distinct error formatting |
+| SQS expiry, native deletion and field projection | Messaging queue/receipt owners preserve leases, strict settlement and detached views; no peer reads private state |
+| Firehose prepared queries and buffered delivery | Stream owns immutable jq execution plans and quota counters; flush owner builds outside the admission lock and publishes its captured prefix atomically |
+| Static gateway mappings and redactions | Gateway compiles immutable recipe plans once, then owns fresh per-request mutable output |
+| Secret identity and rotation generations | SecretsStore indexes name/canonical ARN to one state; rotation binds the resolved ARN before external validation |
 | SQS Lambda wire records and projection | `sqsevent` owns types; messaging owns snapshots, leases and settlement |
 | Synchronous completion and asynchronous admission adapters | `app`; narrow consumer ports retain service policy, Lambda owns children |
 | Fixture provisioning and local recipe loading | Named `dev_*.go` adapters; test-only store mutation helpers stay in `_test.go` |

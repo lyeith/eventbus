@@ -1,26 +1,44 @@
 name: Checks
 
 on:
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOMAXPROCS: '4'
+  GOFLAGS: '-p=2'
+
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      - name: Unit tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.17'
+          enable-cache: true
+          python-version: '3.12'
+      - run: uv sync --frozen
+      - name: Ownership and unit race tests
         shell: bash
-        run: set -o pipefail; go test ./... 2>&1 | tee go-unit.log
-      - name: Race tests
-        shell: bash
-        run: set -o pipefail; go test -race ./... 2>&1 | tee go-race.log
+        run: set -o pipefail; go test -race -count=1 -timeout 15m ./... 2>&1 | tee go-race.log
       - name: Vet
         shell: bash
         run: set -o pipefail; go vet ./... 2>&1 | tee go-vet.log
@@ -33,6 +51,7 @@ jobs:
 
   sdk-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -58,9 +77,12 @@ jobs:
         run: set -o pipefail; uv run --frozen python -m unittest discover -s tests/sdk/python -p 'test_*.py' 2>&1 | tee sdk-contracts.log
       - name: Real SDK smoke
         shell: bash
-        run: set -o pipefail; go test -race -count=1 -tags sdksmoke ./... 2>&1 | tee sdk-smoke.log
+        run: set -o pipefail; go test -race -count=1 -timeout 15m -tags sdksmoke ./tests/sdk 2>&1 | tee sdk-smoke.log
         env:
           EVENTBUS_SMOKE_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      - name: Unchanged Express and Swagger handlers
+        shell: bash
+        run: set -o pipefail; go test -race -count=1 -timeout 5m -tags sdksmoke ./internal/gateway -run '^TestNativeGatewayUnchangedExpressSwagger$' 2>&1 | tee sdk-swagger.log
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

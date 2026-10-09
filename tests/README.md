@@ -8,9 +8,15 @@ Run from the repository root:
 
 ```sh
 go test ./...
-go test -race ./...
+go test -race -timeout 15m ./...
 go vet ./...
 ```
+
+`tests/architecture_test.go` checks production imports across every platform
+and build tag. Service owners cannot import peer services or composition;
+`app` wires ports, `server` consumes HTTP interfaces. Add new owners to its
+classifications when updating [Architecture](../docs/ARCHITECTURE.md). CI runs
+this check and unit race/vet tests on pull requests and pushes to main.
 
 [SDK verification](sdk/README.md) adds lifecycle, SRP/custom authentication,
 Node trigger execution, native Cognito provisioning, SES/SNS capture, direct SQS

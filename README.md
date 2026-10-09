@@ -86,12 +86,13 @@ requires an exclusive owner; default native API/runtime behavior is unchanged.
 
 ```sh
 go test ./...
-go test -race ./...
+go test -race -timeout 15m ./...
 go vet ./...
 npm ci --prefix tests/sdk/javascript --ignore-scripts --no-audit --no-fund
 uv sync --frozen
 uv run --frozen python -m unittest discover -s tests/sdk/python -p 'test_*.py'
-EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -tags sdksmoke ./...
+EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -race -count=1 -timeout 15m -tags sdksmoke ./tests/sdk
+go test -race -count=1 -tags sdksmoke ./internal/gateway -run '^TestNativeGatewayUnchangedExpressSwagger$'
 ```
 
 The SDK lane requires Node 20 or newer and the frozen dependencies above.
@@ -107,8 +108,10 @@ It creates and deletes a uniquely named bucket. Do not use an unrelated store.
 
 `scripts/build-release.sh` produces CGO-free EventBus and gateway binaries for
 Linux/macOS amd64/arm64 and `SHA256SUMS` in `dist/`; an optional argument selects another
-output directory. Building does not publish. GitHub checks run manually through
-`workflow_dispatch`; run local checks before a release.
+output directory. Building does not publish. GitHub checks run on pull requests,
+pushes to main and manual dispatch.
+They enforce production import boundaries, run unit race/vet checks and a
+separate SDK/Swagger lane. Run local checks before a release.
 
 On SSD, wrap builds with `ssd-dev run --purpose build -- <command>` and tests
 with `ssd-dev operation --purpose test -- <command>`. Save full test output
