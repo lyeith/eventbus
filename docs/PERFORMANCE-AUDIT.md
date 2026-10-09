@@ -298,22 +298,91 @@ stages, probes and downloaded duplicates were removed on both hosts. Failed
 operations are verified quiescent/unpinned and retain diagnostic scratch under
 the same finite host policy; their expiry is recorded in STATE/HANDOFF.
 
-## Remaining priorities
+## Follow-up review and priorities
 
-1. Durable capture dominates these small async/SNS workloads. Any throughput
-   redesign needs an explicit durability/acceptance design; batching or detached
-   background writes would change supported evidence contracts.
-2. Deep FIFO send setup still scans the deduplication map on each unique send.
-   The baseline 10,000-message setup took about one second (one setup observation).
-   Retention/receipt scans and event-size encoding also remain. Consider a queue-
-   owned expiry/index design only with representative send/queue workloads.
-3. Full authorizer-cache new identities still scan the bounded 4,096 entries.
-   Routes still use ordered linear selection. Larger routing/cache data
-   structures were not needed for the measured repeated-allocation fixes.
-4. Warm persisted-key/JWKS work was about 0.3ms; native token signing about 1.5ms.
-   A decoded-key cache needs pool deletion/recreation invalidation. Connection
-   changes need SQLite concurrency evidence. Crypto costs are not reduced.
-5. Fresh processes/imports, caller application startup, large HTTP body decode
-   and business chains remain separate workloads. Runtime reuse and additional
-   privileged launcher changes are larger owner/lifecycle designs; this audit
-   does not attribute a consuming application's import or completion intervals.
+9 October 2026, read-only source review at `58d27a1`. No new benchmarks,
+regression executions or runtime edits were made. The mechanisms below are
+visible in source; expected gains beyond the earlier measurements are unmeasured.
+Effort estimates include focused verification and assume the current contracts.
+
+### Correctness and ownership first
+
+1. **Cognito enrollment must promote the exact secret that was verified.**
+   [VerifySoftwareToken](../internal/cognito/mfa.go#L108) validates pending secret
+   S1 from a user snapshot, then
+   [ConfirmPendingTOTPSecret](../internal/cognito/store.go#L469) promotes whichever
+   pending secret is current. Concurrent association can replace it with S2,
+   marking unverified S2 verified. Cognito's store should own a compare-and-promote
+   transition with expected secret and account state, check affected rows, and
+   let HTTP map refusal. Add deterministic replacement/revocation/deletion and
+   ordinary enrollment tests. Estimated half to one day; source-established
+   interleaving, not a reproduced regression in this pass.
+
+2. **Dev consumer cancellation and cleanup failures need a complete lifecycle seam.**
+   [Polling](../internal/consumer/manager.go#L91) uses a context-free five-second
+   receive despite the broker's existing
+   [contextual operation](../internal/messaging/sqs_consumption.go#L35).
+   [Process cleanup](../internal/consumer/process.go#L104) errors become ordinary
+   batch failures; the loop retries and `Wait` reports success once goroutines
+   finish, so app shutdown cannot retain that ownership uncertainty. Consumer
+   should use contextual polling, distinguish sticky ownership failure from
+   handler failure, fence affected execution, join and return the retained error.
+   Verify empty-queue cancellation, accepted-batch cancellation, retained pipes,
+   cleanup faults and app resource retention. Estimated one to two days.
+
+3. **Enforce existing boundaries and consolidate actual duplicate responsibility.**
+   Import rules are documented but have no automated repository check. The
+   [Checks workflow](../.github/workflows/checks.yml#L3) is manual-only and its
+   SDK lane repeats the whole package race suite. A small production-import test
+   plus routine PR checks would catch ownership drift; scope SDK execution to
+   its owner after checking tagged coverage. Lambda HTTP
+   [invocation preparation](../internal/lambda/service.go#L284) duplicates its
+   existing [private helper](../internal/lambda/execution.go#L96) and version
+   parsing. The dispatcher also owns Scheduler group-management refusal that
+   belongs in Scheduler's adapter. Reuse those owners, preserving HTTP Tail,
+   DryRun, native envelopes and dispatcher delegation. Estimated one to two days
+   as separate small concerns using the existing owners.
+
+### Performance targets
+
+| Priority | Target and owner | Evidence and bounded approach | Estimated effort |
+| --- | --- | --- | --- |
+| First | SQS payload lifetime | Retention pruning, cached-attempt restoration and transfer shorten slices without clearing old slots. Clear removed references under the queue owner; receipt/dedup/attempt histories need only metadata. Verify expiry, replay and transfer/settlement. | Half to one day |
+| Next | FIFO send expiry bookkeeping, SQS | Every unique send scans the dedup map. Earlier 10k setup was about one second, one observation including other work. Share insertion bookkeeping with redrive and skip scans until the earliest expiry; measure before adopting an index. | About one day |
+| Next | Prepared jq configuration, Firehose | Validation discards compiled code; extraction recompiles the same query per record, up to 500 times per batch. Own prepared configuration per stream with fresh execution state; preserve injected processors, errors and deadlines. | Half to one day plus measurement |
+| Next | Firehose flush/admission contention | Concatenation/GZIP hold the stream mutex; admission waits while holding the manager read lock and repeatedly scans pending records. Measure backlog/GZIP contention, retain a count, and use the existing flush owner to construct outside the shared mutex with correct reservation/rollback/join. | One to two days |
+| Next | Lambda queue projection, SQS | Byte admission already creates detached wire records, then collection clones native snapshots the caller discards. Return selection count separately and avoid unused snapshots; retain native detached-copy semantics and share only identical field projection. | About one day |
+| Measure first | Cold application startup, runtime owners/apps/tooling | Latest managed-UV native Init was 388.942ms versus direct Python 41.873ms. Real consumer imports and multi-trigger Cognito chains are unmeasured. Attribute complete representative chains with the same interpreter/environment and actual joins before runtime reuse. | One to two days for attribution |
+
+The SQS lifetime sites are [retention pruning](../internal/messaging/sqs_queue.go#L311),
+[attempt restoration](../internal/messaging/sqs_queue.go#L516) and
+[transfer](../internal/messaging/sqs_management.go#L701). Existing ordinary receive
+already clears its tail. Hidden backing slots can outlive native in-flight
+ownership and keep full bodies/attributes reachable after expiry or ACK.
+
+Firehose's [extractor](../internal/firehose/metadata.go#L37),
+[admission](../internal/firehose/manager.go#L284) and
+[flush](../internal/firehose/manager.go#L435) are the respective owners.
+SQS [dedup insertion](../internal/messaging/sqs_queue.go#L258) and
+[discarded projected-receive snapshots](../internal/messaging/sqs_consumption.go#L112)
+are private core concerns. Keep visibility, retention, FIFO, redrive, byte admission
+and native receipt versus strict settlement outcomes intact.
+
+Lower-priority opportunities are static gateway redaction/mapping compilation,
+Secrets' canonical ARN index, and queue/receipt expiry guards on deletion.
+They have source-backed repeated work but no new latency attribution. Current
+authorizer hits are about 1.4µs, route selection still follows ordered linear
+precedence, and warm Cognito key/JWKS work is about 0.3ms (signing about 1.5ms).
+A route trie, global query/key cache or SQLite pool change is not yet justified.
+
+Durable capture remains the measured throughput floor: SNS 100-destination
+publish was 4.949ms durable versus 0.609ms disabled. `devcapture` already owns
+serialized write/Sync, sticky failure and close; services own acceptance. Group
+commit needs a separate design that preserves acceptance after durable capture,
+complete failure propagation and actual process/capture joins.
+
+`localexec`, `devcapture` and app Execute/Admit adapters are proper common owners.
+Language wrappers keep different result/error/deadline policies; native mappings
+and dev recipes keep different settlement policies. Reuse matching mechanics
+without merging these contracts. Large HTTP bodies and application business
+chains remain representative-workload questions, not established bottlenecks.

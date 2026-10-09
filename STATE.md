@@ -10,7 +10,7 @@ General audit: docs/PERFORMANCE-AUDIT.md; prior runtime/launcher evidence is
 docs/PERFORMANCE-REVIEW.md. Seven owner commits through 5186da3: reporting;
 Cognito atomic bootstrap/seed; SQS waiting order/compaction; SNS envelope reuse;
 Lambda count-only logs; Lambda async capture ownership; gateway matching/cache.
-No API/schema/dependency/crypto/durability changes. Open issue board is empty.
+No API/schema/dependency/crypto/durability changes. Board was empty at publication.
 
 Local medians, fixed before→after fixtures (ms):
 - Empty Cognito bootstrap 152.772→33.553; first tiny seed 204.766→135.574.
@@ -44,3 +44,8 @@ Audit/release logs in SSD /tmp have existing 24h TTL. Failed operations are
 quiescent/unpinned: gateway baseline, Cognito race and initial packaged fixture;
 GC expiry Oct9 14:15:15 / 14:22:51 / 14:57:04 UTC respectively.
 Prior empty tooling scratch receipts retain Oct9 13:25/13:29 UTC TTL.
+
+Read-only Oct9 follow-up at58d27a1, recorded in PERFORMANCE-AUDIT.md.
+Next: atomic Cognito MFA promotion; consumer cancellation/sticky cleanup errors;
+SQS removed-payload roots; import/CI boundaries; then FIFO expiry and Firehose
+prepared jq/flush contention. New speedups are unmeasured; no runtime edits/tests.

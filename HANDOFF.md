@@ -30,7 +30,7 @@ FIFO 10k native receive 1.27→0.16ms; SNS 100 queues disabled 1.16→0.61ms;
 gateway 1000-route miss 142→14µs; full-cache exact IAM hit 27→1.4µs.
 Seed includes random RSA; durable throughput remains similar. Larger crypto/key
 cache, queue dedup index, routing/cache structure and runtime reuse designs are
-separate priorities, not required unfinished work. Open issue board is empty.
+separate priorities, not required unfinished work. Board was empty at publication.
 
 PASS saved SSD /tmp/eventbus-audit-*-20261008.log, existing 24h lifetime:
 - Cognito full non-race 42.474s; focused bootstrap/seed/legacy/persistence race 35.022s.
@@ -58,3 +58,14 @@ temp deletion. Both release stages/probes/downloaded duplicates were removed.
 Failed operations 72b1f2fa/ae026ad1/7aee0bfe verified quiescent/unpinned, normal GC
 expiry Oct9 14:15:15/14:22:51/14:57:04 UTC under host 24h policy.
 Prior empty tooling scratch receipts retain Oct9 13:25/13:29 UTC expiry.
+
+Oct9 read-only review at58d27a1; source-backed follow-ups in PERFORMANCE-AUDIT.md:
+- Cognito can validate pending S1 then promote concurrently replaced S2.
+- Consumer five-second polling lacks context; cleanup failures are retried and
+  omitted from Wait, so app cannot retain ownership uncertainty.
+- SQS expiry/replay/transfer shorten slices without clearing removed payload roots.
+- Add import-boundary/PR checks; reuse Lambda preparation; move Scheduler refusal.
+- Measure FIFO expiry scans, Firehose prepared jq/GZIP admission contention and
+  real cold import chains; avoid unused Lambda receive snapshots.
+No new measurements/regression executions/runtime changes; all findings need
+focused verification when implemented. Existing common owners are sound.
