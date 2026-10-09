@@ -1,6 +1,6 @@
-// Package cognitotrigger executes explicitly configured application-owned
-// Cognito custom authentication handlers. Cognito owns event construction,
-// challenge state and operation-specific response validation.
+// Package cognitotrigger owns configured custom-authentication event/result
+// contracts and deadlines. App supplies a managed runtime through Execution;
+// Cognito owns challenge state and operation-specific response validation.
 package cognitotrigger
 
 import (
@@ -24,11 +24,22 @@ const (
 )
 
 type Config struct {
-	Node  string          `yaml:"node"`
-	Pools map[string]Pool `yaml:"pools"`
+	DevWarm *DevWarmConfig  `yaml:"dev_warm,omitempty"`
+	Node    string          `yaml:"node"`
+	Pools   map[string]Pool `yaml:"pools"`
 	// DevActivity is supplied by the application before startup, never YAML.
 	DevActivity devactivity.Activity `yaml:"-"`
 }
+
+// DevWarmConfig opts registered handlers into Lambda's managed retained workers.
+// The cap is private to the trigger service; omission keeps fresh execution.
+type DevWarmConfig struct {
+	MaxWorkers int `yaml:"max_workers,omitempty"`
+}
+
+func (config *Config) Validate() error { return validateConfig(config) }
+
+func HandlerReference(reference string) (string, string, error) { return handlerReference(reference) }
 
 type Pool struct {
 	DefineAuthChallenge         *Entry `yaml:"DefineAuthChallenge"`
@@ -51,7 +62,7 @@ func (p Pool) entries() map[string]*Entry {
 }
 
 // Load accepts exactly one YAML document and rejects unknown configuration
-// fields. Relative handler paths are resolved later against New's workDir.
+// fields. App resolves relative handler paths against its selected workDir.
 func Load(path string) (*Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -91,6 +102,9 @@ func handlerReference(reference string) (module, exported string, err error) {
 func validateConfig(config *Config) error {
 	if config == nil || len(config.Pools) == 0 {
 		return errors.New("Cognito trigger config requires at least one pool")
+	}
+	if config.DevWarm != nil && (config.DevWarm.MaxWorkers < 0 || config.DevWarm.MaxWorkers > 32) {
+		return errors.New("Cognito trigger dev_warm.max_workers must be 1..32, or omitted")
 	}
 	for poolID, pool := range config.Pools {
 		if strings.TrimSpace(poolID) == "" {

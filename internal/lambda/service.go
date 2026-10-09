@@ -32,17 +32,19 @@ type executableFunction struct {
 	environment                              map[string]string
 	timeout                                  time.Duration
 	generation                               *functionGeneration
+	contextFunctionName                      string
 }
 
 // Service owns all admitted invocations until their process groups and
 // required Runtime API listeners have stopped. Warm environments remain owned
 // through retirement; registry snapshots are replaced only under mu.
 type Service struct {
-	functions   map[string]executableFunction
-	root        string
-	warm        *warmWorkers
-	initTimeout time.Duration // on-demand Init limit; private override for focused tests
-	devActivity DevActivity
+	functions       map[string]executableFunction
+	root            string
+	warm            *warmWorkers
+	executionPolicy *ExecutionPolicy
+	initTimeout     time.Duration // on-demand Init limit; private override for focused tests
+	devActivity     DevActivity
 	// Immutable in normal construction; private tests can wrap real cleanup to
 	// prove that ownership uncertainty stays separate from native responses.
 	processCleanup func(*exec.Cmd) error
@@ -116,6 +118,10 @@ func NewService(config *Config, workDir string) (*Service, error) {
 	}
 	service := &Service{functions: make(map[string]executableFunction), initTimeout: initialInitTimeout, devActivity: config.DevActivity, processCleanup: localexec.Cleanup, active: make(map[uint64]invocationOwner), done: make(chan struct{})}
 	service.root = root
+	if config.ExecutionPolicy != nil {
+		copied := *config.ExecutionPolicy
+		service.executionPolicy = &copied
+	}
 	if config.DevWarm != nil {
 		service.warm = newWarmWorkers(config.DevWarm.MaxWorkers)
 	}
@@ -308,6 +314,8 @@ type invocation struct {
 	diagnostics                                          bool
 	pythonStacks                                         *pythonStackSession
 	phase                                                *runtimePhase
+	responseLimit                                        int
+	privateErrors                                        bool
 }
 
 type invocationResult struct {
@@ -370,6 +378,10 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	defer func() { phase.stop() }()
 	normalCompletion, runnerEntered, diagnosticCompletion := false, false, false
 	input.diagnostics = service.diagnosticCapture != nil
+	if service.executionPolicy != nil {
+		input.responseLimit = service.executionPolicy.MaxResponseBytes
+		input.privateErrors = service.executionPolicy.PrivateErrors
+	}
 	defer func() {
 		// Even an observer/runner panic or Goexit must retire this admitted
 		// lifetime with dirty evidence. Never infer success from zero values.
@@ -473,6 +485,7 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		} else {
 			launched = runCommand(phase.ctx, entry, launchInput, service.processCleanup)
 		}
+		launched = service.applyExecutionPolicy(launched)
 		// Actual native cleanup decides this launch before any optional evidence
 		// join. Internal Init retry never releases the admitted invocation owner.
 		var record runtimePhaseRecord

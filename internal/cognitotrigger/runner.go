@@ -3,33 +3,21 @@ package cognitotrigger
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/lyeith/eventbus/internal/devactivity"
-	"github.com/lyeith/eventbus/internal/localexec"
-	"github.com/rs/zerolog/log"
 )
 
 const (
-	maxEventBytes      = 1 << 20
-	maxResultBytes     = 1 << 20
-	maxDiagnosticBytes = 64 << 10
+	MaxEventBytes      = 1 << 20
+	MaxResultBytes     = 1 << 20
+	MaxDiagnosticBytes = 64 << 10
 )
-
-//go:embed wrapper.mjs
-var nodeWrapper string
 
 type ErrorKind string
 
@@ -41,8 +29,7 @@ const (
 	Closed          ErrorKind = "closed"
 )
 
-// InvocationError identifies execution failures without exposing the event,
-// private challenge parameters, handler output or diagnostic text.
+// InvocationError never reflects event values, handler results, or diagnostics.
 type InvocationError struct {
 	Kind    ErrorKind
 	Trigger string
@@ -55,116 +42,100 @@ func (e *InvocationError) Error() string {
 func (e *InvocationError) Unwrap() error       { return e.Cause }
 func (e *InvocationError) FailureKind() string { return string(e.Kind) }
 
-type executableEntry struct {
-	module, exported string
-	timeout          time.Duration
-	env              map[string]string
+// Execution is the consumer-owned runtime seam. App composes its adapter; the
+// runtime owns process/worker lifetimes and returns only private-safe failures.
+type Execution interface {
+	Execute(context.Context, string, string, []byte) (ExecutionResult, error)
+	Close(context.Context) error
+}
+type ExecutionResult struct {
+	Payload      []byte
+	Failure      ErrorKind
+	OwnershipErr error
+}
+type retainedExecution interface {
+	DevBeginWarmDrain() error
+	DevResumeWarm() error
+	DevEvidence() error
 }
 
-// Runner owns each admitted invocation through direct-child reaping, owned pipe
-// joining and process-group cleanup. Configuration is immutable.
+// Runner owns event/result validation, admission and Cognito's five-second
+// deadline. Execution owns the actual joined child and retained-worker boundary.
 type Runner struct {
-	node, workDir string
-	pools         map[string]map[string]executableEntry
-	mu            sync.Mutex
-	closed        bool
-	next          uint64
-	active        map[uint64]context.CancelFunc
-	inflight      sync.WaitGroup
-	done          chan struct{}
-	devActivity   devactivity.Activity
-	// The private adapter defaults to real group cleanup; tests wrap it for
-	// bounded gates and ownership faults without replacing process execution.
-	processCleanup func(*exec.Cmd) error
-	ownershipErr   error
+	pools        map[string]map[string]time.Duration
+	execution    Execution
+	mu           sync.Mutex
+	closed       bool
+	next         uint64
+	active       map[uint64]context.CancelFunc
+	inflight     sync.WaitGroup
+	done         chan struct{}
+	devActivity  devactivity.Activity
+	ownershipErr error
 }
 
-// New resolves the executable and handler files at startup. It never falls back
-// to built-in challenge logic or an unconfigured handler.
-func New(config *Config, workDir string) (*Runner, error) {
+func New(config *Config, execution Execution) (*Runner, error) {
 	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
-	if err := processGroupsSupported(); err != nil {
-		return nil, err
+	if execution == nil {
+		return nil, errors.New("Cognito trigger execution must be configured")
 	}
-	directory, err := filepath.Abs(workDir)
-	if err != nil {
-		return nil, fmt.Errorf("Cognito trigger work directory: %w", err)
-	}
-	info, err := os.Stat(directory)
-	if err != nil || !info.IsDir() {
-		return nil, errors.New("Cognito trigger work directory must exist")
-	}
-	node := config.Node
-	if node == "" {
-		node = "node"
-	}
-	if strings.ContainsAny(node, "/\\") && !filepath.IsAbs(node) {
-		node = filepath.Join(directory, node)
-	}
-	node, err = exec.LookPath(node)
-	if err != nil {
-		return nil, fmt.Errorf("Cognito trigger Node executable: %w", err)
-	}
-	node, err = filepath.Abs(node)
-	if err != nil {
-		return nil, err
-	}
-	runner := &Runner{
-		node: node, workDir: directory, pools: make(map[string]map[string]executableEntry),
-		active: make(map[uint64]context.CancelFunc), done: make(chan struct{}),
-		devActivity: config.DevActivity, processCleanup: localexec.Cleanup,
-	}
+	runner := &Runner{pools: make(map[string]map[string]time.Duration), execution: execution, active: make(map[uint64]context.CancelFunc), done: make(chan struct{}), devActivity: config.DevActivity}
 	for poolID, pool := range config.Pools {
-		entries := make(map[string]executableEntry)
+		entries := make(map[string]time.Duration)
 		for name, entry := range pool.entries() {
-			module, exported, _ := handlerReference(entry.Handler)
-			if !filepath.IsAbs(module) {
-				module = filepath.Join(directory, module)
-			}
-			info, err := os.Stat(module)
-			if err != nil || !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("Cognito trigger pool %q %s module must be a readable regular file", poolID, name)
-			}
-			file, err := os.Open(module)
-			if err != nil {
-				return nil, fmt.Errorf("Cognito trigger pool %q %s module cannot be read", poolID, name)
-			}
-			file.Close()
 			seconds := entry.TimeoutSeconds
 			if seconds == 0 {
 				seconds = defaultTimeoutSeconds
 			}
-			entries[name] = executableEntry{module: module, exported: exported, timeout: time.Duration(seconds) * time.Second, env: maps.Clone(entry.Env)}
+			entries[name] = time.Duration(seconds) * time.Second
 		}
 		runner.pools[poolID] = entries
 	}
 	return runner, nil
 }
-
 func (r *Runner) Supports(poolID string) bool {
 	if r == nil {
 		return false
 	}
-	_, configured := r.pools[poolID]
-	return configured
+	_, ok := r.pools[poolID]
+	return ok
 }
-
 func (r *Runner) SupportsTrigger(poolID, name string) bool {
 	if r == nil {
 		return false
 	}
-	_, configured := r.pools[poolID][name]
-	return configured
+	_, ok := r.pools[poolID][name]
+	return ok
 }
 
+// DecodeResponse is the strict serialized full-event contract. UseNumber keeps
+// native response numbers intact; trailing JSON and a missing response refuse.
+func DecodeResponse(payload []byte) (map[string]any, error) {
+	if len(payload) > MaxResultBytes {
+		return nil, errors.New("trigger response limit exceeded")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var result map[string]any
+	if err := decoder.Decode(&result); err != nil || result == nil {
+		return nil, errors.New("invalid trigger event response")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, errors.New("invalid trigger event response")
+	}
+	if response, ok := result["response"].(map[string]any); !ok || response == nil {
+		return nil, errors.New("invalid trigger event response")
+	}
+	return result, nil
+}
 func (r *Runner) Invoke(ctx context.Context, poolID, name string, event map[string]any) (map[string]any, error) {
 	if !r.SupportsTrigger(poolID, name) {
 		return nil, &InvocationError{Kind: NotConfigured, Trigger: name}
 	}
-	entry := r.pools[poolID][name]
-	execution, cancel := context.WithTimeout(ctx, entry.timeout)
+	execution, cancel := context.WithTimeout(ctx, r.pools[poolID][name])
 	defer cancel()
 	r.mu.Lock()
 	if r.closed {
@@ -186,93 +157,54 @@ func (r *Runner) Invoke(ctx context.Context, poolID, name string, event map[stri
 	r.inflight.Add(1)
 	r.mu.Unlock()
 	var ownershipErr error
+	executionEntered, executionReturned := false, false
 	defer func() {
 		recovered := recover()
-		if recovered != nil {
+		if executionEntered && !executionReturned {
 			ownershipErr = errors.Join(ownershipErr, errors.New("Cognito trigger ownership did not complete"))
 		}
 		r.mu.Lock()
-		defer r.mu.Unlock()
 		delete(r.active, id)
-		if r.ownershipErr == nil {
-			r.ownershipErr = ownershipErr
-		}
+		r.ownershipErr = errors.Join(r.ownershipErr, ownershipErr)
 		if release != nil {
 			release(ownershipErr)
 		}
 		r.inflight.Done()
+		r.mu.Unlock()
 		if recovered != nil {
 			panic(recovered)
 		}
 	}()
 	input, err := json.Marshal(event)
-	if err != nil || len(input) > maxEventBytes {
+	if err != nil || len(input) > MaxEventBytes {
 		return nil, &InvocationError{Kind: InvalidResponse, Trigger: name, Cause: err}
 	}
-	command := exec.CommandContext(execution, r.node,
-		"--input-type=module", "--eval", nodeWrapper, "--",
-		entry.module, entry.exported, fmt.Sprint(entry.timeout.Milliseconds()))
-	command.Dir = r.workDir
-	command.Env = processEnvironment(entry.env)
-	command.Stdin = bytes.NewReader(input)
-	stdout := localexec.NewBoundedOutput(maxResultBytes)
-	stderr := localexec.NewBoundedOutput(maxDiagnosticBytes)
-	stdoutCopy, stderrCopy := localexec.NewTrackedOutputs(stdout, stderr)
-	command.Stdout, command.Stderr = stdoutCopy, stderrCopy
-	if err := localexec.Configure(command); err != nil {
-		return nil, &InvocationError{Kind: HandlerFailure, Trigger: name, Cause: err}
-	}
-	err = command.Run()
-	cleanupErr := r.processCleanup(command)
-	ownershipErr = cleanupErr
-	if command.Process != nil {
-		ownershipErr = errors.Join(ownershipErr, stdoutCopy.Err(), stderrCopy.Err())
-	}
-	if errors.Is(err, exec.ErrWaitDelay) {
-		ownershipErr = errors.Join(ownershipErr, exec.ErrWaitDelay)
-	}
-	if stdout.Overflowed() || stderr.Overflowed() {
-		return nil, &InvocationError{Kind: InvalidResponse, Trigger: name, Cause: errors.New("trigger output limit exceeded")}
-	}
-
-	if stderr.Len() > 0 {
-		// Diagnostics are app-owned. Never log event JSON or successful results,
-		// which contain private challenge parameters.
-		log.Debug().Str("trigger", name).Str("stderr", stderr.String()).Msg("Cognito trigger diagnostics")
-	}
+	executionEntered = true
+	output, err := r.execution.Execute(execution, poolID, name, input)
+	executionReturned = true
+	ownershipErr = output.OwnershipErr
 	if execution.Err() != nil {
 		return nil, &InvocationError{Kind: Timeout, Trigger: name, Cause: execution.Err()}
 	}
-	if cleanupErr != nil {
-		return nil, &InvocationError{Kind: HandlerFailure, Trigger: name, Cause: cleanupErr}
+	if err != nil || ownershipErr != nil {
+		return nil, &InvocationError{Kind: HandlerFailure, Trigger: name, Cause: errors.Join(err, ownershipErr)}
 	}
-	if err != nil {
-		kind := HandlerFailure
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == 21 {
-			kind = InvalidResponse
+	if output.Failure != "" {
+		kind := output.Failure
+		if kind != Timeout && kind != InvalidResponse && kind != HandlerFailure && kind != Closed {
+			kind = HandlerFailure
 		}
-		return nil, &InvocationError{Kind: kind, Trigger: name, Cause: err}
+		return nil, &InvocationError{Kind: kind, Trigger: name}
 	}
-	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
-	decoder.UseNumber()
-	var result map[string]any
-	if err := decoder.Decode(&result); err != nil || result == nil {
-		return nil, &InvocationError{Kind: InvalidResponse, Trigger: name}
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return nil, &InvocationError{Kind: InvalidResponse, Trigger: name}
-	}
-	if response, ok := result["response"].(map[string]any); !ok || response == nil {
+	result, err := DecodeResponse(output.Payload)
+	if err != nil {
 		return nil, &InvocationError{Kind: InvalidResponse, Trigger: name}
 	}
 	return result, nil
 }
 
-// Close stops admission, cancels active process groups and waits for every
-// invocation's cleanup. Ownership failures remain sticky after joining.
-// A caller timeout does not cancel the cleanup owner.
+// Close fences/cancels admission, then an uncanceled owner joins every invocation
+// and the runtime. A waiting caller may time out and rejoin the same cleanup.
 func (r *Runner) Close(ctx context.Context) error {
 	if r == nil {
 		return nil
@@ -287,7 +219,14 @@ func (r *Runner) Close(ctx context.Context) error {
 	}
 	r.mu.Unlock()
 	if first {
-		go func() { r.inflight.Wait(); close(r.done) }()
+		go func() {
+			r.inflight.Wait()
+			err := r.execution.Close(context.Background())
+			r.mu.Lock()
+			r.ownershipErr = errors.Join(r.ownershipErr, err)
+			r.mu.Unlock()
+			close(r.done)
+		}()
 	}
 	select {
 	case <-r.done:
@@ -298,32 +237,33 @@ func (r *Runner) Close(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-
-var inheritedEnvironment = []string{"PATH", "LANG", "LC_ALL", "SSL_CERT_DIR", "SSL_CERT_FILE", "TMPDIR", "TMP", "TEMP"}
-
-func processEnvironment(declared map[string]string) []string {
-	env := map[string]string{
-		"AWS_EC2_METADATA_DISABLED":   "true",
-		"AWS_SHARED_CREDENTIALS_FILE": os.DevNull,
-		"AWS_CONFIG_FILE":             os.DevNull,
-		"NO_PROXY":                    "*",
+func (r *Runner) DevBeginWarmDrain() error {
+	if r == nil {
+		return nil
 	}
-	for _, name := range inheritedEnvironment {
-		if value, exists := os.LookupEnv(name); exists {
-			env[name] = value
-		}
+	if runtime, ok := r.execution.(retainedExecution); ok {
+		return runtime.DevBeginWarmDrain()
 	}
-	for name, value := range declared {
-		env[name] = value
+	return nil
+}
+func (r *Runner) DevResumeWarm() error {
+	if r == nil {
+		return nil
 	}
-	keys := make([]string, 0, len(env))
-	for name := range env {
-		keys = append(keys, name)
+	if runtime, ok := r.execution.(retainedExecution); ok {
+		return runtime.DevResumeWarm()
 	}
-	sort.Strings(keys)
-	result := make([]string, 0, len(keys))
-	for _, name := range keys {
-		result = append(result, name+"="+env[name])
+	return nil
+}
+func (r *Runner) DevEvidence() error {
+	if r == nil {
+		return nil
 	}
-	return result
+	r.mu.Lock()
+	err := r.ownershipErr
+	r.mu.Unlock()
+	if runtime, ok := r.execution.(retainedExecution); ok {
+		err = errors.Join(err, runtime.DevEvidence())
+	}
+	return err
 }

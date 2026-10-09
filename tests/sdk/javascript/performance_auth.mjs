@@ -1,5 +1,5 @@
 // Fixed opt-in fixture: imports once in the SDK driver; every registered trigger
-// remains a real cold native handler. Provisioning is outside each auth sample.
+// uses its configured fresh/warm managed runtime. Provisioning is outside each auth sample.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 

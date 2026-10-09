@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lyeith/eventbus/internal/app"
 	"github.com/lyeith/eventbus/internal/cognito"
 	"github.com/lyeith/eventbus/internal/cognitotrigger"
 	"github.com/lyeith/eventbus/internal/server"
@@ -72,6 +73,7 @@ type javascriptFixture struct {
 	triggers                                        *cognitotrigger.Runner
 	capture                                         *ses.SESManager
 	clockOffset                                     atomic.Int64
+	warm                                            bool
 }
 
 func newJavascriptFixture(t *testing.T, node string) *javascriptFixture {
@@ -110,13 +112,17 @@ func (fixture *javascriptFixture) start(t *testing.T, defineModule string) {
 	create := entry("create.mjs")
 	create.TimeoutSeconds = 5
 	create.Env = map[string]string{"SES_ENDPOINT_URL": fixture.endpoint}
-	triggers, err := cognitotrigger.New(&cognitotrigger.Config{
+	triggerConfig := &cognitotrigger.Config{
 		Node: fixture.node,
 		Pools: map[string]cognitotrigger.Pool{fixture.pool: {
 			DefineAuthChallenge: entry(defineModule), CreateAuthChallenge: create,
 			VerifyAuthChallengeResponse: entry("verify.mjs"),
 		}},
-	}, fixturePath("javascript"))
+	}
+	if fixture.warm {
+		triggerConfig.DevWarm = &cognitotrigger.DevWarmConfig{MaxWorkers: 3}
+	}
+	triggers, err := app.NewCognitoTriggers(triggerConfig, fixturePath("javascript"))
 	require.NoError(t, err)
 	fixture.triggers = triggers
 	fixture.serving.Config.Handler = server.New(server.Services{
@@ -197,6 +203,22 @@ func TestCognitoJavascriptSDKSmoke(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The unchanged real SDK and application handlers exercise the opt-in runtime
+// through the same composition helper as the CLI, including actual retirement.
+func TestCognitoJavascriptSDKWarmSmoke(t *testing.T) {
+	fixture := newJavascriptFixture(t, sdkNode(t))
+	fixture.close(t)
+	fixture.warm = true
+	fixture.start(t, "define.mjs")
+	fixture.run(t, "lifecycle.mjs", "exercise")
+	fixture.run(t, "custom_auth.mjs", "exercise")
+	fixture.run(t, "custom_auth.mjs", "prepare-restart")
+	fixture.close(t)
+	fixture.start(t, "define.mjs")
+	fixture.run(t, "lifecycle.mjs", "restart")
+	fixture.run(t, "custom_auth.mjs", "resume-restart")
 }
 
 func TestJavascriptSDKProcessControls(t *testing.T) {

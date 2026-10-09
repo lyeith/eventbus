@@ -16,6 +16,10 @@ func TestLoadStrictCompleteConfiguration(t *testing.T) {
 		success    bool
 	}{
 		{"valid", valid, true},
+		{"warm", "dev_warm: {max_workers: 3}\n" + valid, true},
+		{"warm-excess-cap", "dev_warm: {max_workers: 33}\n" + valid, false},
+		{"warm-negative-cap", "dev_warm: {max_workers: -1}\n" + valid, false},
+		{"warm-unknown", "dev_warm: {capacity: 3}\n" + valid, false},
 		{"unknown-top-level", "unknown: true\n" + valid, false},
 		{"observer-is-not-yaml", "dev_activity: {}\n" + valid, false},
 		{"unknown-trigger", strings.Replace(valid, "CreateAuthChallenge:", "OtherTrigger:", 1), false},
@@ -41,36 +45,4 @@ func TestLoadStrictCompleteConfiguration(t *testing.T) {
 			require.Equal(t, 2, config.Pools["local-pool"].CreateAuthChallenge.TimeoutSeconds)
 		})
 	}
-}
-
-func TestNewRejectsMissingRuntimeAndModule(t *testing.T) {
-	dir := t.TempDir()
-	config := fixtureConfig("missing.mjs", nil)
-	_, err := New(config, dir)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "module")
-	config.Node = filepath.Join(dir, "absent-node")
-	_, err = New(config, dir)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "executable")
-}
-
-func TestProcessEnvironmentRequiresExplicitAWSAndNodeOptions(t *testing.T) {
-	for name, value := range map[string]string{
-		"AWS_PROFILE": "ambient-profile", "AWS_ACCESS_KEY_ID": "ambient-key",
-		"HTTPS_PROXY": "ambient-proxy", "NODE_OPTIONS": "ambient-options",
-		"NODE_PATH": "ambient-module-path", "HOME": "ambient-home",
-	} {
-		t.Setenv(name, value)
-	}
-	values := processEnvironment(map[string]string{
-		"AWS_REGION": "ap-southeast-1", "AWS_ACCESS_KEY_ID": "declared-key",
-		"AWS_SECRET_ACCESS_KEY": "declared-secret", "APP_SETTING": "value",
-	})
-	environment := strings.Join(values, "\n")
-	require.NotContains(t, environment, "ambient")
-	require.Contains(t, environment, "AWS_ACCESS_KEY_ID=declared-key")
-	require.Contains(t, environment, "AWS_EC2_METADATA_DISABLED=true")
-	require.Contains(t, environment, "AWS_SHARED_CREDENTIALS_FILE="+os.DevNull)
-	require.Contains(t, environment, "APP_SETTING=value")
 }

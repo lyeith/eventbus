@@ -27,7 +27,7 @@ func resolveExecutable(name string, function Function, root string) (executableF
 	if err != nil || !info.IsDir() {
 		return executableFunction{}, fmt.Errorf("Lambda function %q: work directory must exist", name)
 	}
-	entry := executableFunction{name: name, runtime: function.Runtime, timeout: function.Timeout, workDir: directory, environment: maps.Clone(function.Environment), command: append([]string(nil), function.Command...), generation: &functionGeneration{}}
+	entry := executableFunction{name: name, runtime: function.Runtime, timeout: function.Timeout, workDir: directory, environment: maps.Clone(function.Environment), command: append([]string(nil), function.Command...), generation: &functionGeneration{}, contextFunctionName: function.ContextFunctionName}
 	if len(entry.command) == 0 {
 		if entry.runtime == "python" {
 			entry.command = []string{"python3"}
@@ -123,7 +123,7 @@ func (service *Service) ReloadFunction(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	function := Function{Runtime: previous.runtime, Command: append([]string(nil), previous.command...), Environment: maps.Clone(previous.environment), Timeout: previous.timeout, WorkDir: previous.workDir}
+	function := Function{Runtime: previous.runtime, Command: append([]string(nil), previous.command...), Environment: maps.Clone(previous.environment), Timeout: previous.timeout, WorkDir: previous.workDir, ContextFunctionName: previous.contextFunctionName}
 	if previous.module != "" {
 		function.Handler = previous.module + "#" + previous.exported
 	}

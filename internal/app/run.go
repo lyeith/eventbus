@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lyeith/eventbus/internal/cognito"
+	"github.com/lyeith/eventbus/internal/cognitotrigger"
 	"github.com/lyeith/eventbus/internal/consumer"
 	"github.com/lyeith/eventbus/internal/devactivity"
 	"github.com/lyeith/eventbus/internal/devquiescence"
@@ -106,6 +107,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	}
 	owned.notifications = notifications
 
+	var triggers *cognitotrigger.Runner
 	var functions *lambdaservice.Service
 	var mappings *eventsource.Service
 	var retained *devquiescence.Coordinator
@@ -115,8 +117,10 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		retained = devquiescence.NewWithOptions(devquiescence.Options{
 			Checks: []func() error{snsCapture.Err, capture.Err, notifications.Err, firehoseManager.DevEvidence,
 				func() error { return devInvocationEvidence(functions, mappings) },
+				func() error { return triggers.DevEvidence() },
 			},
 			DrainHooks: []devquiescence.DrainHook{
+				{Start: func() error { return triggers.DevBeginWarmDrain() }, Resume: func() error { return triggers.DevResumeWarm() }},
 				{Start: firehoseManager.DevBeginDrain, Resume: firehoseManager.DevResume},
 				{Start: func() error {
 					if functions != nil {
@@ -175,7 +179,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 			return fmt.Errorf("configure private evidence paths: %w", err)
 		}
 	}
-	triggers, err := loadCognitoTriggersWithActivity(cfg.cognitoTriggers, projectRoot, retainedActivity)
+	triggers, err = loadCognitoTriggersWithActivity(cfg.cognitoTriggers, projectRoot, retainedActivity)
 	if err != nil {
 		return fmt.Errorf("failed to configure Cognito triggers: %w", err)
 	}

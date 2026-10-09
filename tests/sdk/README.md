@@ -33,6 +33,8 @@ JSONL evidence. Typed SDK errors must reject wrong proofs/answers, forged,
 replayed, cross-user, expired and disabled sessions, plus trigger failures.
 Closing and reopening the same listener address, store, capture and runner must
 preserve identity, refresh and a pending custom challenge.
+The same unchanged lifecycle/custom-auth scripts run in default fresh mode and
+a dedicated warm-trigger scenario through `app.NewCognitoTriggers`.
 
 Python SNS Lambda verifies real asynchronous alias execution, native events,
 filtering, handler failures/timeouts, pressure, owner isolation and correlated evidence.

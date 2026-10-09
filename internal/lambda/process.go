@@ -25,8 +25,6 @@ var nodeWrapper string
 //go:embed wrapper.py
 var pythonWrapper string
 
-const maxWrapperResult = maxPayload + (8 << 10)
-
 // tailOutput holds bounded diagnostics without copying arbitrary handler logs
 // into EventBus logs. A mutex covers concurrent stdout/stderr copy goroutines.
 type tailOutput struct {
@@ -140,6 +138,19 @@ func environment(entry executableFunction, input invocation, runtimeAPI string) 
 	delete(values, "EVENTBUS_LAMBDA_PHASE_PROTOCOL")
 	delete(values, "EVENTBUS_LAMBDA_WARM")
 	delete(values, "EVENTBUS_LAMBDA_WARM_LOG_TOKEN")
+	delete(values, "EVENTBUS_LAMBDA_PRIVATE")
+	delete(values, "EVENTBUS_LAMBDA_CONTEXT_NAME")
+	if input.privateErrors {
+		for _, name := range []string{"LANG", "LC_ALL", "SSL_CERT_DIR", "SSL_CERT_FILE", "TMPDIR", "TMP", "TEMP"} {
+			if _, declared := entry.environment[name]; !declared {
+				if value, exists := os.LookupEnv(name); exists {
+					values[name] = value
+				}
+			}
+		}
+		values["EVENTBUS_LAMBDA_PRIVATE"] = "1"
+		values["EVENTBUS_LAMBDA_CONTEXT_NAME"] = entry.contextFunctionName
+	}
 	if (entry.runtime == "python" || entry.runtime == "node") && input.phase != nil {
 		values["EVENTBUS_LAMBDA_PHASE_PROTOCOL"] = "1"
 	}
@@ -223,9 +234,10 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 	}
 	command.Stdin = bytes.NewReader(input.payload)
 	logs := newInvocationLogs(input.diagnostics, entry.runtime == "command")
-	resultOutput := localexec.NewBoundedOutput(maxPayload)
+	resultOutput := localexec.NewBoundedOutput(responseLimit(input))
 	command.Stderr = logs.stderrWriter()
 	command.Stdout = resultOutput
+	wrapperLimit := responseLimit(input) + (8 << 10)
 	var reader, writer *os.File
 	var readDone chan struct{}
 	var reply []byte
@@ -258,9 +270,9 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 		command.Stdout = logs.stdoutWriter()
 		readDone = make(chan struct{})
 		go func() {
-			reply, readErr = io.ReadAll(io.LimitReader(reader, maxWrapperResult+1))
+			reply, readErr = io.ReadAll(io.LimitReader(reader, int64(wrapperLimit)+1))
 			readerMu.Lock()
-			if len(reply) > maxWrapperResult {
+			if len(reply) > wrapperLimit {
 				// A wrapper writing a very large result must not block forever
 				// after this reader reaches its limit. Closing wakes fd3's writer.
 				_ = closeReaderLocked()
@@ -385,15 +397,15 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 	switch {
 	case cleanupErr != nil:
 		result = failure("Runtime.InternalError", "Cannot stop function process group")
-	case resultOutput.Overflowed() || len(reply) > maxWrapperResult:
-		result = failure("Function.ResponseSizeTooLarge", "Response exceeds the 6291456 byte limit")
+	case resultOutput.Overflowed() || len(reply) > wrapperLimit:
+		result = responseTooLarge(input)
 	case waitErr != nil && !(wrapped && errors.Is(waitErr, exec.ErrWaitDelay)):
 		result = failure("Runtime.ExitError", "Function process exited without a valid response")
 	case wrapped:
 		if readErr != nil && !errors.Is(readErr, os.ErrClosed) {
 			result = failure("Runtime.InvalidResponse", "Cannot read handler response")
 		} else {
-			result = unwrapReply(reply)
+			result = unwrapReplyLimit(reply, responseLimit(input))
 		}
 	default:
 		payload := resultOutput.Bytes()
@@ -443,7 +455,8 @@ func mergeLaunchDiagnostics(prior, next invocationResult) invocationResult {
 	return next
 }
 
-func unwrapReply(reply []byte) invocationResult {
+func unwrapReply(reply []byte) invocationResult { return unwrapReplyLimit(reply, maxPayload) }
+func unwrapReplyLimit(reply []byte, limit int) invocationResult {
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 		Error  json.RawMessage `json:"error"`
@@ -461,8 +474,8 @@ func unwrapReply(reply []byte) invocationResult {
 		}
 		return invocationResult{payload: envelope.Error, functionError: true}
 	}
-	if len(envelope.Result) > maxPayload {
-		return failure("Function.ResponseSizeTooLarge", "Response exceeds the 6291456 byte limit")
+	if len(envelope.Result) > limit {
+		return responseTooLarge(invocation{responseLimit: limit})
 	}
 	return invocationResult{payload: envelope.Result}
 }

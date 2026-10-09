@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/app"
 	"github.com/lyeith/eventbus/internal/cognito"
 	"github.com/lyeith/eventbus/internal/cognitotrigger"
 	"github.com/lyeith/eventbus/internal/devquiescence"
@@ -245,7 +246,7 @@ func newRetainedStackFixture(t *testing.T, python, node, s3Endpoint string) *ret
 	}
 	create := entry("retained_create.mjs")
 	create.Env = map[string]string{"STACK_ROOT": fixture.root, "STACK_CONTROL": controlURL, "SES_ENDPOINT_URL": callbackURL}
-	fixture.triggers, err = cognitotrigger.New(&cognitotrigger.Config{Node: node, DevActivity: fixture.owner,
+	fixture.triggers, err = app.NewCognitoTriggers(&cognitotrigger.Config{Node: node, DevActivity: fixture.owner,
 		Pools: map[string]cognitotrigger.Pool{fixture.pool: {DefineAuthChallenge: entry("define.mjs"), CreateAuthChallenge: create, VerifyAuthChallengeResponse: entry("verify.mjs")}}}, fixturePath("javascript"))
 	require.NoError(t, err)
 	aws := server.New(server.Services{Messaging: messaging.NewHandler(fixture.broker), Lambda: fixture.functions,

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/awsprotocol"
 	"github.com/lyeith/eventbus/internal/localexec"
 )
 
@@ -200,15 +201,15 @@ func (runtime *runtimeInvocation) ServeHTTP(writer http.ResponseWriter, request 
 		writer.WriteHeader(http.StatusConflict)
 		return
 	}
-	payload, err := io.ReadAll(io.LimitReader(request.Body, maxPayload+1))
+	payload, err := awsprotocol.ReadBoundedBody(request.Body, request.ContentLength, int64(responseLimit(runtime.input)))
 	if err != nil {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	result := invocationResult{payload: payload, functionError: initialization || functionError}
 	status := http.StatusAccepted
-	if len(payload) > maxPayload {
-		result = failure("Function.ResponseSizeTooLarge", "Response exceeds the 6291456 byte limit")
+	if len(payload) > responseLimit(runtime.input) {
+		result = responseTooLarge(runtime.input)
 		status = http.StatusRequestEntityTooLarge
 	} else if initialization && len(payload) == 0 {
 		result = failure("Runtime.Unknown", "Runtime failed during initialization")

@@ -1,6 +1,6 @@
 //go:build linux || darwin
 
-package cognitotrigger
+package app
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/cognitotrigger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,7 +63,7 @@ func requireChildReaped(t *testing.T, child *fixtureChild) {
 func TestInvokeCleansUpChildrenAfterSuccess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "child.pid")
 	runner, _ := fixtureRunner(t, "handler.mjs", strings.Replace(spawnFixtureChild, "FIXTURE_COMPLETION", "return event;", 1), map[string]string{"PID_FILE": path})
-	_, err := runner.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	_, err := runner.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 	require.NoError(t, err)
 	requireChildReaped(t, childPID(t, path))
 }
@@ -76,7 +77,7 @@ func TestInvokeTimeoutAndCloseCleanUpChildren(t *testing.T) {
 			defer cancel()
 			result := make(chan error, 1)
 			go func() {
-				_, err := runner.Invoke(ctx, "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+				_, err := runner.Invoke(ctx, "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 				result <- err
 			}()
 			pid := childPID(t, path)
@@ -97,15 +98,38 @@ func TestInvokeTimeoutAndCloseCleanUpChildren(t *testing.T) {
 }
 
 func TestInheritedChildPipesCannotExtendInvocationIndefinitely(t *testing.T) {
-	runner, _ := activityFixtureRunner(t, `import {spawn} from 'node:child_process';
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "handler.mjs"), []byte(`import {spawn} from 'node:child_process';
 export async function handler(event){
   const child=spawn(process.execPath,['-e','setInterval(()=>{},1000);setTimeout(()=>process.exit(0),5000)'],{stdio:'inherit'});
   child.unref();
   return event;
-}`, nil)
+}`), 0600))
+	runner, configureErr := NewCognitoTriggers(fixtureConfig("handler.mjs", nil), directory)
+	require.NoError(t, configureErr)
+	t.Cleanup(func() { _ = runner.Close(context.Background()) })
 	started := time.Now()
-	_, err := runner.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	_, err := runner.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 	require.ErrorIs(t, err, exec.ErrWaitDelay, "incomplete process output ownership must fail closed")
 	require.ErrorIs(t, runner.Close(t.Context()), exec.ErrWaitDelay)
 	require.Less(t, time.Since(started), 3*time.Second)
+}
+
+func TestTriggerExitFailurePreservesJoinedPipeOwnershipUncertainty(t *testing.T) {
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "handler.mjs"), []byte(`import {spawn} from 'node:child_process';
+export async function handler(){
+ const child=spawn(process.execPath,['-e','setInterval(()=>{},1000);setTimeout(()=>process.exit(0),5000)'],{stdio:'inherit'});
+ child.unref();process.exit(7);
+}`), 0600))
+	runner, err := NewCognitoTriggers(fixtureConfig("handler.mjs", nil), directory)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = runner.Close(context.Background()) })
+	_, err = runner.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	var failure *cognitotrigger.InvocationError
+	require.ErrorAs(t, err, &failure)
+	require.Equal(t, cognitotrigger.HandlerFailure, failure.Kind)
+	require.ErrorIs(t, err, exec.ErrWaitDelay)
+	require.ErrorIs(t, runner.DevEvidence(), exec.ErrWaitDelay)
+	require.ErrorIs(t, runner.Close(t.Context()), exec.ErrWaitDelay)
 }

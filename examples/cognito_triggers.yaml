@@ -1,6 +1,8 @@
 # Application-owned handler files are resolved against --work-dir.
 # Each configured pool requires all three triggers. The default timeout is
 # Cognito's 5-second synchronous limit; a smaller local timeout is optional.
+# Optional reuse across steps (omission keeps fresh execution):
+# dev_warm: {max_workers: 3}
 node: node
 pools:
   us-east-1_LocalPool:

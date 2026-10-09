@@ -53,8 +53,11 @@ class Context:
         sys.stdout.write(str(message))
 
 
-def write_reply(value):
-    data = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+def encode_reply(value):
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+
+
+def write_reply(data):
     position = 0
     while position < len(data):
         position += os.write(3, data[position:])
@@ -156,9 +159,9 @@ def invoke_handler(handler, event, context):
         if inspect.iscoroutine(result):
             result.close()
         raise TypeError('Python Lambda handlers must be synchronous')
-    # Validate serialization inside the same handler-error boundary.
-    json.dumps(result, ensure_ascii=False, allow_nan=False)
-    return result
+    # Serialize once inside the same handler-error boundary. The immutable bytes
+    # are shared with the selected transport; encoding must not call user code twice.
+    return encode_reply(result)
 
 
 def error_reply(error):
@@ -180,8 +183,7 @@ def warm_main():
     import http.client
     connection = http.client.HTTPConnection(os.environ['AWS_LAMBDA_RUNTIME_API'])
     prefix = '/2018-06-01/runtime/'
-    def post(path, value):
-        data = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode()
+    def post(path, data):
         connection.request('POST', prefix + path, body=data, headers={'Content-Type': 'application/json'})
         response = connection.getresponse()
         response.read()
@@ -191,7 +193,7 @@ def warm_main():
         handler = load_handler()
     except BaseException as error:
         warm_logs_boundary(os.environ['EVENTBUS_LAMBDA_REQUEST_ID'])
-        post('init/error', error_reply(error))
+        post('init/error', encode_reply(error_reply(error)))
         return
     while True:
         connection.request('GET', prefix + 'invocation/next')
@@ -213,7 +215,7 @@ def warm_main():
             value = invoke_handler(handler, json.loads(data), Context())
             path = 'response'
         except BaseException as error:
-            value, path = error_reply(error), 'error'
+            value, path = encode_reply(error_reply(error)), 'error'
         warm_logs_boundary(request_id)
         post('invocation/' + request_id + '/' + path, value)
         if path == 'error':
@@ -229,10 +231,10 @@ else:
         event = json.load(sys.stdin)
         start_invocation_phase()
         context = Context()
-        write_reply({'result': invoke_handler(handler, event, context)})
+        write_reply(b'{"result":' + invoke_handler(handler, event, context) + b'}')
     except BaseException as error:
         close_phase_descriptors()
-        write_reply({'error': error_reply(error)})
+        write_reply(encode_reply({'error': error_reply(error)}))
     close_phase_descriptors()
 # Skip atexit hooks and user threads: the Go owner owns the complete process.
 sys.stdout.flush()

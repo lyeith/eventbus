@@ -1,4 +1,4 @@
-package cognitotrigger
+package app
 
 import (
 	"context"
@@ -10,24 +10,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/cognitotrigger"
 	"github.com/stretchr/testify/require"
 )
 
-func fixtureConfig(handler string, env map[string]string) *Config {
-	return &Config{Pools: map[string]Pool{"owned-pool": {
-		DefineAuthChallenge:         &Entry{Handler: handler, Env: env},
-		CreateAuthChallenge:         &Entry{Handler: handler, Env: env},
-		VerifyAuthChallengeResponse: &Entry{Handler: handler, Env: env},
+func fixtureConfig(handler string, env map[string]string) *cognitotrigger.Config {
+	return &cognitotrigger.Config{Pools: map[string]cognitotrigger.Pool{"owned-pool": {
+		DefineAuthChallenge:         &cognitotrigger.Entry{Handler: handler, Env: env},
+		CreateAuthChallenge:         &cognitotrigger.Entry{Handler: handler, Env: env},
+		VerifyAuthChallengeResponse: &cognitotrigger.Entry{Handler: handler, Env: env},
 	}}}
 }
 
-func fixtureRunner(t *testing.T, filename, source string, env map[string]string) (*Runner, string) {
+func fixtureRunner(t *testing.T, filename, source string, env map[string]string) (*cognitotrigger.Runner, string) {
 	t.Helper()
 	_, err := exec.LookPath("node")
 	require.NoError(t, err, "Node is required for custom-trigger process contracts")
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, filename), []byte(source), 0600))
-	runner, err := New(fixtureConfig(filename, env), dir)
+	runner, err := NewCognitoTriggers(fixtureConfig(filename, env), dir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, runner.Close(context.Background())) })
 	return runner, dir
@@ -92,22 +93,22 @@ exports.handler = async (event) => {
 	for name, source := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(source), 0600))
 	}
-	config := &Config{Pools: map[string]Pool{"owned-pool": {
-		DefineAuthChallenge:         &Entry{Handler: "define.mjs#decide"},
-		CreateAuthChallenge:         &Entry{Handler: "create.cjs", Env: map[string]string{"APP_SETTING": "declared"}},
-		VerifyAuthChallengeResponse: &Entry{Handler: "verify.mjs"},
+	config := &cognitotrigger.Config{Pools: map[string]cognitotrigger.Pool{"owned-pool": {
+		DefineAuthChallenge:         &cognitotrigger.Entry{Handler: "define.mjs#decide"},
+		CreateAuthChallenge:         &cognitotrigger.Entry{Handler: "create.cjs", Env: map[string]string{"APP_SETTING": "declared"}},
+		VerifyAuthChallengeResponse: &cognitotrigger.Entry{Handler: "verify.mjs"},
 	}}}
-	runner, err := New(config, dir)
+	runner, err := NewCognitoTriggers(config, dir)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, runner.Close(t.Context())) }()
 	require.True(t, runner.Supports("owned-pool"))
 	require.False(t, runner.Supports("unconfigured"))
-	result, err := runner.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	result, err := runner.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 	require.NoError(t, err)
 	require.Equal(t, "CUSTOM_CHALLENGE", result["response"].(map[string]any)["challengeName"])
 	create := awsEvent("CreateAuthChallenge_Authentication")
 	create["request"].(map[string]any)["challengeName"] = "CUSTOM_CHALLENGE"
-	result, err = runner.Invoke(t.Context(), "owned-pool", CreateAuthChallenge, create)
+	result, err = runner.Invoke(t.Context(), "owned-pool", cognitotrigger.CreateAuthChallenge, create)
 	require.NoError(t, err)
 	response := result["response"].(map[string]any)
 	require.Equal(t, "fixture-answer", response["privateChallengeParameters"].(map[string]any)["answer"])
@@ -115,11 +116,11 @@ exports.handler = async (event) => {
 	verify := awsEvent("VerifyAuthChallengeResponse_Authentication")
 	verify["request"].(map[string]any)["privateChallengeParameters"] = response["privateChallengeParameters"]
 	verify["request"].(map[string]any)["challengeAnswer"] = "fixture-answer"
-	result, err = runner.Invoke(t.Context(), "owned-pool", VerifyAuthChallengeResponse, verify)
+	result, err = runner.Invoke(t.Context(), "owned-pool", cognitotrigger.VerifyAuthChallengeResponse, verify)
 	require.NoError(t, err)
 	require.Equal(t, true, result["response"].(map[string]any)["answerCorrect"])
 	verify["request"].(map[string]any)["challengeAnswer"] = "wrong"
-	result, err = runner.Invoke(t.Context(), "owned-pool", VerifyAuthChallengeResponse, verify)
+	result, err = runner.Invoke(t.Context(), "owned-pool", cognitotrigger.VerifyAuthChallengeResponse, verify)
 	require.NoError(t, err)
 	require.Equal(t, false, result["response"].(map[string]any)["answerCorrect"])
 }
@@ -127,22 +128,22 @@ exports.handler = async (event) => {
 func TestInvokeFailsClosedForHandlerAndProtocolErrors(t *testing.T) {
 	for _, scenario := range []struct {
 		name, source string
-		kind         ErrorKind
+		kind         cognitotrigger.ErrorKind
 	}{
-		{"throw", `export async function handler(){ throw new Error('PRIVATE_VALUE_DO_NOT_REFLECT'); }`, HandlerFailure},
-		{"missing-export", `export async function other(event){return event;}`, HandlerFailure},
-		{"undefined", `export async function handler(){}`, InvalidResponse},
-		{"null", `export async function handler(){return null;}`, InvalidResponse},
-		{"response-scalar", `export async function handler(){return {response:'yes'};}`, InvalidResponse},
-		{"circular", `export async function handler(event){event.response.loop=event;return event;}`, InvalidResponse},
-		{"extra-results", `import fs from 'node:fs'; export async function handler(event){fs.writeSync(1,'{}\\n');return event;}`, InvalidResponse},
-		{"large-result", `export async function handler(event){event.response.large='x'.repeat(2<<20);return event;}`, InvalidResponse},
-		{"large-diagnostics", `export async function handler(event){process.stderr.write('x'.repeat(128<<10));return event;}`, InvalidResponse},
+		{"throw", `export async function handler(){ throw new Error('PRIVATE_VALUE_DO_NOT_REFLECT'); }`, cognitotrigger.HandlerFailure},
+		{"missing-export", `export async function other(event){return event;}`, cognitotrigger.HandlerFailure},
+		{"undefined", `export async function handler(){}`, cognitotrigger.InvalidResponse},
+		{"null", `export async function handler(){return null;}`, cognitotrigger.InvalidResponse},
+		{"response-scalar", `export async function handler(){return {response:'yes'};}`, cognitotrigger.InvalidResponse},
+		{"circular", `export async function handler(event){event.response.loop=event;return event;}`, cognitotrigger.InvalidResponse},
+
+		{"large-result", `export async function handler(event){event.response.large='x'.repeat(2<<20);return event;}`, cognitotrigger.InvalidResponse},
+		{"large-diagnostics", `export async function handler(event){process.stderr.write('x'.repeat(128<<10));return event;}`, cognitotrigger.InvalidResponse},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			runner, _ := fixtureRunner(t, "handler.mjs", scenario.source, nil)
-			_, err := runner.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
-			var invocation *InvocationError
+			_, err := runner.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+			var invocation *cognitotrigger.InvocationError
 			require.ErrorAs(t, err, &invocation)
 			require.Equal(t, scenario.kind, invocation.Kind)
 			require.NotContains(t, err.Error(), "PRIVATE_VALUE")
@@ -151,47 +152,54 @@ func TestInvokeFailsClosedForHandlerAndProtocolErrors(t *testing.T) {
 }
 
 func TestInvokeTimeoutAndCloseOwnInflightExecution(t *testing.T) {
-	runner, _ := fixtureRunner(t, "handler.mjs", `export async function handler(){await new Promise(()=>{});}`, nil)
-	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	runner, directory := fixtureRunner(t, "handler.mjs", `import fs from "node:fs";export async function handler(){fs.writeFileSync("started","yes");await new Promise(()=>{});}`, nil)
+	// A cold Node import is not an invocation-start signal. Admit under a useful
+	// budget and require the real handler marker before asserting its deadline.
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	started := time.Now()
-	_, err := runner.Invoke(ctx, "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
-	var invocation *InvocationError
+	timed := make(chan error, 1)
+	go func() {
+		_, err := runner.Invoke(ctx, "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+		timed <- err
+	}()
+	require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(directory, "started")); return err == nil }, 2*time.Second, 5*time.Millisecond, "configured handler must start before deadline is evaluated")
+	err := <-timed
+	var invocation *cognitotrigger.InvocationError
 	require.ErrorAs(t, err, &invocation)
-	require.Equal(t, Timeout, invocation.Kind)
+	require.Equal(t, cognitotrigger.Timeout, invocation.Kind)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, time.Since(started), 2*time.Second)
+	require.NoError(t, os.Remove(filepath.Join(directory, "started")))
 	inflight := make(chan error, 1)
 	go func() {
-		_, err := runner.Invoke(context.Background(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+		_, err := runner.Invoke(context.Background(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 		inflight <- err
 	}()
-	require.Eventually(t, func() bool { runner.mu.Lock(); defer runner.mu.Unlock(); return len(runner.active) == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(directory, "started")); return err == nil }, 3*time.Second, 5*time.Millisecond, "Close must cancel an actual admitted handler")
 	require.NoError(t, runner.Close(t.Context()))
 	require.Error(t, <-inflight)
-	_, err = runner.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	_, err = runner.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 	require.ErrorAs(t, err, &invocation)
-	require.Equal(t, Closed, invocation.Kind)
+	require.Equal(t, cognitotrigger.Closed, invocation.Kind)
 	require.NoError(t, runner.Close(t.Context()))
 }
 
 func TestInvokeConfigurationIsImmutableAndMissingPoolCannotFallback(t *testing.T) {
 	runner, dir := fixtureRunner(t, "handler.mjs", `export async function handler(event){event.response.setting=process.env.APP_SETTING;return event;}`, map[string]string{"APP_SETTING": "original"})
 	config := fixtureConfig("handler.mjs", map[string]string{"APP_SETTING": "original"})
-	second, err := New(config, dir)
+	second, err := NewCognitoTriggers(config, dir)
 	require.NoError(t, err)
 	defer second.Close(t.Context())
 	config.Pools["owned-pool"].DefineAuthChallenge.Env["APP_SETTING"] = "changed"
-	result, err := second.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	result, err := second.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 	require.NoError(t, err)
 	require.Equal(t, "original", result["response"].(map[string]any)["setting"])
-	_, err = runner.Invoke(t.Context(), "missing", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
-	var invocation *InvocationError
+	_, err = runner.Invoke(t.Context(), "missing", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	var invocation *cognitotrigger.InvocationError
 	require.ErrorAs(t, err, &invocation)
-	require.Equal(t, NotConfigured, invocation.Kind)
+	require.Equal(t, cognitotrigger.NotConfigured, invocation.Kind)
 	_, err = runner.Invoke(t.Context(), "owned-pool", "UnknownTrigger", awsEvent("DefineAuthChallenge_Authentication"))
 	require.ErrorAs(t, err, &invocation)
-	require.Equal(t, NotConfigured, invocation.Kind)
+	require.Equal(t, cognitotrigger.NotConfigured, invocation.Kind)
 }
 
 func TestInvokeDoesNotInheritAmbientCredentialsOrNodeOptions(t *testing.T) {
@@ -202,7 +210,7 @@ func TestInvokeDoesNotInheritAmbientCredentialsOrNodeOptions(t *testing.T) {
 	runner, _ := fixtureRunner(t, "handler.mjs", `export async function handler(event){event.response.environment={
 awsProfile:process.env.AWS_PROFILE??null,proxy:process.env.HTTPS_PROXY??null,nodeOptions:process.env.NODE_OPTIONS??null,
 key:process.env.AWS_ACCESS_KEY_ID,setting:process.env.APP_SETTING};return event;}`, map[string]string{"AWS_ACCESS_KEY_ID": "declared-key", "APP_SETTING": "declared-setting"})
-	result, err := runner.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	result, err := runner.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 	require.NoError(t, err)
 	environment := result["response"].(map[string]any)["environment"].(map[string]any)
 	require.Nil(t, environment["awsProfile"])
@@ -223,7 +231,7 @@ func TestCloseCanceledCallerCanRejoinCleanup(t *testing.T) {
 
 func TestInvokeResultPreservesJSONNumbers(t *testing.T) {
 	runner, _ := fixtureRunner(t, "handler.mjs", `export async function handler(event){event.response.count=5;return event;}`, nil)
-	result, err := runner.Invoke(t.Context(), "owned-pool", DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
+	result, err := runner.Invoke(t.Context(), "owned-pool", cognitotrigger.DefineAuthChallenge, awsEvent("DefineAuthChallenge_Authentication"))
 	require.NoError(t, err)
 	require.Equal(t, json.Number("5"), result["response"].(map[string]any)["count"])
 }

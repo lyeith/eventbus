@@ -14,22 +14,24 @@ import (
 // Config is the resolved local recipe used by this service. Native protocol
 // fields retain AWS semantics; file loading belongs to dev_config.go.
 type Config struct {
-	Functions      map[string]Function   `yaml:"functions"`
-	DevAsync       *DevAsyncConfig       `yaml:"dev_async,omitempty"`
-	DevWarm        *DevWarmConfig        `yaml:"dev_warm,omitempty"`
-	DevActivity    DevActivity           `yaml:"-"`
-	DevDiagnostics *DevDiagnosticsConfig `yaml:"dev_diagnostics,omitempty"`
+	Functions       map[string]Function   `yaml:"functions"`
+	DevAsync        *DevAsyncConfig       `yaml:"dev_async,omitempty"`
+	ExecutionPolicy *ExecutionPolicy      `yaml:"-"`
+	DevWarm         *DevWarmConfig        `yaml:"dev_warm,omitempty"`
+	DevActivity     DevActivity           `yaml:"-"`
+	DevDiagnostics  *DevDiagnosticsConfig `yaml:"dev_diagnostics,omitempty"`
 }
 
 // Function declares one local function. Command is an argv vector, never a
 // shell command. Python and Node commands default to python3 and node.
 type Function struct {
-	Runtime     string            `yaml:"runtime"`
-	Command     []string          `yaml:"command"`
-	Handler     string            `yaml:"handler"`
-	Environment map[string]string `yaml:"environment"`
-	Timeout     time.Duration     `yaml:"timeout"`
-	WorkDir     string            `yaml:"work_dir"`
+	Runtime             string            `yaml:"runtime"`
+	Command             []string          `yaml:"command"`
+	Handler             string            `yaml:"handler"`
+	Environment         map[string]string `yaml:"environment"`
+	Timeout             time.Duration     `yaml:"timeout"`
+	WorkDir             string            `yaml:"work_dir"`
+	ContextFunctionName string            `yaml:"-"`
 }
 
 var functionARNReference = regexp.MustCompile(`^arn:aws(?:-[a-z0-9-]+)?:lambda:[a-z]{2}(?:-[a-z0-9]+)+-[0-9]+:[0-9]{12}:function:(.+)$`)
@@ -40,6 +42,12 @@ var exportedName = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 func (config *Config) Validate() error {
 	if config == nil || len(config.Functions) == 0 {
 		return errors.New("Lambda configuration requires functions")
+	}
+	if err := validateExecutionPolicy(config.ExecutionPolicy); err != nil {
+		return err
+	}
+	if config.ExecutionPolicy != nil && config.ExecutionPolicy.PrivateErrors && (config.DevDiagnostics != nil || config.DevAsync != nil) {
+		return errors.New("private execution cannot enable Lambda diagnostic or asynchronous capture")
 	}
 	if err := validateDevWarm(config.DevWarm); err != nil {
 		return err
