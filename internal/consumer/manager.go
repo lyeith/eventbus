@@ -2,10 +2,13 @@ package consumer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"sync"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/localexec"
 	"github.com/lyeith/eventbus/internal/messaging"
 	"github.com/lyeith/eventbus/internal/sqsevent"
 	"github.com/rs/zerolog"
@@ -21,48 +24,124 @@ const (
 // The application injects the same broker used by the SNS and SQS adapters.
 type QueueBroker interface {
 	GetQueue(name string) *messaging.Queue
-	ReceiveMessages(queue *messaging.Queue, max int, wait time.Duration) []*messaging.Message
+	ReceiveMessagesContext(context.Context, *messaging.Queue, int, time.Duration) ([]*messaging.Message, error)
 	ExtendMessageVisibility(queue *messaging.Queue, receipt string, timeout time.Duration) bool
 	DeleteMessage(queue *messaging.Queue, receipt string) bool
 	MoveMessage(source, destination *messaging.Queue, receipt string) bool
 }
 
-// ConsumerManager manages background consumer goroutines.
+// ConsumerManager manages background consumer goroutines. An uncertain process
+// join permanently fences its execution; ordinary handler failures still retry.
 type ConsumerManager struct {
 	broker  QueueBroker
 	workDir string // project root for uv run
-	wg      sync.WaitGroup
+
+	mu           sync.Mutex
+	running      int
+	idle         chan struct{}
+	ownershipErr error
+	fenceCtx     context.Context
+	fence        context.CancelFunc
+	// The production boundary always uses localexec cleanup. Private tests wrap
+	// that same cleanup to exercise uncertainty after real child/group joining.
+	processCleanup func(*exec.Cmd) error
 }
 
 func NewConsumerManager(broker QueueBroker, workDir string) *ConsumerManager {
-	return &ConsumerManager{broker: broker, workDir: workDir}
+	idle := make(chan struct{})
+	close(idle)
+	fenceCtx, fence := context.WithCancel(context.Background())
+	return &ConsumerManager{broker: broker, workDir: workDir, idle: idle, fenceCtx: fenceCtx, fence: fence, processCleanup: localexec.Cleanup}
 }
 
-// Start launches a goroutine per consumer entry and returns immediately.
+// Start admits pollers before returning. Call Start before Wait; a manager with
+// ownership uncertainty refuses subsequent starts as well as process launches.
 func (cm *ConsumerManager) Start(ctx context.Context, consumers []ConsumerEntry) {
+	cm.mu.Lock()
+	if cm.ownershipErr != nil || len(consumers) == 0 {
+		cm.mu.Unlock()
+		return
+	}
+	if cm.running == 0 {
+		cm.idle = make(chan struct{})
+	}
+	cm.running += len(consumers)
+	cm.mu.Unlock()
 	for _, c := range consumers {
 		entry := c
-		cm.wg.Add(1)
+		pollCtx, cancel := context.WithCancel(ctx)
+		stopFence := context.AfterFunc(cm.fenceCtx, cancel)
 		go func() {
-			defer cm.wg.Done()
-			cm.pollLoop(ctx, entry)
+			defer func() {
+				stopFence()
+				cancel()
+				cm.mu.Lock()
+				cm.running--
+				if cm.running == 0 {
+					close(cm.idle)
+				}
+				cm.mu.Unlock()
+			}()
+			cm.pollLoop(pollCtx, entry)
 		}()
 	}
 }
 
-// Wait blocks until every selected consumer has observed cancellation.
+// Wait joins admitted pollers and their actual process cleanup. Ownership
+// uncertainty remains an error after joining and on every subsequent Wait.
+// A caller deadline only bounds waiting; it never releases consumer ownership.
 func (cm *ConsumerManager) Wait(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() {
-		cm.wg.Wait()
-		close(done)
-	}()
+	cm.mu.Lock()
+	done := cm.idle
+	cm.mu.Unlock()
 	select {
 	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+		return cm.ownershipFailure()
+	default:
 	}
+	select {
+	case <-done:
+		return cm.ownershipFailure()
+	case <-ctx.Done():
+		select {
+		case <-done:
+			return cm.ownershipFailure()
+		default:
+			return ctx.Err()
+		}
+	}
+}
+
+type processOwnershipError struct{ cause error }
+
+func (err *processOwnershipError) Error() string { return err.cause.Error() }
+func (err *processOwnershipError) Unwrap() error { return err.cause }
+
+func (cm *ConsumerManager) ownershipFailure() error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.ownershipErr
+}
+
+func (cm *ConsumerManager) failOwnership(err error) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.ownershipErr == nil {
+		cm.ownershipErr = &processOwnershipError{cause: err}
+		cm.fence()
+	}
+	return cm.ownershipErr
+}
+
+// Admission and the ownership fence share this lock. A process which starts
+// before a concurrent failure remains owned by its canceled poller through Wait.
+func (cm *ConsumerManager) startHandler(command *exec.Cmd) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.ownershipErr != nil {
+		return cm.ownershipErr
+	}
+	return command.Start()
 }
 
 func (cm *ConsumerManager) pollLoop(ctx context.Context, entry ConsumerEntry) {
@@ -88,7 +167,23 @@ func (cm *ConsumerManager) pollLoop(ctx context.Context, entry ConsumerEntry) {
 			continue
 		}
 
-		messages := cm.broker.ReceiveMessages(queue, entry.BatchSize, 5*time.Second)
+		// Preserve the legacy broker's recipe batch clamping while using its
+		// stricter contextual native port.
+		batchSize := max(1, min(entry.BatchSize, 10))
+		messages, receiveErr := cm.broker.ReceiveMessagesContext(ctx, queue, batchSize, 5*time.Second)
+
+		if receiveErr != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Warn().Err(receiveErr).Msg("Queue receive failed, retrying in 5s")
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
 		if len(messages) == 0 {
 			continue
 		}
@@ -103,6 +198,11 @@ func (cm *ConsumerManager) pollLoop(ctx context.Context, entry ConsumerEntry) {
 		result, err := cm.invokeHandlerResult(ctx, entry, event)
 
 		if err != nil {
+			var ownership *processOwnershipError
+			if errors.As(err, &ownership) {
+				logger.Error().Err(err).Msg("Consumer process ownership uncertain; execution fenced and records retained")
+				return
+			}
 			logger.Error().Err(err).Int("count", len(messages)).Msg("Handler failed; retaining every record")
 			cm.settleBatch(logger, entry, queue, messages, nil, true)
 			continue

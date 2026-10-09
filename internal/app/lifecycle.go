@@ -89,9 +89,12 @@ func (owned *eventBusLifecycle) quiesce(ctx context.Context) error {
 	if owned.consumers != nil {
 		if err := owned.consumers.Wait(ctx); err != nil {
 			failures = append(failures, fmt.Errorf("join consumers; stores retained: %w", err))
-			// Polling was canceled above; join its bounded process cleanup even after
-			// the budget expired, while retaining the deadline failure.
-			_ = owned.consumers.Wait(context.WithoutCancel(ctx))
+			// Polling was canceled above; join actual process cleanup even after
+			// the budget expired. Preserve uncertainty discovered during that join
+			// as well as the original waiting failure.
+			if joinedErr := owned.consumers.Wait(context.WithoutCancel(ctx)); joinedErr != nil && !errors.Is(err, joinedErr) {
+				failures = append(failures, fmt.Errorf("consumer ownership after join; stores retained: %w", joinedErr))
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {

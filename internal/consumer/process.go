@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -97,13 +98,29 @@ func (cm *ConsumerManager) runHandler(ctx context.Context, entry ConsumerEntry, 
 
 	stdout := localexec.NewBoundedOutput(maxOutputBytes)
 	stderr := localexec.NewBoundedOutput(maxOutputBytes)
-	cmd.Stdout, cmd.Stderr = stdout, stderr
+	stdoutCopy, stderrCopy := localexec.NewTrackedOutputs(stdout, stderr)
+	cmd.Stdout, cmd.Stderr = stdoutCopy, stderrCopy
 
 	logger := log.With().Str("consumer", entry.Name).Str("handler", handler).Logger()
 
-	err := cmd.Run()
-	if cleanupErr := localexec.Cleanup(cmd); cleanupErr != nil {
-		return nil, fmt.Errorf("stop handler process group: %w", cleanupErr)
+	err := cm.startHandler(cmd)
+	if err == nil {
+		err = cmd.Wait()
+	}
+	var ownershipErr error
+	if cmd.Process != nil {
+		ownershipErr = errors.Join(stdoutCopy.Err(), stderrCopy.Err())
+	}
+	if cleanupErr := cm.processCleanup(cmd); cleanupErr != nil {
+		ownershipErr = errors.Join(ownershipErr, fmt.Errorf("stop handler process group: %w", cleanupErr))
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// A forced pipe cutoff is not proof of complete handler ownership,
+		// even after group cleanup succeeds. Keep it separate from business retry.
+		ownershipErr = errors.Join(ownershipErr, exec.ErrWaitDelay)
+	}
+	if ownershipErr != nil {
+		return nil, cm.failOwnership(ownershipErr)
 	}
 
 	if stderr.Len() > 0 {
@@ -111,6 +128,10 @@ func (cm *ConsumerManager) runHandler(ctx context.Context, entry ConsumerEntry, 
 	}
 
 	if err != nil {
+		var ownership *processOwnershipError
+		if errors.As(err, &ownership) {
+			return nil, err
+		}
 		if execCtx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("handler timed out after %s", timeout)
 		}
