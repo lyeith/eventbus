@@ -53,6 +53,7 @@ type DeliveryStream struct {
 	BufferSizeMB                                       int
 	BufferInterval                                     time.Duration
 	config                                             StreamConfig
+	location                                           *time.Location // immutable, shared by grouping and object preparation
 	metadata                                           RecordMetadataExtractor
 	buildObject                                        objectBuilder
 	created                                            time.Time
@@ -125,7 +126,7 @@ func (fm *FirehoseManager) CreateStream(name, bucketName, prefix, errorPrefix st
 		bufferIntervalSec = 60
 	}
 	config := StreamConfig{Name: name, BucketARN: "arn:aws:s3:::" + bucketName, Prefix: prefix, ErrorOutputPrefix: errorPrefix, CompressionFormat: "UNCOMPRESSED", CustomTimeZone: "UTC", BufferingHints: BufferingHints{SizeInMBs: bufferSizeMB, IntervalInSeconds: bufferIntervalSec}}
-	return fm.createStream(config, nil)
+	return fm.createStream(config, nil, time.UTC)
 }
 
 func (fm *FirehoseManager) CreateConfiguredStream(ctx context.Context, config StreamConfig) (*DeliveryStream, error) {
@@ -133,17 +134,18 @@ func (fm *FirehoseManager) CreateConfiguredStream(ctx context.Context, config St
 	extractor := fm.metadata
 	fm.mu.RUnlock()
 	config = cloneConfig(config)
-	if err := validateConfig(config, extractor); err != nil {
+	location, err := validateConfig(config, extractor)
+	if err != nil {
 		return nil, err
 	}
 	processor, err := prepareMetadataExtractor(ctx, extractor, config.metadataQuery())
 	if err != nil {
 		return nil, fmt.Errorf("invalid MetadataExtractionQuery: %w", err)
 	}
-	return fm.createStream(config, processor)
+	return fm.createStream(config, processor, location)
 }
 
-func (fm *FirehoseManager) createStream(config StreamConfig, metadata RecordMetadataExtractor) (*DeliveryStream, error) {
+func (fm *FirehoseManager) createStream(config StreamConfig, metadata RecordMetadataExtractor, location *time.Location) (*DeliveryStream, error) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	if fm.stopping {
@@ -158,7 +160,7 @@ func (fm *FirehoseManager) createStream(config StreamConfig, metadata RecordMeta
 	config = cloneConfig(config)
 	ctx, cancel := context.WithCancel(context.Background())
 	_, bucket, _ := strings.Cut(config.BucketARN, ":::")
-	ds := &DeliveryStream{Name: config.Name, ARN: fmt.Sprintf("arn:aws:firehose:%s:%s:deliverystream/%s", fm.region, fm.accountID, config.Name), BucketName: bucket, Prefix: config.Prefix, ErrorPrefix: config.ErrorOutputPrefix, BufferSizeMB: config.BufferingHints.SizeInMBs, BufferInterval: time.Duration(config.BufferingHints.IntervalInSeconds) * time.Second, Status: "ACTIVE", config: config, metadata: metadata, buildObject: fm.buildObject, created: time.Now(), cancel: cancel, flush: make(chan struct{}, 1), flushSlot: make(chan struct{}, 1), done: make(chan struct{})}
+	ds := &DeliveryStream{Name: config.Name, ARN: fmt.Sprintf("arn:aws:firehose:%s:%s:deliverystream/%s", fm.region, fm.accountID, config.Name), BucketName: bucket, Prefix: config.Prefix, ErrorPrefix: config.ErrorOutputPrefix, BufferSizeMB: config.BufferingHints.SizeInMBs, BufferInterval: time.Duration(config.BufferingHints.IntervalInSeconds) * time.Second, Status: "ACTIVE", config: config, location: location, metadata: metadata, buildObject: fm.buildObject, created: time.Now(), cancel: cancel, flush: make(chan struct{}, 1), flushSlot: make(chan struct{}, 1), done: make(chan struct{})}
 	fm.streams[ds.Name] = ds
 	go fm.flushLoop(ctx, ds)
 	return ds, nil
@@ -235,10 +237,9 @@ func processingFailure(data []byte, arrived time.Time, code string, attempts int
 	return append(encoded, '\n')
 }
 
-func prepareRecord(ctx context.Context, config StreamConfig, extractor RecordMetadataExtractor, data []byte, arrived time.Time) bufferedRecord {
+func prepareRecord(ctx context.Context, config StreamConfig, location *time.Location, extractor RecordMetadataExtractor, data []byte, arrived time.Time) bufferedRecord {
 	record := bufferedRecord{data: bytes.Clone(data), originalBytes: len(data), arrived: arrived}
 	record.source = record.data
-	location, _ := time.LoadLocation(config.CustomTimeZone)
 	if query := config.metadataQuery(); query != "" {
 		keys, err := extractor.Extract(ctx, data)
 		if err == nil {
@@ -284,7 +285,7 @@ func (fm *FirehoseManager) AcceptRecordBatch(ctx context.Context, ds *DeliverySt
 	prepared := make([]bufferedRecord, len(records))
 	arrived := time.Now()
 	for index, data := range records {
-		prepared[index] = prepareRecord(ctx, ds.config, ds.metadata, data, arrived)
+		prepared[index] = prepareRecord(ctx, ds.config, ds.location, ds.metadata, data, arrived)
 	}
 	fm.mu.RLock()
 	defer fm.mu.RUnlock()
@@ -450,7 +451,7 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 				record.data = processingFailure(record.source, record.arrived, "DynamicPartitioning.DeliveryFailed", attempts)
 				failed[index] = record
 			}
-			replacement, prepareErr := ds.buildObject(ctx, ds.config, failed)
+			replacement, prepareErr := ds.buildObject(ctx, ds.config, ds.location, failed)
 			if prepareErr != nil {
 				return prepareErr
 			}

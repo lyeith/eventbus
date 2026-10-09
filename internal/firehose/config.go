@@ -133,82 +133,84 @@ func (config StreamConfig) appendDelimiter() bool {
 	return false
 }
 
-func validateConfig(config StreamConfig, extractor MetadataExtractor) error {
+// validateConfig also prepares the stream-owned timezone once at creation.
+func validateConfig(config StreamConfig, extractor MetadataExtractor) (*time.Location, error) {
 	if !streamNameRE.MatchString(config.Name) {
-		return fmt.Errorf("DeliveryStreamName must match [a-zA-Z0-9_.-]{1,64}")
+		return nil, fmt.Errorf("DeliveryStreamName must match [a-zA-Z0-9_.-]{1,64}")
 	}
 	if len(config.BucketARN) > 2048 || !bucketARNRE.MatchString(config.BucketARN) {
-		return fmt.Errorf("BucketARN must be an S3 bucket ARN of at most 2048 bytes")
+		return nil, fmt.Errorf("BucketARN must be an S3 bucket ARN of at most 2048 bytes")
 	}
 	if len(config.RoleARN) > 512 || !roleARNRE.MatchString(config.RoleARN) {
-		return fmt.Errorf("RoleARN must be an IAM role ARN of at most 512 bytes")
+		return nil, fmt.Errorf("RoleARN must be an IAM role ARN of at most 512 bytes")
 	}
 	if config.BufferingHints.SizeInMBs < 1 || config.BufferingHints.SizeInMBs > 128 || config.BufferingHints.IntervalInSeconds < 0 || config.BufferingHints.IntervalInSeconds > 900 {
-		return fmt.Errorf("BufferingHints require SizeInMBs 1..128 and IntervalInSeconds 0..900")
+		return nil, fmt.Errorf("BufferingHints require SizeInMBs 1..128 and IntervalInSeconds 0..900")
 	}
 	if config.CompressionFormat != "UNCOMPRESSED" && config.CompressionFormat != "GZIP" {
-		return fmt.Errorf("unsupported CompressionFormat %q", config.CompressionFormat)
+		return nil, fmt.Errorf("unsupported CompressionFormat %q", config.CompressionFormat)
 	}
 	if len(config.FileExtension) > 128 || !fileExtensionRE.MatchString(config.FileExtension) {
-		return fmt.Errorf("invalid FileExtension")
+		return nil, fmt.Errorf("invalid FileExtension")
 	}
-	if _, err := time.LoadLocation(config.CustomTimeZone); err != nil {
-		return fmt.Errorf("invalid CustomTimeZone")
+	location, err := time.LoadLocation(config.CustomTimeZone)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CustomTimeZone")
 	}
 	if err := validatePrefix(config.Prefix, false, config.DynamicPartitioningConfiguration.Enabled); err != nil {
-		return err
+		return nil, err
 	}
 	if err := validatePrefix(config.ErrorOutputPrefix, true, false); err != nil {
-		return err
+		return nil, err
 	}
 	if strings.Contains(config.Prefix, "!{") && config.ErrorOutputPrefix == "" {
-		return fmt.Errorf("ErrorOutputPrefix is required when Prefix contains expressions")
+		return nil, fmt.Errorf("ErrorOutputPrefix is required when Prefix contains expressions")
 	}
 	if config.DynamicPartitioningConfiguration.RetryOptions != nil && !config.DynamicPartitioningConfiguration.Enabled {
-		return fmt.Errorf("dynamic partition RetryOptions require Enabled=true")
+		return nil, fmt.Errorf("dynamic partition RetryOptions require Enabled=true")
 	}
 	if config.DynamicPartitioningConfiguration.RetryOptions != nil && (config.DynamicPartitioningConfiguration.RetryOptions.DurationInSeconds < 0 || config.DynamicPartitioningConfiguration.RetryOptions.DurationInSeconds > 7200) {
-		return fmt.Errorf("dynamic partition RetryOptions.DurationInSeconds must be 0..7200")
+		return nil, fmt.Errorf("dynamic partition RetryOptions.DurationInSeconds must be 0..7200")
 	}
 	seen := map[string]bool{}
 	for _, processor := range config.ProcessingConfiguration.Processors {
 		if seen[processor.Type] {
-			return fmt.Errorf("duplicate processor %q", processor.Type)
+			return nil, fmt.Errorf("duplicate processor %q", processor.Type)
 		}
 		seen[processor.Type] = true
 		parameters := map[string]string{}
 		for _, parameter := range processor.Parameters {
 			if _, exists := parameters[parameter.ParameterName]; exists {
-				return fmt.Errorf("duplicate processor parameter %q", parameter.ParameterName)
+				return nil, fmt.Errorf("duplicate processor parameter %q", parameter.ParameterName)
 			}
 			parameters[parameter.ParameterName] = parameter.ParameterValue
 		}
 		switch processor.Type {
 		case "MetadataExtraction":
 			if len(parameters) != 2 || parameters["JsonParsingEngine"] != "JQ-1.6" || parameters["MetadataExtractionQuery"] == "" {
-				return fmt.Errorf("MetadataExtraction requires only JsonParsingEngine=JQ-1.6 and MetadataExtractionQuery")
+				return nil, fmt.Errorf("MetadataExtraction requires only JsonParsingEngine=JQ-1.6 and MetadataExtractionQuery")
 			}
 			if !config.DynamicPartitioningConfiguration.Enabled {
-				return fmt.Errorf("MetadataExtraction requires dynamic partitioning")
+				return nil, fmt.Errorf("MetadataExtraction requires dynamic partitioning")
 			}
 			if extractor == nil {
-				return fmt.Errorf("MetadataExtraction requires a configured metadata extractor")
+				return nil, fmt.Errorf("MetadataExtraction requires a configured metadata extractor")
 			}
 		case "AppendDelimiterToRecord":
 			if len(parameters) != 0 && (len(parameters) != 1 || parameters["Delimiter"] != "\\n") {
-				return fmt.Errorf("AppendDelimiterToRecord supports only the newline Delimiter")
+				return nil, fmt.Errorf("AppendDelimiterToRecord supports only the newline Delimiter")
 			}
 		default:
-			return fmt.Errorf("unsupported processor %q", processor.Type)
+			return nil, fmt.Errorf("unsupported processor %q", processor.Type)
 		}
 	}
 	if !config.ProcessingConfiguration.Enabled && len(seen) != 0 {
-		return fmt.Errorf("Processors require ProcessingConfiguration.Enabled=true")
+		return nil, fmt.Errorf("Processors require ProcessingConfiguration.Enabled=true")
 	}
 	if config.DynamicPartitioningConfiguration.Enabled && (config.metadataQuery() == "" || config.ErrorOutputPrefix == "" || !strings.Contains(config.Prefix, "!{partitionKeyFromQuery:")) {
-		return fmt.Errorf("dynamic partitioning requires MetadataExtraction, partitionKeyFromQuery Prefix and ErrorOutputPrefix")
+		return nil, fmt.Errorf("dynamic partitioning requires MetadataExtraction, partitionKeyFromQuery Prefix and ErrorOutputPrefix")
 	}
-	return nil
+	return location, nil
 }
 
 func configFromRequest(data map[string]interface{}) (StreamConfig, error) {

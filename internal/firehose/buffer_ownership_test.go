@@ -59,12 +59,12 @@ func TestObjectBuildAllowsQuotaCountedConcurrentSamePartitionAdmission(t *testin
 	var once sync.Once
 	var calls atomic.Int32
 	unblock := func() { once.Do(func() { close(release) }) }
-	builder := func(ctx context.Context, config StreamConfig, records []bufferedRecord) (*deliveryObject, error) {
+	builder := func(ctx context.Context, config StreamConfig, location *time.Location, records []bufferedRecord) (*deliveryObject, error) {
 		if calls.Add(1) == 1 {
 			close(entered)
 			<-release
 		}
-		return makeObject(ctx, config, records)
+		return makeObject(ctx, config, location, records)
 	}
 	var delivered [][]byte
 	manager, stream := pausedBuildStream(t, builder, firehoseTestTransport(func(request *http.Request) (*http.Response, error) {
@@ -131,13 +131,13 @@ func TestObjectBuildFailureKeepsWholeSnapshotAndConcurrentAppends(t *testing.T) 
 	var calls atomic.Int32
 	unblock := func() { once.Do(func() { close(release) }) }
 	buildFailure := errors.New("owned object preparation failed")
-	builder := func(ctx context.Context, config StreamConfig, records []bufferedRecord) (*deliveryObject, error) {
+	builder := func(ctx context.Context, config StreamConfig, location *time.Location, records []bufferedRecord) (*deliveryObject, error) {
 		if calls.Add(1) == 2 {
 			close(entered)
 			<-release
 			return nil, buildFailure
 		}
-		return makeObject(ctx, config, records)
+		return makeObject(ctx, config, location, records)
 	}
 	delivered := map[string][]byte{}
 	manager, stream := pausedBuildStream(t, builder, firehoseTestTransport(func(request *http.Request) (*http.Response, error) {
@@ -187,13 +187,13 @@ func TestCanceledObjectBuildCannotPublishPreparedObjects(t *testing.T) {
 	var once sync.Once
 	var calls atomic.Int32
 	unblock := func() { once.Do(func() { close(release) }) }
-	builder := func(ctx context.Context, config StreamConfig, records []bufferedRecord) (*deliveryObject, error) {
+	builder := func(ctx context.Context, config StreamConfig, location *time.Location, records []bufferedRecord) (*deliveryObject, error) {
 		if calls.Add(1) == 1 {
 			close(entered)
 			<-release
-			return makeObject(context.WithoutCancel(ctx), config, records)
+			return makeObject(context.WithoutCancel(ctx), config, location, records)
 		}
-		return makeObject(ctx, config, records)
+		return makeObject(ctx, config, location, records)
 	}
 	var deliveries atomic.Int32
 	manager, stream := pausedBuildStream(t, builder, firehoseTestTransport(func(request *http.Request) (*http.Response, error) {
@@ -240,12 +240,12 @@ func TestDeleteFencesAdmissionWhileAcceptedObjectBuildJoins(t *testing.T) {
 	var once sync.Once
 	var calls atomic.Int32
 	unblock := func() { once.Do(func() { close(release) }) }
-	builder := func(ctx context.Context, config StreamConfig, records []bufferedRecord) (*deliveryObject, error) {
+	builder := func(ctx context.Context, config StreamConfig, location *time.Location, records []bufferedRecord) (*deliveryObject, error) {
 		if calls.Add(1) == 1 {
 			close(entered)
 			<-release
 		}
-		return makeObject(ctx, config, records)
+		return makeObject(ctx, config, location, records)
 	}
 	manager, stream := pausedBuildStream(t, builder, firehoseTestTransport(func(request *http.Request) (*http.Response, error) {
 		_, err := io.Copy(io.Discard, request.Body)
@@ -291,10 +291,10 @@ func TestRecordCountQuotaIncludesBuildingAndResponseCleanup(t *testing.T) {
 	body := &firehoseBlockingClose{entered: make(chan struct{}), release: make(chan struct{})}
 	var bodyOnce sync.Once
 	releaseBody := func() { bodyOnce.Do(func() { close(body.release) }) }
-	builder := func(ctx context.Context, config StreamConfig, records []bufferedRecord) (*deliveryObject, error) {
+	builder := func(ctx context.Context, config StreamConfig, location *time.Location, records []bufferedRecord) (*deliveryObject, error) {
 		close(entered)
 		<-release
-		return makeObject(ctx, config, records)
+		return makeObject(ctx, config, location, records)
 	}
 	config := StreamConfig{Name: "record-count", BucketARN: "arn:aws:s3:::bucket", RoleARN: "arn:aws:iam::000000000000:role/firehose", CompressionFormat: "UNCOMPRESSED", CustomTimeZone: "UTC"}
 	manager, stream := pausedBuildStream(t, builder, firehoseTestTransport(func(request *http.Request) (*http.Response, error) {
@@ -345,7 +345,7 @@ func TestDevAbortJoinsObjectPreparationBeforeReleasingRetainedLease(t *testing.T
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	manager := NewFirehoseManager("us-east-1", "000000000000", "http://127.0.0.1:1", "test", "test")
-	manager.buildObject = func(ctx context.Context, _ StreamConfig, _ []bufferedRecord) (*deliveryObject, error) {
+	manager.buildObject = func(ctx context.Context, _ StreamConfig, _ *time.Location, _ []bufferedRecord) (*deliveryObject, error) {
 		close(entered)
 		<-ctx.Done()
 		close(canceled)
@@ -401,16 +401,16 @@ func TestRetryReplacementFailureOrCancellationPreservesPendingOwnership(t *testi
 			var calls atomic.Int32
 			unblock := func() { once.Do(func() { close(release) }) }
 			buildFailure := errors.New("retry replacement preparation failed")
-			builder := func(ctx context.Context, config StreamConfig, records []bufferedRecord) (*deliveryObject, error) {
+			builder := func(ctx context.Context, config StreamConfig, location *time.Location, records []bufferedRecord) (*deliveryObject, error) {
 				if calls.Add(1) == 2 {
 					close(entered)
 					<-release
 					if canceled {
-						return makeObject(context.WithoutCancel(ctx), config, records)
+						return makeObject(context.WithoutCancel(ctx), config, location, records)
 					}
 					return nil, buildFailure
 				}
-				return makeObject(ctx, config, records)
+				return makeObject(ctx, config, location, records)
 			}
 			var available atomic.Bool
 			delivered := map[string][]byte{}

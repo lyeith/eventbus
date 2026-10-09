@@ -15,7 +15,7 @@ import (
 
 // objectBuilder is the private object-preparation dependency. Stream creation
 // freezes it alongside native configuration; it owns no admission or settlement.
-type objectBuilder func(context.Context, StreamConfig, []bufferedRecord) (*deliveryObject, error)
+type objectBuilder func(context.Context, StreamConfig, *time.Location, []bufferedRecord) (*deliveryObject, error)
 
 func buildBufferedObjects(ctx context.Context, ds *DeliveryStream, buffer []bufferedRecord, force bool) ([]*deliveryObject, map[string]bool, error) {
 	groups := make(map[string][]bufferedRecord)
@@ -43,7 +43,7 @@ func buildBufferedObjects(ctx context.Context, ds *DeliveryStream, buffer []buff
 		if !force && size < ds.config.BufferingHints.SizeInMBs*1024*1024 && time.Since(records[0].arrived) < time.Duration(ds.config.BufferingHints.IntervalInSeconds)*time.Second {
 			continue
 		}
-		object, err := ds.buildObject(ctx, ds.config, records)
+		object, err := ds.buildObject(ctx, ds.config, ds.location, records)
 		if err != nil {
 			return nil, nil, fmt.Errorf("prepare Firehose destination: %w", err)
 		}
@@ -70,9 +70,8 @@ func commitBufferedObjects(ds *DeliveryStream, captured int, selected map[string
 	ds.buffer = remaining
 }
 
-func makeObject(ctx context.Context, config StreamConfig, records []bufferedRecord) (*deliveryObject, error) {
+func makeObject(ctx context.Context, config StreamConfig, location *time.Location, records []bufferedRecord) (*deliveryObject, error) {
 	oldest := records[0]
-	location, _ := time.LoadLocation(config.CustomTimeZone)
 	prefix := config.Prefix
 	if oldest.errorType != "" {
 		prefix = config.ErrorOutputPrefix
