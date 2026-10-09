@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -281,20 +280,10 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		writer.WriteHeader(http.StatusAccepted)
 		return
 	}
-	invocation := invocation{payload: payload, requestID: uuid.NewString(), name: name, clientContext: clientContext, traceID: request.Header.Get("X-Amzn-Trace-Id")}
-	requestedName := requestFunctionName(request)
-	if strings.HasPrefix(requestedName, "arn:") {
-		invocation.functionARN = requestedName
-		if qualifier := request.URL.Query().Get("Qualifier"); qualifier != "" {
-			invocation.functionARN += ":" + qualifier
-		}
-	} else if account, _, found := strings.Cut(requestedName, ":function:"); found {
-		region := entry.environment["AWS_REGION"]
-		if region == "" {
-			region = "us-east-1"
-		}
-		invocation.functionARN = "arn:aws:lambda:" + region + ":" + account + ":function:" + name
-	}
+	invocation := prepareInvocation(entry, name, InvokeInput{
+		FunctionName: requestedFunction, Qualifier: request.URL.Query().Get("Qualifier"), Payload: payload,
+		ClientContext: clientContext, TraceID: request.Header.Get("X-Amzn-Trace-Id"),
+	}, uuid.NewString())
 	result, err := service.invoke(request.Context(), entry, invocation)
 	if err != nil {
 		var executionErr *InvokeError
@@ -313,13 +302,7 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	if result.functionError {
 		writer.Header().Set("X-Amz-Function-Error", "Unhandled")
 	}
-	version := "$LATEST"
-	if _, qualifier, found := strings.Cut(name, ":"); found {
-		if _, err := strconv.ParseUint(qualifier, 10, 64); err == nil {
-			version = qualifier
-		}
-	}
-	writer.Header().Set("X-Amz-Executed-Version", version)
+	writer.Header().Set("X-Amz-Executed-Version", executedVersion(name))
 	if logType == "Tail" {
 		logs := result.logs
 		if len(logs) > 4096 {
