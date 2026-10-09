@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/lyeith/eventbus/internal/localexec"
 )
 
 const runtimePrefix = "/2018-06-01/runtime/"
@@ -43,7 +45,8 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 		return notStartedFailure("Runtime.InternalError", "Cannot own function process group")
 	}
 	logs := newInvocationLogs(input.diagnostics, false)
-	command.Stdout, command.Stderr = logs.stdoutWriter(), logs.stderrWriter()
+	stdoutCopy, stderrCopy := localexec.NewTrackedOutputs(logs.stdoutWriter(), logs.stderrWriter())
+	command.Stdout, command.Stderr = stdoutCopy, stderrCopy
 	if err := command.Start(); err != nil {
 		result := notStartedFailure("Runtime.InvalidEntrypoint", "Cannot start configured function")
 		result.logs, result.diagnostics = logs.merged.Bytes(), logs.diagnostics()
@@ -79,7 +82,7 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	if waitErr != nil {
 		result.diagnostics.processError = waitErr.Error()
 	}
-	result.ownershipErr = cleanupErr
+	result.ownershipErr = errors.Join(cleanupErr, stdoutCopy.Err(), stderrCopy.Err())
 	if errors.Is(waitErr, exec.ErrWaitDelay) {
 		// The native Runtime API response wins over process exit, but a forced
 		// output-pipe join must still make the developer ownership lease dirty.

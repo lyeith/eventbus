@@ -294,6 +294,8 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 			command.ExtraFiles = append(command.ExtraFiles, childStackReader, childStackWriter)
 		}
 	}
+	stdoutCopy, stderrCopy := localexec.NewTrackedOutputs(command.Stdout, command.Stderr)
+	command.Stdout, command.Stderr = stdoutCopy, stderrCopy
 	var control *managedPhaseChannel
 	if wrapped && input.phase != nil {
 		control, err = newManagedPhaseChannel(command)
@@ -347,7 +349,7 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 	}
 	waitErr := command.Wait()
 	cleanupErr := cleanup(command)
-	ownershipErr := cleanupErr
+	ownershipErr := errors.Join(cleanupErr, stdoutCopy.Err(), stderrCopy.Err())
 	if control != nil {
 		ownershipErr = errors.Join(ownershipErr, control.join())
 	}

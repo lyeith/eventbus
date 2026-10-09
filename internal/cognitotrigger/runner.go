@@ -217,13 +217,17 @@ func (r *Runner) Invoke(ctx context.Context, poolID, name string, event map[stri
 	command.Stdin = bytes.NewReader(input)
 	stdout := localexec.NewBoundedOutput(maxResultBytes)
 	stderr := localexec.NewBoundedOutput(maxDiagnosticBytes)
-	command.Stdout, command.Stderr = stdout, stderr
+	stdoutCopy, stderrCopy := localexec.NewTrackedOutputs(stdout, stderr)
+	command.Stdout, command.Stderr = stdoutCopy, stderrCopy
 	if err := localexec.Configure(command); err != nil {
 		return nil, &InvocationError{Kind: HandlerFailure, Trigger: name, Cause: err}
 	}
 	err = command.Run()
 	cleanupErr := r.processCleanup(command)
 	ownershipErr = cleanupErr
+	if command.Process != nil {
+		ownershipErr = errors.Join(ownershipErr, stdoutCopy.Err(), stderrCopy.Err())
+	}
 	if errors.Is(err, exec.ErrWaitDelay) {
 		ownershipErr = errors.Join(ownershipErr, exec.ErrWaitDelay)
 	}
