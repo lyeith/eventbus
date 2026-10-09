@@ -16,7 +16,7 @@ var errPhaseProtocol = errors.New("Lambda managed readiness protocol failed")
 var errFunctionBudget = errors.New("Lambda configured function budget expired")
 var errServiceCancellation = errors.New("Lambda service stopped execution")
 
-// runtimePhase owns deadlines for one actual process launch. Adapters report
+// runtimePhase owns deadlines for one process launch or reused warm invocation. Adapters report
 // readiness; they never renew budgets or classify cancellation themselves.
 // Its context stays stable while the initial Init timer becomes an Invoke timer.
 type runtimePhase struct {
@@ -39,6 +39,7 @@ type runtimePhase struct {
 type runtimePhaseRecord struct {
 	InitAttempt       int
 	Mode              string
+	CompletionScope   CompletionScope
 	InitMS            float64
 	InvokeMS          float64
 	InitState         string
@@ -104,6 +105,9 @@ func (phase *runtimePhase) beginInvoke() (time.Time, error) {
 		return time.Time{}, errPhaseProtocol
 	}
 	phase.ready = time.Now()
+	if phase.mode == "warm" {
+		phase.ready = phase.started
+	}
 	if phase.mode == "initial" {
 		phase.armLocked(phase.timeout, errFunctionBudget)
 	}
@@ -119,7 +123,8 @@ func (phase *runtimePhase) invoked() bool {
 	return !phase.ready.IsZero()
 }
 
-// complete freezes phase durations after actual process/listener/result joins,
+// complete freezes durations after the response/output boundary and required
+// process/listener/result retirement joins,
 // before optional diagnostics joining. stop also handles interrupted runners.
 func (phase *runtimePhase) complete(attempt int, result invocationResult) (runtimePhaseRecord, diagnosticCompletion) {
 	phase.mu.Lock()
@@ -152,7 +157,7 @@ func (phase *runtimePhase) complete(attempt int, result invocationResult) (runti
 	if completion.cause == "runtime_protocol_error" {
 		state = "failed"
 	}
-	if phase.mode == "command" {
+	if phase.mode == "command" || phase.mode == "warm" && !phase.ready.IsZero() {
 		record.InvokeMS, record.InvokeState = float64(at.Sub(phase.started))/float64(time.Millisecond), state
 	} else if phase.ready.IsZero() {
 		record.InitMS, record.InitState = float64(at.Sub(phase.started))/float64(time.Millisecond), state

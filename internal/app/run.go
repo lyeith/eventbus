@@ -116,7 +116,20 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 			Checks: []func() error{snsCapture.Err, capture.Err, notifications.Err, firehoseManager.DevEvidence,
 				func() error { return devInvocationEvidence(functions, mappings) },
 			},
-			DrainHooks: []devquiescence.DrainHook{{Start: firehoseManager.DevBeginDrain, Resume: firehoseManager.DevResume}},
+			DrainHooks: []devquiescence.DrainHook{
+				{Start: firehoseManager.DevBeginDrain, Resume: firehoseManager.DevResume},
+				{Start: func() error {
+					if functions != nil {
+						return functions.DevBeginWarmDrain()
+					}
+					return nil
+				}, Resume: func() error {
+					if functions != nil {
+						return functions.DevResumeWarm()
+					}
+					return nil
+				}},
+			},
 		})
 		if err := retained.SetCallbackOrigin(fmt.Sprintf("http://127.0.0.1:%d", cfg.retainedCallbackPort)); err != nil {
 			return fmt.Errorf("configure retained callback origin: %w", err)
@@ -219,6 +232,9 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		services = retainedServices(services)
 	}
 	var router http.Handler = server.New(services)
+	if functions != nil {
+		router = withDevLambdaReload(router, functions, cfg.lambdaFunctions, projectRoot)
+	}
 	if cfg.cognitoPools != "" {
 		seed, err := cognito.LoadCognitoSeed(cfg.cognitoPools)
 		if err != nil {

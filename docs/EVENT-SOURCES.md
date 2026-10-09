@@ -127,11 +127,12 @@ Records use `schema_version: eventbus.sqs.delivery.v1`:
 | --- | --- |
 | `delivery_id`, `mapping_uuid`, `event_source_arn`, `function_arn`, `time` | Delivery attempt, original source and configured target |
 | `request_id`, `invoked_function_arn` | Actual Lambda identity when admitted; not a generated correlation substitute |
-| `state`, `invocation_state`, `joined` | Delivery result, native execution result and confirmed runner/child cleanup |
+| `state`, `invocation_state`, `joined` | Delivery result, native execution result and confirmed invocation completion at its declared scope |
+| `completion_scope` | `process` means launched process/listener/children joined; `invocation` means a successful warm response/log boundary, with the worker still separately owned |
 | `messages[]` | `message_id`, `receive_count`; terminal `settlement` plus optional `acknowledge_attempted` and `evidence_error` |
 
 An `admitted` record precedes child launch and has `joined: false`. Its terminal
-follows runner/cleanup and receipt processing. Terminal `state` is `succeeded`,
+follows the declared invocation completion boundary and receipt processing. Warm workers can remain alive after `completion_scope: invocation`; retire them through retained-owner quiescence, reload or service shutdown before asserting whole-worker/child cleanup. Terminal `state` is `succeeded`,
 `failed`, `timed_out`, `canceled`, `not_started`, `ack_failed` or `uncertain`;
 `invocation_state` uses the first five execution states. Required evidence excludes
 bodies, attributes, receipt handles, credentials, logs and arbitrary error text.

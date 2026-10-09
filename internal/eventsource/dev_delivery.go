@@ -37,9 +37,10 @@ type InvocationMetadata struct {
 // InvocationOutcome contains supervisory facts, never handler-controlled output.
 // OwnershipErr is private uncertainty about cleanup, distinct from handler failure.
 type InvocationOutcome struct {
-	Metadata     InvocationMetadata
-	State        InvocationState
-	OwnershipErr error
+	Metadata        InvocationMetadata
+	State           InvocationState
+	CompletionScope string // process or invocation; warm workers remain separately owned
+	OwnershipErr    error
 }
 
 // ObservedFunctionInvoker invokes the same native runner as FunctionInvoker. Its
@@ -85,7 +86,8 @@ type DeliveryMessage struct {
 
 // DeliveryRecord correlates a private delivery attempt with its actual Lambda
 // identity. An admitted record is not completion. A terminal is written after
-// invocation/cleanup and receipt processing return; uncertainty never succeeds.
+// invocation completion and receipt processing return; completion_scope distinguishes
+// a joined process from a warm response boundary. Uncertainty never succeeds.
 // delivery_id also identifies rejected attempts with no native RequestID.
 type DeliveryRecord struct {
 	SchemaVersion      string            `json:"schema_version"`
@@ -98,6 +100,7 @@ type DeliveryRecord struct {
 	State              string            `json:"state"`
 	InvocationState    InvocationState   `json:"invocation_state,omitempty"`
 	Joined             bool              `json:"joined"`
+	CompletionScope    string            `json:"completion_scope,omitempty"`
 	Time               time.Time         `json:"time"`
 	Messages           []DeliveryMessage `json:"messages"`
 }
@@ -205,7 +208,8 @@ func (s *Service) deliverObserved(ctx context.Context, item *entry, records []Re
 			return s.appendDelivery(record)
 		})
 	}
-	observationValid := knownInvocation(outcome.State) && (!admitted || outcome.Metadata == admission) && (admitted || outcome.State == InvocationNotStarted)
+	scopeValid := outcome.CompletionScope == "" || outcome.CompletionScope == "process" || outcome.CompletionScope == "invocation"
+	observationValid := scopeValid && knownInvocation(outcome.State) && (!admitted || outcome.Metadata == admission) && (admitted || outcome.State == InvocationNotStarted)
 	if !observationValid {
 		evidenceErr = errors.Join(evidenceErr, s.retainDeliveryError(errors.New("SQS delivery invocation observation is inconsistent")))
 		if !knownInvocation(outcome.State) {
@@ -217,6 +221,7 @@ func (s *Service) deliverObserved(ctx context.Context, item *entry, records []Re
 	// actual runner. Never replace the actual ID with a generated native ID.
 	evidenceErr = errors.Join(evidenceErr, s.EvidenceErr())
 	record.InvocationState = outcome.State
+	record.CompletionScope = outcome.CompletionScope
 	record.Joined = admitted && observationValid && outcome.OwnershipErr == nil
 	acknowledge := record.Joined && outcome.State == InvocationSucceeded && invokeErr == nil && ctx.Err() == nil
 	allSettled, receiptErr := s.finishReceiptEvidence(ctx, item, records, record.Messages, acknowledge)

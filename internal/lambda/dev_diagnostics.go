@@ -59,6 +59,7 @@ type invocationDiagnosticRecord struct {
 	Attempt                   int                 `json:"attempt"`
 	StartedAt                 time.Time           `json:"started_at"`
 	CompletedAt               time.Time           `json:"completed_at"`
+	CompletionScope           CompletionScope     `json:"completion_scope,omitempty"`
 	State                     InvocationState     `json:"state"`
 	FunctionError             bool                `json:"function_error"`
 	OwnershipConfirmed        bool                `json:"ownership_confirmed"`
@@ -156,6 +157,11 @@ func (service *Service) DevEvidence() error {
 	err := errors.Join(service.asyncEvidenceErr, service.diagnosticEvidenceErr, service.invocationEvidenceErr)
 	sink := service.diagnosticCapture
 	service.mu.Unlock()
+	if service.warm != nil {
+		service.warm.mu.Lock()
+		err = errors.Join(err, service.warm.closeErr)
+		service.warm.mu.Unlock()
+	}
 	if sink != nil {
 		// Sink.Err intentionally reports any closed sink as unavailable. The
 		// service owns closure and distinguishes a completed healthy close from
@@ -198,7 +204,7 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 	record := invocationDiagnosticRecord{
 		SchemaVersion: "eventbus.lambda.invocation-diagnostic.v1",
 		RequestID:     identity.RequestID, FunctionName: identity.FunctionName, FunctionARN: identity.FunctionARN,
-		Runtime: entry.runtime, InvocationType: "RequestResponse", Attempt: identity.Attempt,
+		CompletionScope: result.completionScope, Runtime: entry.runtime, InvocationType: "RequestResponse", Attempt: identity.Attempt,
 		StartedAt: started.UTC(), CompletedAt: completion.at.UTC(), State: result.state,
 		FunctionError: result.functionError, OwnershipConfirmed: result.ownershipErr == nil,
 		Stderr: diagnosticBytes(result.diagnostics.stderr, result.diagnostics.stderrBytes),

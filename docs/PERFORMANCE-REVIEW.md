@@ -1,5 +1,8 @@
 # EventBus performance review
 
+The subsequent [warm-worker comparison](LAMBDA.md#measured-sdk-calls) measures
+real Python/Node SDK reuse, latency and retained memory for #30.
+
 The [general audit](PERFORMANCE-AUDIT.md) continues the candidates below with
 measured Cognito, Lambda async/log, SQS/SNS and gateway fixes and current priorities.
 

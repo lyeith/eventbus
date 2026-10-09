@@ -486,3 +486,38 @@ func TestDeliveryEvidenceRequiresTypedPortsBeforeWorkersStart(t *testing.T) {
 	require.Empty(t, capture.Bytes())
 	require.NoError(t, s.Close(t.Context()))
 }
+
+func TestUnknownCompletionScopeCannotAuthorizeACK(t *testing.T) {
+	var capture bytes.Buffer
+	metadata := InvocationMetadata{RequestID: "actual-native-id", FunctionARN: targetARN}
+	invoker := observedInvoker{observe: func(_ context.Context, admit func(InvocationMetadata) error) (InvocationOutcome, error) {
+		if err := admit(metadata); err != nil {
+			return InvocationOutcome{Metadata: metadata, State: InvocationNotStarted}, err
+		}
+		return InvocationOutcome{Metadata: metadata, State: InvocationSucceeded, CompletionScope: "unrecognized"}, nil
+	}}
+	var acknowledged atomic.Int32
+	queue := evidenceQueue{fakeQueue: newFakeQueue(), ack: func(context.Context, string) (ReceiptOutcome, error) {
+		acknowledged.Add(1)
+		return ReceiptMappingSettled, nil
+	}, inspect: func(context.Context, string) (ReceiptOutcome, error) { return ReceiptUnacknowledged, nil }}
+	queue.batches <- leasedBatch("uncertain-scope", 1, 1)
+	queue.batches <- leasedBatch("untouched", 1, 1)
+	service := newDeliveryService(t, queue, invoker, &DevDeliveryCaptureConfig{LogWriter: &capture})
+	mapping, err := service.Create(t.Context(), batchInput(1, 0))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		got, _ := service.Get(mapping.UUID)
+		return got.State == "Disabled"
+	}, time.Second, time.Millisecond)
+	require.Error(t, service.Close(t.Context()))
+	require.Error(t, service.EvidenceErr())
+	require.Zero(t, acknowledged.Load(), "unknown completion scope cannot authorize native ACK")
+	require.Len(t, queue.batches, 1, "uncertain completion fences subsequent work")
+	rows := deliveryRows(t, capture.Bytes())
+	require.Len(t, rows, 2)
+	require.Equal(t, "uncertain", rows[1].State)
+	require.Equal(t, "unrecognized", rows[1].CompletionScope)
+	require.False(t, rows[1].Joined)
+	require.False(t, rows[1].Messages[0].AcknowledgeAttempted)
+}

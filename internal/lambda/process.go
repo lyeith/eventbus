@@ -138,6 +138,8 @@ func environment(entry executableFunction, input invocation, runtimeAPI string) 
 	// This channel is solely selected by owned development configuration.
 	delete(values, "EVENTBUS_DEV_PYTHON_STACKS")
 	delete(values, "EVENTBUS_LAMBDA_PHASE_PROTOCOL")
+	delete(values, "EVENTBUS_LAMBDA_WARM")
+	delete(values, "EVENTBUS_LAMBDA_WARM_LOG_TOKEN")
 	if (entry.runtime == "python" || entry.runtime == "node") && input.phase != nil {
 		values["EVENTBUS_LAMBDA_PHASE_PROTOCOL"] = "1"
 	}

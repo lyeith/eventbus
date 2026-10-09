@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -33,12 +31,16 @@ type executableFunction struct {
 	command                                  []string
 	environment                              map[string]string
 	timeout                                  time.Duration
+	generation                               *functionGeneration
 }
 
 // Service owns all admitted invocations until their process groups and
-// Runtime API listeners have stopped. Registry entries are immutable.
+// required Runtime API listeners have stopped. Warm environments remain owned
+// through retirement; registry snapshots are replaced only under mu.
 type Service struct {
 	functions   map[string]executableFunction
+	root        string
+	warm        *warmWorkers
 	initTimeout time.Duration // on-demand Init limit; private override for focused tests
 	devActivity DevActivity
 	// Immutable in normal construction; private tests can wrap real cleanup to
@@ -112,69 +114,14 @@ func NewService(config *Config, workDir string) (*Service, error) {
 		return nil, err
 	}
 	service := &Service{functions: make(map[string]executableFunction), initTimeout: initialInitTimeout, devActivity: config.DevActivity, processCleanup: localexec.Cleanup, active: make(map[uint64]invocationOwner), done: make(chan struct{})}
+	service.root = root
+	if config.DevWarm != nil {
+		service.warm = newWarmWorkers(config.DevWarm.MaxWorkers)
+	}
 	for name, function := range config.Functions {
-		directory := root
-		if function.WorkDir != "" {
-			directory = function.WorkDir
-			if !filepath.IsAbs(directory) {
-				directory = filepath.Join(root, directory)
-			}
-		}
-		info, err := os.Stat(directory)
-		if err != nil || !info.IsDir() {
-			return nil, fmt.Errorf("Lambda function %q: work directory must exist", name)
-		}
-		entry := executableFunction{name: name, runtime: function.Runtime, timeout: function.Timeout, workDir: directory, environment: maps.Clone(function.Environment), command: append([]string(nil), function.Command...)}
-		if len(entry.command) == 0 {
-			if entry.runtime == "python" {
-				entry.command = []string{"python3"}
-			} else {
-				entry.command = []string{"node"}
-			}
-		}
-		executable := entry.command[0]
-		if strings.ContainsAny(executable, "/\\") && !filepath.IsAbs(executable) {
-			executable = filepath.Join(directory, executable)
-		}
-		executable, err = exec.LookPath(executable)
-		if err != nil {
-			return nil, fmt.Errorf("Lambda function %q: executable: %w", name, err)
-		}
-		entry.command[0], err = filepath.Abs(executable)
+		entry, err := resolveExecutable(name, function, root)
 		if err != nil {
 			return nil, err
-		}
-		if entry.runtime == "python" || entry.runtime == "node" {
-			entry.module, entry.exported, _ = handlerReference(function.Handler, entry.runtime)
-			if !filepath.IsAbs(entry.module) {
-				entry.module = filepath.Join(directory, entry.module)
-			}
-			if entry.runtime == "node" {
-				if _, err := os.Stat(entry.module); os.IsNotExist(err) {
-					var matches []string
-					for _, extension := range []string{".js", ".mjs", ".cjs"} {
-						candidate := entry.module + extension
-						if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-							matches = append(matches, candidate)
-						}
-					}
-					if len(matches) > 1 {
-						return nil, fmt.Errorf("Lambda function %q: handler module is ambiguous; include its file extension", name)
-					}
-					if len(matches) == 1 {
-						entry.module = matches[0]
-					}
-				}
-			}
-			info, err := os.Stat(entry.module)
-			if err != nil || !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("Lambda function %q: handler must be a regular file", name)
-			}
-			file, err := os.Open(entry.module)
-			if err != nil {
-				return nil, fmt.Errorf("Lambda function %q: handler cannot be read", name)
-			}
-			_ = file.Close()
 		}
 		service.functions[name] = entry
 	}
@@ -363,13 +310,14 @@ type invocation struct {
 }
 
 type invocationResult struct {
-	payload       []byte
-	functionError bool
-	logs          []byte
-	state         InvocationState
-	admitted      bool
-	diagnostics   invocationDiagnostics
-	phases        []runtimePhaseRecord
+	payload         []byte
+	functionError   bool
+	logs            []byte
+	state           InvocationState
+	completionScope CompletionScope
+	admitted        bool
+	diagnostics     invocationDiagnostics
+	phases          []runtimePhaseRecord
 	// Private ownership uncertainty cannot be supplied by a handler or projected
 	// onto native responses. It only makes a developer lifecycle lease dirty.
 	ownershipErr error
@@ -440,6 +388,9 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 			service.mu.Unlock()
 		}()
 		result.admitted = true
+		if result.completionScope == "" {
+			result.completionScope = CompletionProcess
+		}
 		if !normalCompletion {
 			result.state = InvocationNotStarted
 			if runnerEntered {
@@ -478,19 +429,45 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		mode = "command"
 	}
 	var records []runtimePhaseRecord
+	var reservedWorker *warmWorker
+	defer func() {
+		if reservedWorker != nil {
+			_, retireErr := service.warm.release(reservedWorker, false)
+			result.ownershipErr = errors.Join(result.ownershipErr, retireErr)
+		}
+	}()
 	launchInput := input
 	for initAttempt := 1; initAttempt <= 2; initAttempt++ {
 		var onReady func(time.Time)
 		if launchInput.pythonStacks != nil {
 			onReady = launchInput.pythonStacks.updateDeadline
 		}
+		var worker *warmWorker
+		if service.warm != nil && (entry.runtime == "python" || entry.runtime == "node") {
+			worker, err = service.warm.acquire(ctx, entry, launchInput.pythonStacks == nil)
+			if err != nil {
+				result = failure("Sandbox.Timedout", "Function invocation canceled while waiting for a warm worker")
+				completion = snapshotDiagnosticCompletion(ctx, true)
+				if ctx.Err() == nil {
+					result = notStartedFailure("Runtime.InternalError", "Warm worker ownership is unavailable")
+					result.ownershipErr = err
+				}
+				break
+			}
+			if worker != nil && !worker.freshOnly && worker.command != nil {
+				mode = "warm"
+			}
+		}
+		reservedWorker = worker
 		phase = newRuntimePhase(ctx, entry.timeout, service.initTimeout, mode, onReady)
 		launchInput.phase, launchInput.deadline = phase, phase.deadline
 		if launchInput.pythonStacks != nil {
 			launchInput.pythonStacks.updateDeadline(phase.deadline)
 		}
 		var launched invocationResult
-		if entry.runtime == "provided" {
+		if worker != nil && !worker.freshOnly {
+			launched = service.runWarm(phase.ctx, worker, launchInput)
+		} else if entry.runtime == "provided" {
 			launched = runProvided(phase.ctx, entry, launchInput, service.processCleanup)
 		} else {
 			launched = runCommand(phase.ctx, entry, launchInput, service.processCleanup)
@@ -499,6 +476,17 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		// join. Internal Init retry never releases the admitted invocation owner.
 		var record runtimePhaseRecord
 		record, completion = phase.complete(initAttempt, launched)
+		if worker != nil {
+			scope, retireErr := service.warm.release(worker, !launched.functionError && completion.contextError == "" && launched.ownershipErr == nil)
+			launched.ownershipErr = errors.Join(launched.ownershipErr, retireErr)
+			launched.completionScope = scope
+			reservedWorker = nil
+			record.OwnershipErr = launched.ownershipErr
+		}
+		if launched.completionScope == "" {
+			launched.completionScope = CompletionProcess
+		}
+		record.CompletionScope = launched.completionScope
 		records = append(records, record)
 		phase.stop()
 		result = mergeLaunchDiagnostics(result, launched)
@@ -518,12 +506,12 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	}
 	result.phases = records
 	if completion.contextError != "" {
-		logs, ownershipErr, diagnostics, phases := result.logs, result.ownershipErr, result.diagnostics, result.phases
+		logs, ownershipErr, diagnostics, phases, scope := result.logs, result.ownershipErr, result.diagnostics, result.phases, result.completionScope
 		result = failure("Sandbox.Timedout", fmt.Sprintf("Task timed out after %.2f seconds", entry.timeout.Seconds()))
 		if completion.cause == "runtime_protocol_error" {
 			result = failure("Runtime.InvalidResponse", "Managed runtime readiness protocol failed")
 		}
-		result.logs, result.ownershipErr, result.diagnostics, result.phases = logs, ownershipErr, diagnostics, phases
+		result.logs, result.ownershipErr, result.diagnostics, result.phases, result.completionScope = logs, ownershipErr, diagnostics, phases, scope
 		result.state = InvocationCanceled
 		if completion.contextError == "deadline_exceeded" {
 			result.state = InvocationTimedOut
@@ -563,6 +551,7 @@ func (service *Service) Close(ctx context.Context) error {
 		go func() {
 			<-service.asyncDrainDone
 			service.inflight.Wait()
+			workerErr := service.closeWarmWorkers()
 			service.asyncCancel(errServiceCancellation)
 			captureErr := service.asyncCapture.Close()
 			if service.diagnosticCapture != nil {
@@ -575,7 +564,7 @@ func (service *Service) Close(ctx context.Context) error {
 				service.diagnosticMu.Unlock()
 			}
 			service.mu.Lock()
-			service.closeErr = errors.Join(service.closeErr, service.asyncAbortErr, service.asyncEvidenceErr, service.asyncOwnershipErr, service.invocationEvidenceErr, captureErr)
+			service.closeErr = errors.Join(service.closeErr, service.asyncAbortErr, service.asyncEvidenceErr, service.asyncOwnershipErr, service.invocationEvidenceErr, workerErr, captureErr)
 			close(service.done)
 			service.mu.Unlock()
 		}()

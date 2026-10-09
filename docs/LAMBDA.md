@@ -29,7 +29,7 @@ functions:
     handler: handlers/authorizer.mjs.handler
 ```
 
-`functions` maps names to immutable local fixtures. `runtime`, `command`,
+`functions` maps names to immutable execution snapshots; explicit local reload replaces a snapshot. `runtime`, `command`,
 `handler`, `environment`, `timeout` and `work_dir` are the only entry fields.
 Timeout defaults to 10 seconds and accepts 1ms–900s;
 [phase accounting](#init-and-invoke-budgets) determines when it starts. Command
@@ -93,8 +93,9 @@ AWS explicitly notes that suppressed Init can leave insufficient Invoke time.
 See the [AWS lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html#runtimes-lifecycle-ib),
 [Init timeout rules](https://docs.aws.amazon.com/lambda/latest/dg/troubleshooting-invocation.html#troubleshooting-invocation-init-timeout)
 and [Runtime API](https://docs.aws.amazon.com/lambda/latest/dg/runtimes-api.html).
-Every local execution remains fresh; warm reuse, preinitialized pools,
-provisioned concurrency and SnapStart are not modeled. Phase separation or
+The default mode remains fresh. Opt-in [warm workers](#warm-workers) reuse managed
+Python/Node environments; preinitialized pools, provisioned concurrency and
+SnapStart are not modeled. Phase separation or
 initialization measurements alone do not attest application business-chain success.
 
 ## Invoke and inspect
@@ -130,9 +131,9 @@ application environment variables must be declared explicitly. EventBus sets
 local function metadata and supplies defaults which disable ambient AWS
 credential/config file discovery.
 
-Each invocation starts a fresh process. Success, timeout, client cancellation
-and service shutdown stop its process group and join its launched child.
-There is no warm-runtime cache. This executes local application code and is
+By default each invocation starts a fresh process. Success, timeout, client
+cancellation and service shutdown stop its process group and join its launched
+child. Warm workers retain a successful environment until explicit retirement. This executes local application code and is
 not an operating-system sandbox.
 
 ## Registered GetFunction metadata
@@ -155,6 +156,114 @@ environment variables and downloadable `Code` are omitted.
 This subset supports normal LocalStack S3 notification validation alongside
 Invoke `DryRun` and `Event`. See [S3 notifications](S3-NOTIFICATIONS.md) for
 the required mixed-provider routing and the actual upload integration proof.
+
+## Warm workers
+
+For a retained development stack, opt in through the same local recipe:
+
+```yaml
+dev_warm:
+  max_workers: 2
+```
+
+Omitting `dev_warm` preserves fresh execution. An empty block defaults to two
+workers; `max_workers` accepts 1–32. This is one global Python/Node limit across
+functions, aliases and generations, including reservations, busy workers, idle
+workers and retirement. Each worker handles one invocation at a time. If all
+slots are busy, a call waits under its caller/service cancellation before its
+Init/Invoke budget starts. Idle workers for another target can be evicted.
+`provided` and `command` retain their existing fresh execution policy.
+
+The first call imports the application's handler and uses the existing Init /
+Invoke budgets. Later successful calls reuse that imported module and SDK clients
+through the same Runtime API event/response/error protocol. Every call gets its
+own event, request ID, client context, trace metadata, deadline and context
+object. Warm calls have a configured Invoke budget and no new Init budget.
+Function errors, invalid/oversized results, process exit, timeout and caller
+cancellation retire the worker through actual process-group, listener and pipe
+joins. A retained ownership fault fences further worker admission and resume.
+
+Global variables, imported clients, caches, threads, timers and descendants can
+survive a successful call. This is shared application state: handlers must avoid
+retaining authentication or another request's data unintentionally and must
+await required side work. Idle/background output is outside an invocation's log
+tail. Warm reuse is local execution, not an operating-system sandbox.
+
+A successful warm invocation joins its handler response and both output drain
+boundaries. Its process remains owned by the Lambda service; response completion
+allows ordinary native SQS settlement and asynchronous success. It does not prove
+background work or descendants completed. When retained lifecycle observation is
+configured, a separate `lambda_warm_worker` lease stays live until actual
+retirement. Quiescence drains warm reuse, joins those workers and permits held
+cleanup only afterward. Calls accepted during that drain execute fresh, under
+the same global limit. Resume permits warm reuse again. Final `Close` joins all
+worker lifetimes before closing capture sinks.
+
+The optional one-shot `python_stacks` collector requires a fresh process.
+Python functions with that option execute fresh, still counting against the warm
+limit; Node functions and ordinary private diagnostics can use warm workers.
+
+### Measured SDK calls
+
+On SSD Linux x86_64 (Go 1.26.0, Python 3.12.11/boto3 1.40.61,
+Node 22.22.1/SESv2 SDK 3.1146.0), the same module-owned SDK client performed
+eight real SES sends per mode. Samples include the first call, with no artificial
+Init delay, race instrumentation, cache flushing or latency assertion.
+
+| Runtime / mode | Joined wall first / min / median / max (ms) | Init median (ms) | Invoke median (ms) |
+| --- | --- | ---: | ---: |
+| Python fresh | 371.626 / 198.202 / 216.078 / 371.626 | 201.048 | 9.381 |
+| Python warm | 220.693 / 7.121 / 8.565 / 220.693 | 0 | 2.641 |
+| Node fresh | 317.175 / 262.498 / 272.591 / 317.175 | 222.573 | 44.787 |
+| Node warm | 315.632 / 8.925 / 12.150 / 315.632 | 0 | 7.124 |
+
+Fresh mode launched eight processes; warm mode retained one. Fresh process RSS
+returned to zero after each join. Warm Python idle RSS was 46,518,272–46,624,768
+bytes (median 46,610,432); warm Node was 88,657,920–104,902,656 bytes
+(median 97,937,408), increasing over these eight calls. These are process RSS
+observations, not peak memory, steady-state limits or a leak assessment.
+The first warm call still imports the SDK.
+
+Joined wall includes native execution and private diagnostic file appends; SES
+capture uses a borrowed in-memory JSONL writer. It excludes gateway transport,
+queueing and consuming application work. This small fixed-order fixture does not
+predict production latency or sustained-memory behavior. All 32 sends were
+captured with unique native identities and the worker processes joined on Close.
+Reproduce with the existing frozen SDK lanes:
+
+```sh
+EVENTBUS_PERFORMANCE_PYTHON="$PWD/.venv/bin/python" \
+go test -count=1 -tags performance ./internal/lambda \
+  -run '^TestPerformanceWarmNativeSDKCalls$' -v
+```
+
+### Explicit local reload
+
+Standalone EventBus accepts:
+
+```sh
+curl -X POST http://localhost:4100/__eventbus/dev/lambda/functions/my-function/reload
+```
+
+This development route re-reads the recipe selected by `--lambda-functions` and
+re-registers only the named function, including its source reference, command,
+environment, timeout and work directory. Other functions and startup-level
+`dev_warm`, `dev_async` and diagnostic options are unchanged. There is no file
+watching, source hashing, implicit polling or AWS management API emulation.
+
+Registration publishes a new immutable generation. New calls use it. Active old
+warm calls finish and retire; already accepted Events retain their old snapshot
+and execute fresh rather than reopening an old worker pool. Registration may
+finish publication before its caller deadline expires while waiting for an old
+worker join; a join deadline does not undo the new target.
+
+Embedded hosts use `RegisterFunction(ctx, name, Function)` to replace a local
+recipe or `ReloadFunction(ctx, name)` to reload its currently registered source.
+Reload refuses a concurrent registration change instead of overwriting newer
+settings. Python reload reads the selected primary source directly, preserving
+package metadata; dependency modules use ordinary Python import/bytecode rules.
+Explicit aliases are independent registrations; reloading an alias
+reloads that entry, while `name:$LATEST` resolves the unqualified entry.
 
 ## Async execution evidence
 
@@ -216,7 +325,9 @@ Handler logs can contain credentials: keep this file private, separate from
 redacted captures, broker logs and public manifests.
 
 Each admitted execution attempt emits `eventbus.lambda.invocation-diagnostic.v1`
-after runner, child, pipe and Runtime API cleanup. Records identify `request_id`,
+after the invocation response/output boundary joins and any required runner,
+child, pipe and Runtime API retirement. Successful warm workers remain live
+under their separate worker lifetime. Records identify `request_id`,
 `function_name`, `function_arn`, `runtime`, `invocation_type`, `attempt`,
 `started_at`, `completed_at`, `state`, `function_error` and `ownership_confirmed`.
 Synchronous attempts use `RequestResponse` and attempt 1; an async event keeps
@@ -253,16 +364,26 @@ caller cancellation does not mean the configured budget elapsed or identify the
 application’s original wait.
 
 The additive v1 `execution_phases` array has at most two records. Each contains
-`init_attempt` (1 or 2), `mode` (`initial`, `fallback` or `command`), `init_ms` and
+`init_attempt` (1 or 2), `mode` (`initial`, `fallback`, `warm` or `command`), `init_ms` and
 `invoke_ms`. Optional `init_state`/`invoke_state` describe phases that occurred:
-`succeeded`, `failed`, `timed_out`, `canceled` or `not_started`. Command has only
-an Invoke phase. `init_attempt` is separate from the native async `attempt`.
+`succeeded`, `failed`, `timed_out`, `canceled` or `not_started`. Command and reused warm workers have only
+an Invoke phase. Warm `init_ms` is zero. `init_attempt` is separate from the native async `attempt`.
 Each launch also has `ownership_confirmed` and optional `process_error`,
 `ownership_error`, `context_error`, `termination_cause` and `detail_truncated`.
-Per-launch ownership covers the native process, Runtime API, result and control
-pipe joins; optional collector uncertainty remains invocation-level. Per-launch
+Fresh/retired launch ownership covers the native process, Runtime API, result and
+control pipe joins. A retained warm record covers its request/result and output
+boundaries; it does not attest worker process retirement. Separate worker leases
+cover retained lifecycle ownership; optional collector uncertainty remains invocation-level. Per-launch
 error details share the 8 KiB bound. Truncation in any launch also sets the
 top-level `detail_truncated` flag.
+
+The additive `completion_scope` field on the invocation record and each phase is
+`process` after required process retirement (also when no process started), or
+`invocation` when a clean response boundary retains its warm worker. Typed
+`InvocationOutcome.CompletionScope` supplies the same actual decision to
+coordinators. `ownership_confirmed` reports uncertainty within that scope;
+`completion_scope: invocation` cannot attest that the worker, background work or
+its descendants have joined. SQS delivery evidence carries the same distinction.
 
 A joined managed fallback can have an initial `init_state: timed_out`,
 `termination_cause: initialization_timeout` and a retained process error,
@@ -371,12 +492,14 @@ The typed local seam shares the HTTP runner and registered targets:
 | Method | Contract |
 |---|---|
 | `ValidateTarget(name, qualifier)` | Resolve a registered function/alias without execution |
-| `Execute(ctx, InvokeInput)` | Synchronous result and `FunctionError`, after process cleanup joins |
+| `Execute(ctx, InvokeInput)` | Synchronous result and `FunctionError`, after its response boundary and required retirement join |
 | `ExecuteObserved(ctx, InvokeInput, onAdmission)` | Observe the actual attempt identity and return its joined outcome |
 | `RequestPythonSnapshot(InvocationMetadata)` | Accept at most one best-effort private snapshot request for an active Python attempt |
 | `Admit(ctx, InvokeInput)` | Transfer a private payload copy; return an admission request ID |
 | `AsyncSnapshot()` | Copy active and bounded terminal execution metadata |
 | `DrainAsync(ctx)` | Stop Event admission and join accepted async work; keep synchronous execution available |
+| `RegisterFunction(ctx, name, Function)` / `ReloadFunction(ctx, name)` | Explicit local snapshot/source replacement; retire the previous warm generation |
+| `DevBeginWarmDrain()` / `DevResumeWarm()` | Reversible local worker retirement and reuse fence for lifecycle composition |
 | `Close(ctx)` | Stop all admission, cancel synchronous work, join runtime resources and close the evidence sink |
 
 `InvokeInput` carries `FunctionName`, optional `Qualifier`, raw JSON `Payload`,

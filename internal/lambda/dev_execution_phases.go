@@ -3,18 +3,19 @@
 package lambda
 
 type diagnosticPhase struct {
-	InitAttempt        int     `json:"init_attempt"`
-	Mode               string  `json:"mode"`
-	InitMS             float64 `json:"init_ms"`
-	InvokeMS           float64 `json:"invoke_ms"`
-	InitState          string  `json:"init_state,omitempty"`
-	InvokeState        string  `json:"invoke_state,omitempty"`
-	ProcessError       string  `json:"process_error,omitempty"`
-	OwnershipConfirmed bool    `json:"ownership_confirmed"`
-	OwnershipError     string  `json:"ownership_error,omitempty"`
-	ContextError       string  `json:"context_error,omitempty"`
-	TerminationCause   string  `json:"termination_cause,omitempty"`
-	DetailTruncated    bool    `json:"detail_truncated,omitempty"`
+	InitAttempt        int             `json:"init_attempt"`
+	Mode               string          `json:"mode"`
+	CompletionScope    CompletionScope `json:"completion_scope,omitempty"`
+	InitMS             float64         `json:"init_ms"`
+	InvokeMS           float64         `json:"invoke_ms"`
+	InitState          string          `json:"init_state,omitempty"`
+	InvokeState        string          `json:"invoke_state,omitempty"`
+	ProcessError       string          `json:"process_error,omitempty"`
+	OwnershipConfirmed bool            `json:"ownership_confirmed"`
+	OwnershipError     string          `json:"ownership_error,omitempty"`
+	ContextError       string          `json:"context_error,omitempty"`
+	TerminationCause   string          `json:"termination_cause,omitempty"`
+	DetailTruncated    bool            `json:"detail_truncated,omitempty"`
 }
 
 func diagnosticPhases(phases []runtimePhaseRecord) []diagnosticPhase {
@@ -24,7 +25,7 @@ func diagnosticPhases(phases []runtimePhaseRecord) []diagnosticPhase {
 	records := make([]diagnosticPhase, len(phases))
 	for index, phase := range phases {
 		record := diagnosticPhase{InitAttempt: phase.InitAttempt, Mode: phase.Mode,
-			InitMS: phase.InitMS, InvokeMS: phase.InvokeMS, InitState: phase.InitState, InvokeState: phase.InvokeState,
+			CompletionScope: phase.CompletionScope, InitMS: phase.InitMS, InvokeMS: phase.InvokeMS, InitState: phase.InitState, InvokeState: phase.InvokeState,
 			OwnershipConfirmed: phase.OwnershipErr == nil}
 		record.ContextError, record.TerminationCause = projectDiagnosticCause(phase.ContextErr, phase.CancellationCause)
 		record.ProcessError, record.DetailTruncated = boundedDiagnosticDetail(phase.ProcessError)

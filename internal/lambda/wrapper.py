@@ -31,19 +31,23 @@ def client_context(value):
 
 
 class Context:
-    aws_request_id = os.environ['EVENTBUS_LAMBDA_REQUEST_ID']
-    function_name = os.environ['AWS_LAMBDA_FUNCTION_NAME']
-    function_version = os.environ['AWS_LAMBDA_FUNCTION_VERSION']
-    invoked_function_arn = os.environ['EVENTBUS_LAMBDA_FUNCTION_ARN']
-    memory_limit_in_mb = os.environ['AWS_LAMBDA_FUNCTION_MEMORY_SIZE']
-    log_group_name = os.environ['AWS_LAMBDA_LOG_GROUP_NAME']
-    log_stream_name = os.environ['AWS_LAMBDA_LOG_STREAM_NAME']
-    identity = SimpleNamespace(cognito_identity_id=None, cognito_identity_pool_id=None)
-    client_context = (client_context(json.loads(os.environ['EVENTBUS_LAMBDA_CLIENT_CONTEXT']))
-                      if os.environ.get('EVENTBUS_LAMBDA_CLIENT_CONTEXT') else None)
+    def __init__(self):
+        self._deadline_ms = int(os.environ["EVENTBUS_LAMBDA_DEADLINE_MS"])
+        self.aws_request_id = os.environ['EVENTBUS_LAMBDA_REQUEST_ID']
+        self.function_name = os.environ['AWS_LAMBDA_FUNCTION_NAME']
+        self.function_version = os.environ['AWS_LAMBDA_FUNCTION_VERSION']
+        self.invoked_function_arn = os.environ['EVENTBUS_LAMBDA_FUNCTION_ARN']
+        self.memory_limit_in_mb = os.environ['AWS_LAMBDA_FUNCTION_MEMORY_SIZE']
+        self.log_group_name = os.environ['AWS_LAMBDA_LOG_GROUP_NAME']
+        self.log_stream_name = os.environ['AWS_LAMBDA_LOG_STREAM_NAME']
+        self.identity = SimpleNamespace(cognito_identity_id=None, cognito_identity_pool_id=None)
+        self.client_context = (
+            client_context(json.loads(os.environ['EVENTBUS_LAMBDA_CLIENT_CONTEXT']))
+            if os.environ.get('EVENTBUS_LAMBDA_CLIENT_CONTEXT') else None
+        )
 
     def get_remaining_time_in_millis(self):
-        return max(0, int(os.environ['EVENTBUS_LAMBDA_DEADLINE_MS']) - int(time.time() * 1000))
+        return max(0, self._deadline_ms - int(time.time() * 1000))
 
     def log(self, message):
         sys.stdout.write(str(message))
@@ -116,8 +120,7 @@ def start_invocation_phase():
     raise RuntimeError('Lambda phase acknowledgement exceeds the limit')
 
 
-try:
-    prepare_phase_protocol()
+def load_handler():
     path = pathlib.Path(sys.argv[1])
     parts = [path.stem]
     parent = path.parent
@@ -125,32 +128,113 @@ try:
         parts.insert(0, parent.name)
         parent = parent.parent
     sys.path.insert(0, str(parent))
-    if len(parts) > 1:
-        module = importlib.import_module('.'.join(parts))
-    else:
-        spec = importlib.util.spec_from_file_location('_eventbus_lambda_handler', str(path))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-    handler = getattr(module, sys.argv[2])
-    event = json.load(sys.stdin)
-    context = Context()
-    start_invocation_phase()
+    name = '.'.join(parts) if len(parts) > 1 else '_eventbus_lambda_handler'
+    # Load the exact entry point from source, while normal import machinery
+    # owns parent imports, sys.modules and package re-exports. Parent __init__
+    # can import this module itself; it must still initialize exactly once.
+    class PrimarySourceLoader(importlib.machinery.SourceFileLoader):
+        def get_code(self, fullname):
+            return compile(self.get_data(str(path)), str(path), 'exec')
+    class PrimarySourceFinder:
+        def find_spec(self, fullname, search_path=None, target=None):
+            if fullname == name:
+                return importlib.util.spec_from_file_location(name, str(path),
+                    loader=PrimarySourceLoader(name, str(path)))
+            return None
+    finder = PrimarySourceFinder()
+    sys.meta_path.insert(0, finder)
+    try:
+        module = importlib.import_module(name)
+    finally:
+        sys.meta_path.remove(finder)
+    return getattr(module, sys.argv[2])
+
+
+def invoke_handler(handler, event, context):
     result = handler(event, context)
     if inspect.isawaitable(result):
         if inspect.iscoroutine(result):
             result.close()
         raise TypeError('Python Lambda handlers must be synchronous')
-    write_reply({'result': result})
-except BaseException as error:
+    # Validate serialization inside the same handler-error boundary.
+    json.dumps(result, ensure_ascii=False, allow_nan=False)
+    return result
+
+
+def error_reply(error):
+    return {'errorType': type(error).__name__, 'errorMessage': str(error),
+            'stackTrace': traceback.format_tb(error.__traceback__, limit=24)}
+
+
+def warm_logs_boundary(request_id):
+    sys.stdout.flush()
+    sys.stderr.flush()
+    marker = ('\x00eventbus-warm:' + os.environ['EVENTBUS_LAMBDA_WARM_LOG_TOKEN'] + ':' + request_id + '\x00').encode()
+    for descriptor in (1, 2):
+        position = 0
+        while position < len(marker):
+            position += os.write(descriptor, marker[position:])
+
+
+def warm_main():
+    import http.client
+    connection = http.client.HTTPConnection(os.environ['AWS_LAMBDA_RUNTIME_API'])
+    prefix = '/2018-06-01/runtime/'
+    def post(path, value):
+        data = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode()
+        connection.request('POST', prefix + path, body=data, headers={'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        response.read()
+        if response.status != 202:
+            raise RuntimeError('Lambda Runtime API refused response')
+    try:
+        handler = load_handler()
+    except BaseException as error:
+        warm_logs_boundary(os.environ['EVENTBUS_LAMBDA_REQUEST_ID'])
+        post('init/error', error_reply(error))
+        return
+    while True:
+        connection.request('GET', prefix + 'invocation/next')
+        response = connection.getresponse()
+        data = response.read()
+        if response.status != 200:
+            return
+        request_id = response.getheader('Lambda-Runtime-Aws-Request-Id')
+        os.environ['EVENTBUS_LAMBDA_REQUEST_ID'] = request_id
+        os.environ['EVENTBUS_LAMBDA_DEADLINE_MS'] = response.getheader('Lambda-Runtime-Deadline-Ms')
+        os.environ['EVENTBUS_LAMBDA_FUNCTION_ARN'] = response.getheader('Lambda-Runtime-Invoked-Function-Arn')
+        os.environ['EVENTBUS_LAMBDA_CLIENT_CONTEXT'] = response.getheader('Lambda-Runtime-Client-Context', '')
+        trace = response.getheader('Lambda-Runtime-Trace-Id')
+        if trace:
+            os.environ['_X_AMZN_TRACE_ID'] = trace
+        else:
+            os.environ.pop('_X_AMZN_TRACE_ID', None)
+        try:
+            value = invoke_handler(handler, json.loads(data), Context())
+            path = 'response'
+        except BaseException as error:
+            value, path = error_reply(error), 'error'
+        warm_logs_boundary(request_id)
+        post('invocation/' + request_id + '/' + path, value)
+        if path == 'error':
+            return
+
+
+if os.environ.get('EVENTBUS_LAMBDA_WARM') == '1':
+    warm_main()
+else:
+    try:
+        prepare_phase_protocol()
+        handler = load_handler()
+        event = json.load(sys.stdin)
+        start_invocation_phase()
+        context = Context()
+        write_reply({'result': invoke_handler(handler, event, context)})
+    except BaseException as error:
+        close_phase_descriptors()
+        write_reply({'error': error_reply(error)})
     close_phase_descriptors()
-    write_reply({'error': {
-        'errorType': type(error).__name__,
-        'errorMessage': str(error),
-        'stackTrace': traceback.format_tb(error.__traceback__, limit=24),
-    }})
-close_phase_descriptors()
-# Skip atexit hooks and user threads: this process belongs to one invocation.
+# Skip atexit hooks and user threads: the Go owner owns the complete process.
 sys.stdout.flush()
 sys.stderr.flush()
 os._exit(0)

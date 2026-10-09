@@ -16,6 +16,7 @@ import (
 type Config struct {
 	Functions      map[string]Function   `yaml:"functions"`
 	DevAsync       *DevAsyncConfig       `yaml:"dev_async,omitempty"`
+	DevWarm        *DevWarmConfig        `yaml:"dev_warm,omitempty"`
 	DevActivity    DevActivity           `yaml:"-"`
 	DevDiagnostics *DevDiagnosticsConfig `yaml:"dev_diagnostics,omitempty"`
 }
@@ -39,6 +40,9 @@ var exportedName = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
 func (config *Config) Validate() error {
 	if config == nil || len(config.Functions) == 0 {
 		return errors.New("Lambda configuration requires functions")
+	}
+	if err := validateDevWarm(config.DevWarm); err != nil {
+		return err
 	}
 	if err := validateDevAsync(config.DevAsync); err != nil {
 		return err

@@ -33,9 +33,10 @@ func (invoker eventSourceLambdaInvoker) InvokeObservedTarget(ctx context.Context
 	}
 	outcome, err := runtime.ExecuteObserved(ctx, lambdaservice.InvokeInput{FunctionName: arn, Payload: payload}, observe)
 	return eventsource.InvocationOutcome{
-		Metadata:     eventsource.InvocationMetadata{RequestID: outcome.Metadata.RequestID, FunctionARN: outcome.Metadata.FunctionARN},
-		State:        eventsource.InvocationState(outcome.State),
-		OwnershipErr: outcome.OwnershipErr,
+		Metadata:        eventsource.InvocationMetadata{RequestID: outcome.Metadata.RequestID, FunctionARN: outcome.Metadata.FunctionARN},
+		State:           eventsource.InvocationState(outcome.State),
+		CompletionScope: string(outcome.CompletionScope),
+		OwnershipErr:    outcome.OwnershipErr,
 	}, redactLambdaExecution(outcome.Output, err)
 }
 

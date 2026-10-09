@@ -31,7 +31,7 @@ func (invoker nativeEvidenceInvoker) InvokeObservedTarget(ctx context.Context, a
 		return onAdmission(eventsource.InvocationMetadata{RequestID: metadata.RequestID, FunctionARN: metadata.FunctionARN})
 	})
 	projected := eventsource.InvocationOutcome{Metadata: eventsource.InvocationMetadata{RequestID: outcome.Metadata.RequestID, FunctionARN: outcome.Metadata.FunctionARN},
-		State: eventsource.InvocationState(outcome.State), OwnershipErr: outcome.OwnershipErr}
+		State: eventsource.InvocationState(outcome.State), CompletionScope: string(outcome.CompletionScope), OwnershipErr: outcome.OwnershipErr}
 	if err == nil && outcome.Output.FunctionError {
 		err = errors.New("Lambda function failed")
 	}

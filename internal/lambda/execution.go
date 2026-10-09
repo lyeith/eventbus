@@ -45,6 +45,8 @@ func (service *Service) resolveTarget(name, qualifier string) (executableFunctio
 	if err != nil {
 		return executableFunction{}, "", invocationError(http.StatusBadRequest, "InvalidParameterValueException", err.Error())
 	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
 	entry, found := service.functions[resolved]
 	if !found && strings.HasSuffix(resolved, ":$LATEST") {
 		entry, found = service.functions[strings.TrimSuffix(resolved, ":$LATEST")]
@@ -119,8 +121,9 @@ func executedVersion(name string) string {
 	return "$LATEST"
 }
 
-// Execute returns only after runtime listeners and owned child processes have
-// joined. It lets coordinators sequence service events without a second runner.
+// Execute joins the handler response and output boundary plus any required
+// process retirement. Successful warm environments remain owned by the service
+// until reload, drain or Close. Coordinators share this single execution owner.
 func (service *Service) Execute(ctx context.Context, input InvokeInput) (InvokeOutput, error) {
 	outcome, err := service.execute(ctx, input, nil)
 	if err != nil {
@@ -149,6 +152,7 @@ func (service *Service) execute(ctx context.Context, input InvokeInput, onAdmiss
 		outcome.Metadata = invocationMetadata(entry, invocation)
 		outcome.Output = InvokeOutput{Payload: result.payload, FunctionError: result.functionError, RequestID: invocation.requestID, ExecutedVersion: executedVersion(name)}
 		outcome.State = result.state
+		outcome.CompletionScope = result.completionScope
 		outcome.OwnershipErr = result.ownershipErr
 	}
 	if err != nil {

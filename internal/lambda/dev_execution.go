@@ -3,6 +3,16 @@ package lambda
 
 import "context"
 
+// CompletionScope identifies what actually joined at response completion.
+// Invocation scope retains a separately owned warm process; process scope has
+// joined every launched process for this attempt (or did not launch one).
+type CompletionScope string
+
+const (
+	CompletionProcess    CompletionScope = "process"
+	CompletionInvocation CompletionScope = "invocation"
+)
+
 type InvocationState string
 
 const (
@@ -20,14 +30,16 @@ type InvocationMetadata struct {
 	Attempt                              int
 }
 
-// InvocationOutcome returns after runner/listener/owned-child cleanup. State is
+// InvocationOutcome returns after its response/output boundary and required
+// retirement joins. Warm worker lifetimes remain separately owned. State is
 // runner execution status, never a business-success assertion. OwnershipErr is
 // private join/capture uncertainty, independent of native handler errors.
 type InvocationOutcome struct {
-	Metadata     InvocationMetadata
-	Output       InvokeOutput
-	State        InvocationState
-	OwnershipErr error
+	Metadata        InvocationMetadata
+	Output          InvokeOutput
+	State           InvocationState
+	CompletionScope CompletionScope
+	OwnershipErr    error
 }
 
 // ExecuteObserved uses the same validation, identity and runner as Execute.

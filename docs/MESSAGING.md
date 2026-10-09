@@ -179,9 +179,9 @@ receipt as a successful no-op without removing a later delivery, consistent with
 Unknown handles return `ReceiptHandleIsInvalid`. `DeleteMessageBatch` applies the
 same settlement rule per entry. HTTP success alone is not mapping ACK proof.
 
-After successful whole-batch Lambda execution and actual child join, mappings use
+After successful whole-batch Lambda execution and its confirmed completion boundary, mappings use
 the broker's [`AcknowledgeSQSLambdaReceiptContext`](../internal/messaging/sqs_receipts.go)
-on the original queue instance.
+on the original queue instance. Fresh execution joins its child process. Opt-in warm execution joins its managed response/log boundary; a separate worker lease remains until retirement. Private delivery evidence exposes `completion_scope`, and retained quiescence joins warm workers before cleanup assertions.
 It accepts either deletion of the current, unexpired receipt or retained proof
 that this exact original receipt was already deleted while current and unexpired.
 Both native `DeleteMessage` and `DeleteMessageBatch` record that proof. Thus one

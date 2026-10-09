@@ -18,6 +18,10 @@ import (
 
 // These handlers have real module initialization before the wrapper's READY.
 // Markers are fixture-owned observations, never runtime control.
+const managedFallbackInitBudget = time.Second
+const managedFallbackInvokeBudget = 2 * time.Second
+const managedFallbackCleanupMargin = 750 * time.Millisecond
+
 const managedPhasePythonSource = `
 import glob
 import json
@@ -44,7 +48,7 @@ if mode in ("init_cancel", "caller_limit"):
         time.sleep(0.005)
 delay = 700
 if mode.startswith("fallback"):
-    delay = 900 if launch == 1 else (250 if mode == "fallback_exhausted" else 60)
+    delay = int(os.environ["PHASE_FIRST_INIT_DELAY_MS"]) if launch == 1 else (900 if mode == "fallback_exhausted" else 60)
 if mode == "import_failure":
     raise RuntimeError("controlled module import failure")
 if mode not in ("init_cancel", "invoke_cancel", "caller_limit"):
@@ -66,7 +70,8 @@ def handler(event, context):
         os._exit(17)
     if mode == "fallback_handler_failure":
         raise RuntimeError("controlled fallback handler failure")
-    time.sleep((700 if mode in ("handler_timeout", "fallback_exhausted") else 50) / 1000)
+    handler_delay = int(os.environ["PHASE_EXHAUSTED_HANDLER_DELAY_MS"]) if mode == "fallback_exhausted" else (700 if mode == "handler_timeout" else 50)
+    time.sleep(handler_delay / 1000)
     return {"event": event, "requestId": context.aws_request_id,
             "arn": context.invoked_function_arn, "remaining": remaining}
 `
@@ -92,7 +97,7 @@ if (mode === 'init_cancel' || mode === 'caller_limit') {
   while (!fs.existsSync(path.join(directory, 'release-init'))) await sleep(5);
 }
 let delay = 700;
-if (mode.startsWith('fallback')) delay = launch === 1 ? 900 : (mode === 'fallback_exhausted' ? 250 : 60);
+if (mode.startsWith('fallback')) delay = launch === 1 ? Number(process.env.PHASE_FIRST_INIT_DELAY_MS) : (mode === 'fallback_exhausted' ? 900 : 60);
 if (mode === 'import_failure') throw new Error('controlled module import failure');
 if (!['init_cancel', 'invoke_cancel', 'caller_limit'].includes(mode)) await sleep(delay);
 export async function handler(event, context) {
@@ -101,7 +106,7 @@ export async function handler(event, context) {
   if (mode === 'invoke_cancel') await new Promise(() => {});
   if (mode === 'fallback_process_failure') process.exit(17);
   if (mode === 'fallback_handler_failure') throw new Error('controlled fallback handler failure');
-  await sleep(['handler_timeout', 'fallback_exhausted'].includes(mode) ? 700 : 50);
+  await sleep(mode === 'fallback_exhausted' ? Number(process.env.PHASE_EXHAUSTED_HANDLER_DELAY_MS) : (mode === 'handler_timeout' ? 700 : 50));
   return {event, requestId: context.awsRequestId, arn: context.invokedFunctionArn, remaining};
 }
 `
@@ -112,6 +117,13 @@ func managedPhaseFunction(t *testing.T, runtime, directory, mode string, frozenP
 		"PHASE_DIRECTORY": directory,
 		"PHASE_MODE":      mode,
 	}}
+	if strings.HasPrefix(mode, "fallback") {
+		// Let a real managed interpreter reach the first marker under race/load.
+		// Deliberate module/handler delays, not bootstrap speed, select the phase.
+		function.Timeout = managedFallbackInvokeBudget
+		function.Environment["PHASE_FIRST_INIT_DELAY_MS"] = "2000"
+		function.Environment["PHASE_EXHAUSTED_HANDLER_DELAY_MS"] = "2300"
+	}
 	switch runtime {
 	case "node":
 		requireDiagnosticNode(t)
@@ -376,9 +388,9 @@ func TestManagedRuntimeInitTimeoutHasOneJoinedFallback(t *testing.T) {
 					directory := t.TempDir()
 					function := managedPhaseFunction(t, runtime, directory, mode, true)
 					service, path := managedPhaseService(t, directory, function)
-					// Only ordinary Init's 10s limit is shortened. The configured
-					// handler and shared fallback budget remain exactly 450ms.
-					service.initTimeout = 300 * time.Millisecond
+					// Only ordinary Init's 10s limit is shortened. Fallback shares
+					// the configured budget across real bootstrap, imports and Invoke.
+					service.initTimeout = managedFallbackInitBudget
 					outcome, err := service.ExecuteObserved(context.Background(), InvokeInput{
 						FunctionName: "phase:live", Payload: []byte(`{"unchanged":42}`),
 					}, nil)
@@ -397,7 +409,7 @@ func TestManagedRuntimeInitTimeoutHasOneJoinedFallback(t *testing.T) {
 						t.Fatalf("successful fallback retained a retired process error: %#v", record)
 					}
 					if initial.InitAttempt != 1 || initial.Mode != "initial" || initial.InitState != "timed_out" ||
-						initial.InvokeState != "" || initial.InvokeMS != 0 || initial.InitMS < 290 ||
+						initial.InvokeState != "" || initial.InvokeMS != 0 || initial.InitMS < float64(managedFallbackInitBudget.Milliseconds()-10) ||
 						fallback.InitAttempt != 2 || fallback.Mode != "fallback" || fallback.InitState != "succeeded" {
 						t.Fatalf("native Init fallback phases: %#v", record.ExecutionPhases)
 					}
@@ -405,11 +417,13 @@ func TestManagedRuntimeInitTimeoutHasOneJoinedFallback(t *testing.T) {
 						if outcome.State != InvocationSucceeded || outcome.Output.FunctionError || record.TerminationCause != "" || fallback.InvokeState != "succeeded" {
 							t.Fatalf("bounded fallback success changed: outcome=%#v record=%#v", outcome, record)
 						}
-						managedPhasePayload(t, outcome, 200, 390)
+						managedPhasePayload(t, outcome, 1, function.Timeout.Milliseconds()-int64(fallback.InitMS)+20)
 					} else {
 						assertLegacyDiagnosticTimeout(t, outcome.Output, function.Timeout)
 						if outcome.State != InvocationTimedOut || record.TerminationCause != "function_timeout" ||
-							fallback.InvokeState != "timed_out" || fallback.InitMS < 240 || fallback.InvokeMS >= 350 {
+							fallback.InvokeState != "timed_out" || fallback.InitMS < 890 ||
+							fallback.InitMS+fallback.InvokeMS < float64(function.Timeout.Milliseconds()-20) ||
+							fallback.InitMS+fallback.InvokeMS > float64((function.Timeout+managedFallbackCleanupMargin).Milliseconds()) {
 							t.Fatalf("fallback renewed its configured budget after Init: outcome=%#v record=%#v", outcome, record)
 						}
 						var invocation struct {
@@ -422,7 +436,9 @@ func TestManagedRuntimeInitTimeoutHasOneJoinedFallback(t *testing.T) {
 						if err := json.Unmarshal(data, &invocation); err != nil {
 							t.Fatal(err)
 						}
-						if invocation.Remaining <= 0 || invocation.Remaining > 200 {
+						// Actual remaining time independently detects an Invoke renewal.
+						// The duration bound above allows joined cleanup, not another budget.
+						if invocation.Remaining <= 0 || invocation.Remaining > function.Timeout.Milliseconds()-int64(fallback.InitMS)+20 {
 							t.Fatalf("fallback handler lost the shared Init+Invoke remainder: %#v", invocation)
 						}
 					}
@@ -486,7 +502,7 @@ func TestManagedRuntimeEventInitFallbackKeepsOneNativeAttempt(t *testing.T) {
 			directory := t.TempDir()
 			function := managedPhaseFunction(t, runtime, directory, "fallback_success", true)
 			service, path := managedPhaseService(t, directory, function)
-			service.initTimeout = 300 * time.Millisecond
+			service.initTimeout = managedFallbackInitBudget
 			const arn = "arn:aws:lambda:eu-west-1:123456789012:function:phase:live"
 			payload := []byte(`{"unchanged":42}`)
 			admission, err := service.Admit(context.Background(), InvokeInput{FunctionName: arn, Payload: payload})
@@ -549,7 +565,7 @@ func TestManagedRuntimeFallbackFinalFailuresHaveExactLaunchAttribution(t *testin
 				directory := t.TempDir()
 				function := managedPhaseFunction(t, runtime, directory, mode, true)
 				service, path := managedPhaseService(t, directory, function)
-				service.initTimeout = 300 * time.Millisecond
+				service.initTimeout = managedFallbackInitBudget
 				outcome, err := service.ExecuteObserved(context.Background(), InvokeInput{
 					FunctionName: "phase:live", Payload: []byte(`{"unchanged":42}`),
 				}, nil)
