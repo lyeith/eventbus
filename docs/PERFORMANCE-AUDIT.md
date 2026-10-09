@@ -490,3 +490,21 @@ without relaxing native validation. The first cold command selected no test
 packages; it contributed no samples. Consumer interpreter alias assertion failed
 before its first observation; executable+environment identity checks replaced
 string equality. Successful trigger observations were retained without repetition.
+
+
+### Published artifacts
+
+[v0.11.4](https://github.com/lyeith/eventbus/releases/tag/v0.11.4) contains eight
+CGO-free EventBus/gateway binaries and SHA256SUMS from clean tagged source
+4bac246, Go1.26.0, module v0.11.4. Downloaded assets match local checksums.
+[Release-source CI](https://github.com/lyeith/eventbus/actions/runs/37908234098)
+passed both complete unit-race/vet and scoped SDK/Swagger jobs.
+
+Actual Linux amd64 and macOS arm64 binaries passed Cognito enrollment/MFA,
+three native Node results with sequential merged log tails and reaped children,
+Lambda REQUEST authorization, compiled HTTP mappings and healthy owner shutdown.
+Other targets cross-built with verified metadata/checksums; not executed.
+The packaged gateway probe initially used an unquoted YAML path. Its registered
+owner was stopped and verified quiescent; corrected fixture/backend cleanup
+passed without source changes. Private state and release/download duplicates
+were removed. New core SES→SNS event work in #31 is separately triaged.

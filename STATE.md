@@ -2,9 +2,10 @@
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT standalone AWS
 emulator and agent harness. Plans/application data remains untouched.
-Current public release: https://github.com/lyeith/eventbus/releases/tag/v0.11.3
-All Oct9 bounded performance/ownership fixes are committed through f92de66.
-Next: package and publish verified v0.11.4 under existing release authorization.
+Current public release: https://github.com/lyeith/eventbus/releases/tag/v0.11.4
+Eight CGO-free binaries + SHA256SUMS; downloaded assets match local builds.
+Clean tagged source 4bac246; Go 1.26.0, module v0.11.4.
+All Oct9 bounded performance/ownership fixes are shipped; main adds this handoff.
 
 Owners now enforce:
 - Cognito atomic exact-secret MFA promotion with current authorization admission.
@@ -40,15 +41,21 @@ Full SDK/retained stack race 278.385s; unchanged Swagger 9.179s;
 older unmodified boto3/botocore 1.39.4 mapping proof 25.023s.
 Both owned RustFS Firehose integrations passed; native process/group joined.
 macOS arm64 localexec race passed 6.873s; Linux FD fault tests are Linux-only.
+Release-source GitHub CI passed: actions/runs/37908234098.
+Actual Linux amd64/macOS arm64 packaged Cognito MFA, Node merged logs/results/
+child joins, Lambda REQUEST authorizer and compiled HTTP mappings passed.
+Linux arm64/macOS amd64 cross-build metadata/checksums passed; not executed.
 
 Cold native consumer/trigger/SRP-email-token fixtures passed with fixed
 interpreter/environment, actual effects and process joins. No warm pool added.
 Managed consumer total median 1.20s vs native-uv attribution 0.25s;
 repeated project-mode ownership/workspace/digest work belongs to ssd-dev-tools.
 #30 opt-in warm Lambda workers remains a separate runtime design.
+New #31 SES configuration-set SNS events is native core functionality;
+explicit local outcomes belong in a dev adapter. Triage records both follow-ups.
 
 No default DB/live stack/new retained environment/worktree touched.
 Successful private archives/legacy SDK environment/RustFS data were removed;
-macOS scratch removed. Failed runs verified quiescent/unpinned, existing 24h TTL:
+macOS scratch, release stages, probes and download duplicates removed. Failed runs verified quiescent/unpinned, existing 24h TTL:
 47266c55 / a396cb0b / 044356a5 expire Oct10 08:16:37 / 08:31:29 / 08:35:11 UTC.
 One serial SSD test/build lane; no owned active test process remains.
