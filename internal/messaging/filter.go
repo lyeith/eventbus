@@ -24,23 +24,57 @@ func (fp *FilterPolicy) Matches(attrs map[string]MessageAttribute) bool {
 // MatchesMessage evaluates the selected SNS filter scope. No policy accepts
 // every message, including non-JSON bodies. A body policy requires a JSON object.
 func (fp *FilterPolicy) MatchesMessage(attrs map[string]MessageAttribute, body, scope string) bool {
+	inputs := snsFilterInputs{attributes: attrs}
+	return fp.matchesInput(&inputs, body, scope)
+}
+
+// snsFilterInputs belongs to one publication. Its decoded values are read-only;
+// policies make independent decisions without re-decoding each selected body or
+// the delivered attributes. Invalid/nonobject bodies are remembered as nil.
+type snsFilterInputs struct {
+	attributes         map[string]MessageAttribute
+	attributeValues    map[string]any
+	attributesPrepared bool
+	bodies             map[string]map[string]any
+}
+
+func (fp *FilterPolicy) matchesInput(inputs *snsFilterInputs, body, scope string) bool {
 	root := fp.filterRoot()
 	if root.empty() {
 		return true
 	}
 	if scope == "MessageBody" {
-		value, err := decodeSNSFilterJSON(body)
-		if err != nil {
-			return false
-		}
-		object, ok := value.(map[string]any)
-		return ok && root.matches([]map[string]any{object})
+		object := inputs.bodyValues(body)
+		return object != nil && root.matches([]map[string]any{object})
 	}
 	if scope != "" && scope != "MessageAttributes" || root.nested {
 		return false
 	}
-	object := make(map[string]any, len(attrs))
-	for key, attr := range attrs {
+	return root.matches([]map[string]any{inputs.attributesValues()})
+}
+
+func (inputs *snsFilterInputs) bodyValues(body string) map[string]any {
+	if object, exists := inputs.bodies[body]; exists {
+		return object
+	}
+	value, err := decodeSNSFilterJSON(body)
+	var object map[string]any
+	if err == nil {
+		object, _ = value.(map[string]any)
+	}
+	if inputs.bodies == nil {
+		inputs.bodies = make(map[string]map[string]any)
+	}
+	inputs.bodies[body] = object
+	return object
+}
+
+func (inputs *snsFilterInputs) attributesValues() map[string]any {
+	if inputs.attributesPrepared {
+		return inputs.attributeValues
+	}
+	object := make(map[string]any, len(inputs.attributes))
+	for key, attr := range inputs.attributes {
 		switch {
 		case attr.DataType == "String.Array":
 			value, err := decodeSNSFilterJSON(attr.StringValue)
@@ -62,7 +96,9 @@ func (fp *FilterPolicy) MatchesMessage(attrs map[string]MessageAttribute, body, 
 			}
 		}
 	}
-	return root.matches([]map[string]any{object})
+	inputs.attributeValues = object
+	inputs.attributesPrepared = true
+	return object
 }
 
 // ValidateScope checks constraints that depend on the subscription's scope.

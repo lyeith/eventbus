@@ -47,6 +47,12 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 	plans := make([]snsPlannedDelivery, 0, len(subscriptions))
 	deliveries := make([]SNSCaptureDelivery, 0, len(subscriptions))
 	deliveredAttributes := snsDeliveryAttributes(input.Attributes)
+	filterInputs := snsFilterInputs{attributes: deliveredAttributes}
+	if protocolMessages != nil {
+		// Protocol-specific publications strip attributes for every delivery,
+		// including subscription filtering.
+		filterInputs.attributes = nil
+	}
 	// All envelope fields except the selected protocol message are shared by
 	// this publication. Raw delivery needs no envelope; Lambda's event wrapper
 	// remains subscription-specific and is built from this immutable body.
@@ -73,7 +79,7 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 		if protocolMessages != nil {
 			messageAttributes = nil
 		}
-		if subscription.FilterPolicy != nil && !subscription.FilterPolicy.MatchesMessage(messageAttributes, message, subscription.Attributes["FilterPolicyScope"]) {
+		if subscription.FilterPolicy != nil && !subscription.FilterPolicy.matchesInput(&filterInputs, message, subscription.Attributes["FilterPolicyScope"]) {
 			delivery.Status = "filtered"
 			deliveries = append(deliveries, delivery)
 			continue
