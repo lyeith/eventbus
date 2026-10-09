@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -20,10 +21,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// A start barrier at the downstream HTTP boundary makes every measured
-// producer an actual initial-cache-miss caller. It adds no timed sleep and
-// leaves Lambda admission, native REQUEST payload, runtime execution, policy
-// parse/evaluation and proxy mapping in their existing owners.
+// The downstream HTTP barrier now waits for every measured producer to join
+// one cache-enabled flight. Waiting for one downstream invocation per producer
+// would deadlock correct coalescing. There is no timed sleep; native Lambda
+// admission, runtime execution, policy evaluation and proxy mapping remain in
+// their existing owners. The workload retains the same initial-miss producers.
 func TestPerformanceRound2GatewayAuthorizerBurst(t *testing.T) {
 	for _, warm := range []bool{false, true} {
 		for _, producers := range []int{1, 8, 16} {
@@ -58,20 +60,37 @@ exports.handler = async (event, context) => {
 				})
 				var gateMu sync.Mutex
 				var gate chan struct{}
+				var burstAuthorizer *lambdaAuthorizer
 				admissions, wanted := 0, 0
 				aws := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					gateMu.Lock()
 					if gate != nil {
 						admissions++
-						if admissions == wanted {
-							close(gate)
-						}
-						release := gate
+						owner, peers, release := burstAuthorizer, wanted, gate
 						gateMu.Unlock()
-						select {
-						case <-release:
-						case <-r.Context().Done():
-							return
+						for {
+							owner.mu.Lock()
+							waiters := 0
+							for _, flight := range owner.flights {
+								waiters += flight.waiters
+							}
+							owner.mu.Unlock()
+							if waiters == peers {
+								gateMu.Lock()
+								select {
+								case <-release:
+								default:
+									close(release)
+								}
+								gateMu.Unlock()
+								break
+							}
+							select {
+							case <-r.Context().Done():
+								return
+							default:
+								runtime.Gosched()
+							}
 						}
 					} else {
 						gateMu.Unlock()
@@ -84,6 +103,9 @@ exports.handler = async (event, context) => {
 					Authorizers: map[string]AuthorizerConfig{"auth": {Type: "REQUEST", InvokeURL: aws.URL + "/2015-03-31/functions/round2-auth/invocations", TTL: &ttl, IdentitySources: []string{"method.request.header.Authorization"}, Timeout: 10 * time.Second}},
 					Routes:      []RouteConfig{{Path: "/private/{id}", Method: "GET", Authorizer: "auth", Integration: IntegrationConfig{Type: "HTTP_PROXY", URI: "http://round2.invalid/backend/{id}"}}},
 				}, Options{Logger: zerolog.Nop()})
+				gateMu.Lock()
+				burstAuthorizer = edge.authorizers["auth"]
+				gateMu.Unlock()
 				edge.routes[0].proxy.Transport = performanceGatewayTransport(func(request *http.Request) (*http.Response, error) {
 					if request.Body != nil {
 						_ = request.Body.Close()
@@ -152,10 +174,10 @@ exports.handler = async (event, context) => {
 					actualAdmissions := admissions
 					gate = nil
 					gateMu.Unlock()
-					if actualAdmissions != producers {
-						t.Fatalf("initial miss barrier admissions=%d want=%d", actualAdmissions, producers)
+					if actualAdmissions != 1 {
+						t.Fatalf("coalesced initial miss barrier admissions=%d want=1", actualAdmissions)
 					}
-					totalExpected += producers
+					totalExpected++
 					data, err := os.ReadFile(tracePath)
 					if err != nil {
 						t.Fatal(err)
@@ -193,7 +215,7 @@ exports.handler = async (event, context) => {
 					if err != nil || len(after) != len(data) {
 						t.Fatalf("cache hit invoked backend: err=%v", err)
 					}
-					t.Logf("PERFORMANCE_ROUND2_AUTH sample=%d warm=%t warm_cap=%d producers=%d native_invocations=%d actual_distinct_pids=%d initial_miss_barrier=true all_calls_joined=true", sample, warm, warmCap, producers, actualAdmissions, len(pids))
+					t.Logf("PERFORMANCE_ROUND2_AUTH sample=%d warm=%t warm_cap=%d producers=%d native_invocations=%d actual_distinct_pids=%d initial_miss_barrier=true coalesced=true all_calls_joined=true", sample, warm, warmCap, producers, actualAdmissions, len(pids))
 				}
 				name := fmt.Sprintf("gateway/initial_miss/warm_%t/producers_%d", warm, producers)
 				testperf.Report(t, name, "burst_wall_ms", batch)

@@ -20,6 +20,12 @@ import (
 const maxInvokePayload = 6 * 1024 * 1024
 const maxAuthorizerCache = 4096
 
+// Coalescing is optional admission optimization, not an overload policy.
+// Excess work keeps the synchronous request-owned path instead of retaining
+// another shared goroutine or rejecting a valid native request.
+const maxAuthorizerFlights = 128
+const maxAuthorizerFlightWaiters = 128
+
 type requestEvent struct {
 	routeKey                        string
 	apiPath                         string
@@ -75,12 +81,23 @@ type cachedAuthorization struct {
 	response authorizerResponse
 	expires  time.Time
 }
+type authorizationFlight struct {
+	done      chan struct{}
+	cancel    context.CancelFunc
+	waiters   int
+	abandoned bool
+	response  authorizerResponse
+	status    int
+}
 type lambdaAuthorizer struct {
-	config AuthorizerConfig
-	client *http.Client
-	mu     sync.Mutex
-	cache  map[string]cachedAuthorization
-	now    func() time.Time
+	config  AuthorizerConfig
+	client  *http.Client
+	mu      sync.Mutex
+	cache   map[string]cachedAuthorization
+	flights map[string]*authorizationFlight
+	workers sync.WaitGroup
+	closed  bool
+	now     func() time.Time
 }
 
 func newRequestEvent(cfg Config, route RouteConfig, r *http.Request, parameters map[string]string, requestID string) requestEvent {
@@ -149,47 +166,136 @@ func (authorizer *lambdaAuthorizer) authorize(ctx context.Context, event request
 			identity[i] = value
 		}
 	}
-	if ttl > 0 {
-		keyJSON, _ := json.Marshal(identity)
-		digest := sha256.Sum256(keyJSON)
-		cacheKey = hex.EncodeToString(digest[:])
-		authorizer.mu.Lock()
-		cached, ok := authorizer.cache[cacheKey]
-		authorizer.mu.Unlock()
-		if ok && authorizer.now().Before(cached.expires) {
-			return cached.response, policyStatus(cached.response, event.MethodARN)
+	if ttl <= 0 {
+		response, status := authorizer.invoke(ctx, event, identity)
+		if status != 0 {
+			return authorizerResponse{}, status
 		}
+		return response, policyStatus(response, event.MethodARN)
 	}
+	keyJSON, _ := json.Marshal(identity)
+	digest := sha256.Sum256(keyJSON)
+	cacheKey = hex.EncodeToString(digest[:])
+	authorizer.mu.Lock()
+	if authorizer.closed {
+		authorizer.mu.Unlock()
+		return authorizerResponse{}, http.StatusInternalServerError
+	}
+	cached, ok := authorizer.cache[cacheKey]
+	if ok && authorizer.now().Before(cached.expires) {
+		authorizer.mu.Unlock()
+		return cached.response, policyStatus(cached.response, event.MethodARN)
+	}
+	if ctx.Err() != nil {
+		authorizer.mu.Unlock()
+		return authorizerResponse{}, http.StatusInternalServerError
+	}
+	flight := authorizer.flights[cacheKey]
+	if flight != nil && !flight.abandoned && flight.waiters < maxAuthorizerFlightWaiters {
+		flight.waiters++
+	} else if flight == nil && len(authorizer.flights) < maxAuthorizerFlights {
+		if authorizer.flights == nil {
+			authorizer.flights = make(map[string]*authorizationFlight)
+		}
+		// The first caller supplies the native event and context values, but
+		// its cancellation/deadline cannot cancel other callers' shared work.
+		// Invoke still applies the configured timeout; the owner cancels when
+		// no callers remain or on shutdown and joins every worker.
+		invokeContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		flight = &authorizationFlight{done: make(chan struct{}), cancel: cancel, waiters: 1}
+		authorizer.flights[cacheKey] = flight
+		authorizer.workers.Add(1)
+		go authorizer.runFlight(invokeContext, cacheKey, flight, event, identity, ttl)
+	} else {
+		authorizer.mu.Unlock()
+		// A full/retiring flight must not retain unbounded waiting callers.
+		// Overflow uses exactly the original caller-cancelled Invoke path.
+		response, status := authorizer.invoke(ctx, event, identity)
+		if status != 0 {
+			return authorizerResponse{}, status
+		}
+		authorizer.mu.Lock()
+		if !authorizer.closed {
+			authorizer.cacheResponse(cacheKey, response, ttl)
+		}
+		authorizer.mu.Unlock()
+		return response, policyStatus(response, event.MethodARN)
+	}
+	authorizer.mu.Unlock()
+	select {
+	case <-flight.done:
+		if flight.status != 0 {
+			return authorizerResponse{}, flight.status
+		}
+		return flight.response, policyStatus(flight.response, event.MethodARN)
+	case <-ctx.Done():
+		authorizer.mu.Lock()
+		flight.waiters--
+		last := flight.waiters == 0
+		if last {
+			flight.abandoned = true
+			flight.cancel()
+		}
+		authorizer.mu.Unlock()
+		if last {
+			// The final caller joins cancelled work before returning. Other
+			// callers may return independently while a surviving peer waits.
+			<-flight.done
+		}
+		return authorizerResponse{}, http.StatusInternalServerError
+	}
+}
+
+func (authorizer *lambdaAuthorizer) runFlight(ctx context.Context, key string, flight *authorizationFlight, event requestEvent, identity []string, ttl int) {
+	defer authorizer.workers.Done()
+	defer flight.cancel()
 	response, status := authorizer.invoke(ctx, event, identity)
-	if status != 0 {
-		return authorizerResponse{}, status
+	authorizer.mu.Lock()
+	if status == 0 && !flight.abandoned && !authorizer.closed {
+		authorizer.cacheResponse(key, response, ttl)
 	}
-	if ttl > 0 {
-		authorizer.mu.Lock()
-		now := authorizer.now()
-		current, replacing := authorizer.cache[cacheKey]
-		// Concurrent same-identity misses may publish after a peer inserted
-		// this key. A live replacement needs no new slot or eviction.
-		if len(authorizer.cache) >= maxAuthorizerCache && (!replacing || !now.Before(current.expires)) {
-			earliestKey := ""
-			var earliest time.Time
-			for key, entry := range authorizer.cache {
-				if !now.Before(entry.expires) {
-					delete(authorizer.cache, key)
-					continue
-				}
-				if earliestKey == "" || entry.expires.Before(earliest) {
-					earliestKey, earliest = key, entry.expires
-				}
+	flight.response, flight.status = response, status
+	delete(authorizer.flights, key)
+	close(flight.done)
+	authorizer.mu.Unlock()
+}
+
+// cacheResponse is called with authorizer.mu held. Native successful responses
+// include valid IAM Deny and simple false; invocation/parse failures never enter.
+func (authorizer *lambdaAuthorizer) cacheResponse(key string, response authorizerResponse, ttl int) {
+	now := authorizer.now()
+	current, replacing := authorizer.cache[key]
+	// An overflow request may finish after a shared peer inserted this key.
+	// A live replacement needs no new slot or unrelated eviction.
+	if len(authorizer.cache) >= maxAuthorizerCache && (!replacing || !now.Before(current.expires)) {
+		earliestKey := ""
+		var earliest time.Time
+		for key, entry := range authorizer.cache {
+			if !now.Before(entry.expires) {
+				delete(authorizer.cache, key)
+				continue
 			}
-			if len(authorizer.cache) >= maxAuthorizerCache && !replacing {
-				delete(authorizer.cache, earliestKey)
+			if earliestKey == "" || entry.expires.Before(earliest) {
+				earliestKey, earliest = key, entry.expires
 			}
 		}
-		authorizer.cache[cacheKey] = cachedAuthorization{response: response, expires: now.Add(time.Duration(ttl) * time.Second)}
-		authorizer.mu.Unlock()
+		if len(authorizer.cache) >= maxAuthorizerCache && !replacing {
+			delete(authorizer.cache, earliestKey)
+		}
 	}
-	return response, policyStatus(response, event.MethodARN)
+	authorizer.cache[key] = cachedAuthorization{response: response, expires: now.Add(time.Duration(ttl) * time.Second)}
+}
+
+func (authorizer *lambdaAuthorizer) close() {
+	authorizer.mu.Lock()
+	authorizer.closed = true
+	for _, flight := range authorizer.flights {
+		flight.abandoned = true
+		flight.cancel()
+	}
+	authorizer.mu.Unlock()
+	// Add and close are serialized by mu, so no worker can appear after Wait.
+	authorizer.workers.Wait()
 }
 
 func (authorizer *lambdaAuthorizer) invoke(ctx context.Context, event requestEvent, identity []string) (authorizerResponse, int) {

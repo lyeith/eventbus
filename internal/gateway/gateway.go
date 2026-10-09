@@ -284,8 +284,14 @@ func (gateway *Gateway) Close() error {
 	if gateway == nil {
 		return nil
 	}
+	// Fence ingress before cancelling shared authorizer exchanges. Every
+	// Close joins them, including calls racing with another Close.
+	firstClose := gateway.closed.CompareAndSwap(false, true)
+	for _, authorizer := range gateway.authorizers {
+		authorizer.close()
+	}
 	var transportErr error
-	if gateway.closed.CompareAndSwap(false, true) {
+	if firstClose {
 		gateway.transport.CloseIdleConnections()
 		transportErr = gateway.connections.Close()
 	}

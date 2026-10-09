@@ -87,10 +87,10 @@ func TestParsedIAMPolicyReusesMatchersForCurrentARNAndExplicitDeny(t *testing.T)
 	workers.Wait()
 }
 
-func TestConcurrentSameIdentityCacheReplacementRetainsOtherEntries(t *testing.T) {
+func TestCoalescedSameIdentityCacheInsertionRetainsOtherEntries(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	gates := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	gates := [1]chan struct{}{make(chan struct{})}
 
 	started := make(chan int, 2)
 	exited := make(chan int, 2)
@@ -170,13 +170,12 @@ func TestConcurrentSameIdentityCacheReplacementRetainsOtherEntries(t *testing.T)
 			results <- result{response, status}
 		}()
 	}
-	for index := 0; index < 2; index++ {
-		select {
-		case <-started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("concurrent native misses did not enter both exchanges")
-		}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent native misses did not enter the shared exchange")
 	}
+	waitForAuthorizerWaiters(t, authorizer, 2)
 	assertSlots := func() {
 		t.Helper()
 		authorizer.mu.Lock()
@@ -195,8 +194,8 @@ func TestConcurrentSameIdentityCacheReplacementRetainsOtherEntries(t *testing.T)
 			}
 		}
 	}
+	close(gates[0])
 	for index := 0; index < 2; index++ {
-		close(gates[index])
 		select {
 		case completed := <-results:
 			if completed.status != 0 || completed.response.PrincipalID != "new-identity" {
@@ -207,18 +206,18 @@ func TestConcurrentSameIdentityCacheReplacementRetainsOtherEntries(t *testing.T)
 		}
 		assertSlots()
 	}
-	for index := 0; index < 2; index++ {
+	for index := 0; index < 1; index++ {
 		select {
 		case <-exited:
 		case <-time.After(5 * time.Second):
 			t.Fatal("native authorizer handler did not join")
 		}
 	}
-	if calls.Load() != 2 {
-		t.Fatalf("same-identity native misses=%d, want 2", calls.Load())
+	if calls.Load() != 1 {
+		t.Fatalf("same-identity native misses=%d, want 1", calls.Load())
 	}
 	_, status := authorizer.authorize(ctx, event)
-	if status != 0 || calls.Load() != 2 {
+	if status != 0 || calls.Load() != 1 {
 		t.Fatal("replaced identity was not cached")
 	}
 	if err := gateway.Close(); err != nil {
