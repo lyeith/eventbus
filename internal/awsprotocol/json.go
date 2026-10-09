@@ -3,8 +3,6 @@ package awsprotocol
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"math"
 	"net/http"
 )
 
@@ -20,10 +18,7 @@ const (
 // complete JSON prefix cannot hide a truncated oversized request. Native
 // operation limits and error mapping remain with the service adapter.
 func ReadJSONBody(r *http.Request, maxBytes int64) (map[string]interface{}, error) {
-	if maxBytes <= 0 || maxBytes == math.MaxInt64 {
-		return nil, fmt.Errorf("JSON body limit must be positive and bounded")
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+	body, err := ReadBoundedBody(r.Body, r.ContentLength, maxBytes)
 	if err != nil {
 		return nil, err
 	}
