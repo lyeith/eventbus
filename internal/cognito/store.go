@@ -29,6 +29,11 @@ type CognitoStore struct {
 	// mu serialises read-modify-write paths (e.g. ensure-signing-key).
 	// Plain reads/writes go through the WAL-enabled connection pool directly.
 	mu sync.Mutex
+	// Decoded keys are immutable and published only after persistence.
+	signingKeys           map[string]*SigningKey
+	signingKeyGenerations map[string]*signingKeyGeneration
+	signingKeyTasks       sync.WaitGroup
+	closed                bool
 }
 
 // OpenCognitoStore opens (or creates) the SQLite database at path and
@@ -48,7 +53,7 @@ func OpenCognitoStore(path string) (*CognitoStore, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	store := &CognitoStore{db: db}
+	store := &CognitoStore{db: db, signingKeys: make(map[string]*SigningKey), signingKeyGenerations: make(map[string]*signingKeyGeneration)}
 	if err := store.bootstrap(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("bootstrap cognito schema: %w", err)
@@ -61,6 +66,14 @@ func (s *CognitoStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	s.mu.Lock()
+	s.closed = true
+	clear(s.signingKeys)
+	clear(s.signingKeyGenerations)
+	s.mu.Unlock()
+	// Generation cannot be interrupted inside crypto/rsa; join its bounded
+	// work before releasing storage. closed prevents any later Add.
+	s.signingKeyTasks.Wait()
 	return s.db.Close()
 }
 
@@ -294,6 +307,8 @@ func (s *CognitoStore) DeletePool(ctx context.Context, poolID string) (bool, err
 		return false, err
 	}
 	committed = true
+	delete(s.signingKeys, poolID)
+	delete(s.signingKeyGenerations, poolID)
 	return n > 0, nil
 }
 

@@ -80,7 +80,7 @@ func (s *Handler) respondToAuthChallenge(w http.ResponseWriter, r *http.Request,
 		cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "App client does not exist in the user pool")
 		return
 	}
-	signing, err := s.cognito.LoadSigningKey(r.Context(), client.PoolID)
+	signing, err := s.cognito.loadSigningKey(r.Context(), client.PoolID)
 	if err != nil {
 		invalidChallengeSession(w)
 		return

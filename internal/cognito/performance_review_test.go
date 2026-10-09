@@ -238,8 +238,8 @@ func TestPerformanceReviewCognitoKeysAndJWT(t *testing.T) {
 		}},
 		{"load_persisted_key", cognitoPerformanceWarmSamples, func() error { _, err := store.LoadSigningKey(ctx, user.PoolID); return err }},
 		{"ensure_existing_key", cognitoPerformanceWarmSamples, func() error { _, err := store.EnsureSigningKey(ctx, user.PoolID); return err }},
-		// Comparisons reuse this test's immutable real key only. Production still
-		// loads persisted keys; these rows isolate encoding and signing CPU cost.
+		// Comparisons reuse a detached real key. Production borrows the store's
+		// immutable decoded key; these rows isolate encoding and signing CPU cost.
 		{"jwks_encode_only", cognitoPerformanceWarmSamples, func() error {
 			_, err := json.Marshal(JWKS{Keys: []JWK{PublicKeyToJWK(key.Public, key.Kid)}})
 			return err

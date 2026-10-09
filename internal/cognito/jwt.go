@@ -8,7 +8,6 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -56,107 +55,10 @@ type JWKS struct {
 	Keys []JWK `json:"keys"`
 }
 
-// EnsureSigningKey returns the existing pool key if one is persisted, else
-// generates and stores a new RSA-2048 pair atomically. The mutex on
-// CognitoStore protects against two concurrent first-use callers generating
-// duplicate keys for the same pool and against pool deletion. Key generation
-// never provisions resources; the native API or development seed owns pools.
-func (s *CognitoStore) EnsureSigningKey(ctx context.Context, poolID string) (*SigningKey, error) {
-	if poolID == "" {
-		return nil, errors.New("pool id required")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var parent string
-	if err := s.db.QueryRowContext(ctx, `SELECT id FROM pools WHERE id=?`, poolID).Scan(&parent); err != nil {
-		return nil, err
-	}
-	if key, err := s.loadSigningKeyLocked(ctx, poolID); err == nil {
-		return key, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-
-	priv, err := rsa.GenerateKey(rand.Reader, rsaKeySize)
-	if err != nil {
-		return nil, fmt.Errorf("generate rsa key: %w", err)
-	}
-	pub := &priv.PublicKey
-
-	kid, err := computeKid(pub)
-	if err != nil {
-		return nil, err
-	}
-
-	privPEM, err := encodePrivateKeyPEM(priv)
-	if err != nil {
-		return nil, err
-	}
-	pubPEM, err := encodePublicKeyPEM(pub)
-	if err != nil {
-		return nil, err
-	}
-
-	now := s.now().Unix()
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO signing_keys (pool_id, kid, private_pem, public_pem, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, poolID, kid, privPEM, pubPEM, now); err != nil {
-		return nil, fmt.Errorf("persist signing key: %w", err)
-	}
-
-	return &SigningKey{
-		PoolID:    poolID,
-		Kid:       kid,
-		Private:   priv,
-		Public:    pub,
-		CreatedAt: now,
-	}, nil
-}
-
-// LoadSigningKey returns the persisted key for poolID without generating one.
-// Returns sql.ErrNoRows if absent.
-func (s *CognitoStore) LoadSigningKey(ctx context.Context, poolID string) (*SigningKey, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.loadSigningKeyLocked(ctx, poolID)
-}
-
-func (s *CognitoStore) loadSigningKeyLocked(ctx context.Context, poolID string) (*SigningKey, error) {
-	var (
-		kid       string
-		privPEM   string
-		pubPEM    string
-		createdAt int64
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT kid, private_pem, public_pem, created_at FROM signing_keys WHERE pool_id = ?
-	`, poolID).Scan(&kid, &privPEM, &pubPEM, &createdAt)
-	if err != nil {
-		return nil, err
-	}
-	priv, err := decodePrivateKeyPEM(privPEM)
-	if err != nil {
-		return nil, fmt.Errorf("decode private pem: %w", err)
-	}
-	pub, err := decodePublicKeyPEM(pubPEM)
-	if err != nil {
-		return nil, fmt.Errorf("decode public pem: %w", err)
-	}
-	return &SigningKey{
-		PoolID:    poolID,
-		Kid:       kid,
-		Private:   priv,
-		Public:    pub,
-		CreatedAt: createdAt,
-	}, nil
-}
-
 // BuildJWKS returns the JSON document published at
 // /{pool}/.well-known/jwks.json. Shape matches mock.py:44-79 exactly.
 func (s *CognitoStore) BuildJWKS(ctx context.Context, poolID string) ([]byte, error) {
-	key, err := s.EnsureSigningKey(ctx, poolID)
+	key, err := s.ensureSigningKey(ctx, poolID)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +204,7 @@ func VerifyAccessToken(ctx context.Context, store *CognitoStore, issuerBase, tok
 		return nil, fmt.Errorf("invalid pool id derived from iss %q", issRaw)
 	}
 
-	signing, err := store.LoadSigningKey(ctx, poolID)
+	signing, err := store.loadSigningKey(ctx, poolID)
 	if err != nil {
 		return nil, fmt.Errorf("load signing key for pool %q: %w", poolID, err)
 	}
@@ -414,7 +316,7 @@ func SignAccessToken(
 	if user.PoolID != poolID {
 		return "", errors.New("user does not belong to token pool")
 	}
-	signing, err := store.EnsureSigningKey(ctx, poolID)
+	signing, err := store.ensureSigningKey(ctx, poolID)
 	if err != nil {
 		return "", fmt.Errorf("ensure signing key: %w", err)
 	}
@@ -487,7 +389,7 @@ func SignIDToken(ctx context.Context, store *CognitoStore, issuerBase, poolID, c
 		}
 		attributes = FilterClientReadAttributes(pool.SchemaAttributes, client.ReadAttributes, attributes)
 	}
-	signing, err := store.EnsureSigningKey(ctx, poolID)
+	signing, err := store.ensureSigningKey(ctx, poolID)
 	if err != nil {
 		return "", fmt.Errorf("ensure signing key: %w", err)
 	}
@@ -553,7 +455,7 @@ func SignRefreshToken(
 	if err := grant.valid(); err != nil {
 		return "", err
 	}
-	signing, err := store.EnsureSigningKey(ctx, poolID)
+	signing, err := store.ensureSigningKey(ctx, poolID)
 	if err != nil {
 		return "", fmt.Errorf("ensure signing key: %w", err)
 	}
@@ -621,7 +523,7 @@ func VerifyRefreshToken(
 		return nil, fmt.Errorf("invalid pool id derived from iss %q", issRaw)
 	}
 
-	signing, err := store.LoadSigningKey(ctx, poolID)
+	signing, err := store.loadSigningKey(ctx, poolID)
 	if err != nil {
 		return nil, fmt.Errorf("load signing key for pool %q: %w", poolID, err)
 	}

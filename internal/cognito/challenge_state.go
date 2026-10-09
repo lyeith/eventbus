@@ -40,7 +40,7 @@ func (s *Handler) issueStateChallenge(w http.ResponseWriter, r *http.Request, cl
 		}
 		stateJSON = string(encoded)
 	}
-	signing, err := s.cognito.EnsureSigningKey(r.Context(), client.PoolID)
+	signing, err := s.cognito.ensureSigningKey(r.Context(), client.PoolID)
 	if err != nil {
 		cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", "Failed to create challenge session")
 		return
