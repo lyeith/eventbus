@@ -38,12 +38,40 @@ func (extractor *GoJQMetadataExtractor) Validate(ctx context.Context, query stri
 	_, err := compileMetadataQuery(ctx, query)
 	return err
 }
+
+// Prepare compiles once for the owning stream. gojq Code documents concurrent
+// reuse; RunWithContext creates a new execution environment for every record.
+func (extractor *GoJQMetadataExtractor) Prepare(ctx context.Context, query string) (RecordMetadataExtractor, error) {
+	code, err := compileMetadataQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return goJQMetadataQuery{code: code}, nil
+}
+
+type goJQMetadataQuery struct{ code *gojq.Code }
+
+func (query goJQMetadataQuery) Extract(ctx context.Context, record []byte) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return extractMetadata(ctx, query.code, record)
+}
+
+// Extract preserves the direct/injected query contract. Configured streams use
+// Prepare instead; there is no process-wide or extractor-owned query cache.
 func (extractor *GoJQMetadataExtractor) Extract(ctx context.Context, query string, record []byte) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	code, err := compileMetadataQuery(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("metadata query compilation failed")
+	}
+	return extractMetadata(ctx, code, record)
+}
+
+func extractMetadata(ctx context.Context, code *gojq.Code, record []byte) (map[string]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(record))
 	var input interface{}

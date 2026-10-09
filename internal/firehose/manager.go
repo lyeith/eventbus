@@ -2,7 +2,6 @@ package firehose
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -54,17 +53,22 @@ type DeliveryStream struct {
 	BufferSizeMB                                       int
 	BufferInterval                                     time.Duration
 	config                                             StreamConfig
+	metadata                                           RecordMetadataExtractor
+	buildObject                                        objectBuilder
 	created                                            time.Time
 	buffer                                             []bufferedRecord
 	pending                                            []*deliveryObject
 	bufferedBytes                                      int
-	lastDeliveryError                                  string
-	mu                                                 sync.Mutex
-	flushSlot                                          chan struct{}
-	stopping                                           bool
-	cancel                                             context.CancelFunc
-	flush                                              chan struct{}
-	done                                               chan struct{}
+	// retainedRecords counts accepted buffer and pending records, including
+	// preparation/retry intervals; only joined successful delivery decrements it.
+	retainedRecords   int
+	lastDeliveryError string
+	mu                sync.Mutex
+	flushSlot         chan struct{}
+	stopping          bool
+	cancel            context.CancelFunc
+	flush             chan struct{}
+	done              chan struct{}
 }
 
 type StreamSnapshot struct {
@@ -80,6 +84,7 @@ type FirehoseManager struct {
 	mu                                                      sync.RWMutex
 	region, accountID, s3Endpoint, s3AccessKey, s3SecretKey string
 	metadata                                                MetadataExtractor
+	buildObject                                             objectBuilder
 	dev                                                     *devDelivery
 	bufferLimit                                             int
 	httpClient                                              *http.Client
@@ -95,7 +100,7 @@ func NewFirehoseManager(region, accountID, s3Endpoint, s3AccessKey, s3SecretKey 
 	if accountID == "" {
 		accountID = "000000000000"
 	}
-	return &FirehoseManager{streams: make(map[string]*DeliveryStream), region: region, accountID: accountID, s3Endpoint: s3Endpoint, s3AccessKey: s3AccessKey, s3SecretKey: s3SecretKey, bufferLimit: maxBufferedBytes, httpClient: &http.Client{Timeout: 10 * time.Second}, done: make(chan struct{})}
+	return &FirehoseManager{streams: make(map[string]*DeliveryStream), region: region, accountID: accountID, s3Endpoint: s3Endpoint, s3AccessKey: s3AccessKey, s3SecretKey: s3SecretKey, bufferLimit: maxBufferedBytes, buildObject: makeObject, httpClient: &http.Client{Timeout: 10 * time.Second}, done: make(chan struct{})}
 }
 
 // SetMetadataExtractor is a construction-time port, never a mutable per-request
@@ -120,20 +125,25 @@ func (fm *FirehoseManager) CreateStream(name, bucketName, prefix, errorPrefix st
 		bufferIntervalSec = 60
 	}
 	config := StreamConfig{Name: name, BucketARN: "arn:aws:s3:::" + bucketName, Prefix: prefix, ErrorOutputPrefix: errorPrefix, CompressionFormat: "UNCOMPRESSED", CustomTimeZone: "UTC", BufferingHints: BufferingHints{SizeInMBs: bufferSizeMB, IntervalInSeconds: bufferIntervalSec}}
-	return fm.createStream(config)
+	return fm.createStream(config, nil)
 }
 
 func (fm *FirehoseManager) CreateConfiguredStream(ctx context.Context, config StreamConfig) (*DeliveryStream, error) {
 	fm.mu.RLock()
 	extractor := fm.metadata
 	fm.mu.RUnlock()
-	if err := validateConfig(ctx, config, extractor); err != nil {
+	config = cloneConfig(config)
+	if err := validateConfig(config, extractor); err != nil {
 		return nil, err
 	}
-	return fm.createStream(config)
+	processor, err := prepareMetadataExtractor(ctx, extractor, config.metadataQuery())
+	if err != nil {
+		return nil, fmt.Errorf("invalid MetadataExtractionQuery: %w", err)
+	}
+	return fm.createStream(config, processor)
 }
 
-func (fm *FirehoseManager) createStream(config StreamConfig) (*DeliveryStream, error) {
+func (fm *FirehoseManager) createStream(config StreamConfig, metadata RecordMetadataExtractor) (*DeliveryStream, error) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	if fm.stopping {
@@ -148,7 +158,7 @@ func (fm *FirehoseManager) createStream(config StreamConfig) (*DeliveryStream, e
 	config = cloneConfig(config)
 	ctx, cancel := context.WithCancel(context.Background())
 	_, bucket, _ := strings.Cut(config.BucketARN, ":::")
-	ds := &DeliveryStream{Name: config.Name, ARN: fmt.Sprintf("arn:aws:firehose:%s:%s:deliverystream/%s", fm.region, fm.accountID, config.Name), BucketName: bucket, Prefix: config.Prefix, ErrorPrefix: config.ErrorOutputPrefix, BufferSizeMB: config.BufferingHints.SizeInMBs, BufferInterval: time.Duration(config.BufferingHints.IntervalInSeconds) * time.Second, Status: "ACTIVE", config: config, created: time.Now(), cancel: cancel, flush: make(chan struct{}, 1), flushSlot: make(chan struct{}, 1), done: make(chan struct{})}
+	ds := &DeliveryStream{Name: config.Name, ARN: fmt.Sprintf("arn:aws:firehose:%s:%s:deliverystream/%s", fm.region, fm.accountID, config.Name), BucketName: bucket, Prefix: config.Prefix, ErrorPrefix: config.ErrorOutputPrefix, BufferSizeMB: config.BufferingHints.SizeInMBs, BufferInterval: time.Duration(config.BufferingHints.IntervalInSeconds) * time.Second, Status: "ACTIVE", config: config, metadata: metadata, buildObject: fm.buildObject, created: time.Now(), cancel: cancel, flush: make(chan struct{}, 1), flushSlot: make(chan struct{}, 1), done: make(chan struct{})}
 	fm.streams[ds.Name] = ds
 	go fm.flushLoop(ctx, ds)
 	return ds, nil
@@ -169,15 +179,11 @@ func (fm *FirehoseManager) Snapshot(name string) (StreamSnapshot, bool) {
 	}
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
-	records := len(ds.buffer)
-	for _, object := range ds.pending {
-		records += len(object.records)
-	}
 	status := ds.Status
 	if ds.stopping {
 		status = "DELETING"
 	}
-	return StreamSnapshot{Name: ds.Name, ARN: ds.ARN, Status: status, Config: cloneConfig(ds.config), CreatedAt: ds.created, BufferedRecords: records, BufferedBytes: ds.bufferedBytes, PendingObjects: len(ds.pending), LastDeliveryError: ds.lastDeliveryError}, true
+	return StreamSnapshot{Name: ds.Name, ARN: ds.ARN, Status: status, Config: cloneConfig(ds.config), CreatedAt: ds.created, BufferedRecords: ds.retainedRecords, BufferedBytes: ds.bufferedBytes, PendingObjects: len(ds.pending), LastDeliveryError: ds.lastDeliveryError}, true
 }
 
 // PutFirehoseRecord satisfies the consumer-owned SNS delivery port without a
@@ -229,12 +235,12 @@ func processingFailure(data []byte, arrived time.Time, code string, attempts int
 	return append(encoded, '\n')
 }
 
-func prepareRecord(ctx context.Context, config StreamConfig, extractor MetadataExtractor, data []byte, arrived time.Time) bufferedRecord {
+func prepareRecord(ctx context.Context, config StreamConfig, extractor RecordMetadataExtractor, data []byte, arrived time.Time) bufferedRecord {
 	record := bufferedRecord{data: bytes.Clone(data), originalBytes: len(data), arrived: arrived}
 	record.source = record.data
 	location, _ := time.LoadLocation(config.CustomTimeZone)
 	if query := config.metadataQuery(); query != "" {
-		keys, err := extractor.Extract(ctx, query, data)
+		keys, err := extractor.Extract(ctx, data)
 		if err == nil {
 			record.keys = make(map[string]string)
 			for key, value := range keys {
@@ -271,7 +277,6 @@ func (fm *FirehoseManager) AcceptRecordBatch(ctx context.Context, ds *DeliverySt
 	}
 	fm.mu.RLock()
 	valid := !fm.stopping && ds != nil && fm.streams[ds.Name] == ds
-	extractor := fm.metadata
 	fm.mu.RUnlock()
 	if !valid {
 		return nil, errors.New("firehose stream is unavailable")
@@ -279,7 +284,7 @@ func (fm *FirehoseManager) AcceptRecordBatch(ctx context.Context, ds *DeliverySt
 	prepared := make([]bufferedRecord, len(records))
 	arrived := time.Now()
 	for index, data := range records {
-		prepared[index] = prepareRecord(ctx, ds.config, extractor, data, arrived)
+		prepared[index] = prepareRecord(ctx, ds.config, ds.metadata, data, arrived)
 	}
 	fm.mu.RLock()
 	defer fm.mu.RUnlock()
@@ -290,11 +295,7 @@ func (fm *FirehoseManager) AcceptRecordBatch(ctx context.Context, ds *DeliverySt
 	defer ds.mu.Unlock()
 	results := make([]RecordResult, len(records))
 	for index, record := range prepared {
-		count := len(ds.buffer)
-		for _, object := range ds.pending {
-			count += len(object.records)
-		}
-		if ds.stopping || ctx.Err() != nil || count >= 100000 || ds.bufferedBytes+record.originalBytes > fm.bufferLimit {
+		if ds.stopping || ctx.Err() != nil || ds.retainedRecords >= 100000 || ds.bufferedBytes+record.originalBytes > fm.bufferLimit {
 			results[index] = RecordResult{ErrorCode: "ServiceUnavailableException", ErrorMessage: "Firehose stream is stopping or its retained delivery buffer is full"}
 			continue
 		}
@@ -309,6 +310,7 @@ func (fm *FirehoseManager) AcceptRecordBatch(ctx context.Context, ds *DeliverySt
 		}
 		ds.buffer = append(ds.buffer, record)
 		ds.bufferedBytes += record.originalBytes
+		ds.retainedRecords++
 		results[index].RecordID = recordID
 	}
 	select {
@@ -366,41 +368,6 @@ func (fm *FirehoseManager) flushLoop(ctx context.Context, ds *DeliveryStream) {
 	}
 }
 
-func makeObject(ds *DeliveryStream, records []bufferedRecord) (*deliveryObject, error) {
-	oldest := records[0]
-	location, _ := time.LoadLocation(ds.config.CustomTimeZone)
-	prefix := ds.config.Prefix
-	if oldest.errorType != "" {
-		prefix = ds.config.ErrorOutputPrefix
-	}
-	evaluated, err := renderPrefix(prefix, oldest.arrived.In(location), oldest.keys, oldest.errorType, oldest.errorType != "", ds.config.DynamicPartitioningConfiguration.Enabled, false)
-	if err != nil {
-		return nil, err
-	}
-	var body bytes.Buffer
-	originalBytes := 0
-	for _, record := range records {
-		body.Write(record.data)
-		originalBytes += record.originalBytes
-	}
-	extension := ds.config.FileExtension
-	if ds.config.CompressionFormat == "GZIP" && oldest.errorType == "" {
-		var compressed bytes.Buffer
-		compressor := gzip.NewWriter(&compressed)
-		if _, err := compressor.Write(body.Bytes()); err != nil {
-			return nil, err
-		}
-		if err := compressor.Close(); err != nil {
-			return nil, err
-		}
-		body = compressed
-		if extension == "" {
-			extension = ".gz"
-		}
-	}
-	return &deliveryObject{key: evaluated + ds.config.Name + "-1-" + oldest.arrived.UTC().Format("2006-01-02-15-04-05") + "-" + uuid.NewString() + extension, data: body.Bytes(), records: records, originalBytes: originalBytes}, nil
-}
-
 func (fm *FirehoseManager) flushBuffer(ctx context.Context, ds *DeliveryStream) error {
 	return fm.flushReady(ctx, ds, true)
 }
@@ -442,43 +409,21 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 			return nil
 		}
 	}
-	groups := map[string][]bufferedRecord{}
-	var order []string
-	for _, record := range ds.buffer {
-		if _, exists := groups[record.group]; !exists {
-			order = append(order, record.group)
-		}
-		groups[record.group] = append(groups[record.group], record)
+	// Accepted records remain in the quota-counted buffer while the serialized
+	// flush owns an immutable snapshot. Appends can proceed during construction.
+	buffer := append([]bufferedRecord(nil), ds.buffer...)
+	ds.mu.Unlock()
+	objects, selected, err := buildBufferedObjects(ctx, ds, buffer, force)
+	if err != nil {
+		return err
 	}
-	selected := map[string]bool{}
-	var preparedObjects []*deliveryObject
-	for _, group := range order {
-		records := groups[group]
-		size := 0
-		for _, record := range records {
-			size += len(record.data)
-		}
-		if !force && size < ds.config.BufferingHints.SizeInMBs*1024*1024 && time.Since(records[0].arrived) < time.Duration(ds.config.BufferingHints.IntervalInSeconds)*time.Second {
-			continue
-		}
-		object, err := makeObject(ds, records)
-		if err != nil {
-			ds.mu.Unlock()
-			return fmt.Errorf("prepare Firehose destination: %w", err)
-		}
-		preparedObjects = append(preparedObjects, object)
-		selected[group] = true
+	ds.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		ds.mu.Unlock()
+		return err
 	}
-	ds.pending = append(ds.pending, preparedObjects...)
-	remaining := ds.buffer[:0]
-	for _, record := range ds.buffer {
-		if !selected[record.group] {
-			remaining = append(remaining, record)
-		}
-	}
-	// Cleared slots no longer root acknowledged payloads through spare capacity.
-	clear(ds.buffer[len(remaining):])
-	ds.buffer = remaining
+	ds.pending = append(ds.pending, objects...)
+	commitBufferedObjects(ds, len(buffer), selected)
 	pending := append([]*deliveryObject(nil), ds.pending...)
 	ds.mu.Unlock()
 	var failures []error
@@ -492,16 +437,27 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 			retrySeconds = options.DurationInSeconds
 		}
 		if ds.config.DynamicPartitioningConfiguration.Enabled && !object.firstFailure.IsZero() && object.records[0].errorType == "" && time.Since(object.firstFailure) >= time.Duration(retrySeconds)*time.Second {
-			failed := make([]bufferedRecord, len(object.records))
-			for index, record := range object.records {
+			// The flush slot exclusively owns replacement; readers see its old
+			// immutable records until the complete replacement is published.
+			records, attempts := object.records, object.attempts
+			ds.mu.Unlock()
+			failed := make([]bufferedRecord, len(records))
+			for index, record := range records {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				record.errorType = "dynamic-partitioning-failed"
-				record.data = processingFailure(record.source, record.arrived, "DynamicPartitioning.DeliveryFailed", object.attempts)
+				record.data = processingFailure(record.source, record.arrived, "DynamicPartitioning.DeliveryFailed", attempts)
 				failed[index] = record
 			}
-			replacement, prepareErr := makeObject(ds, failed)
+			replacement, prepareErr := ds.buildObject(ctx, ds.config, failed)
 			if prepareErr != nil {
-				ds.mu.Unlock()
 				return prepareErr
+			}
+			ds.mu.Lock()
+			if err := ctx.Err(); err != nil {
+				ds.mu.Unlock()
+				return err
 			}
 			object.key, object.data, object.records = replacement.key, replacement.data, replacement.records
 		}
@@ -523,6 +479,7 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 				}
 			}
 			ds.bufferedBytes -= object.originalBytes
+			ds.retainedRecords -= len(object.records)
 			if len(ds.pending) == 0 {
 				ds.lastDeliveryError = ""
 			}

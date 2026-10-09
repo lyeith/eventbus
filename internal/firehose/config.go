@@ -17,6 +17,47 @@ type MetadataExtractor interface {
 	Extract(context.Context, string, []byte) (map[string]string, error)
 }
 
+// RecordMetadataExtractor owns one immutable query. Each call must own its
+// execution state and honor cancellation; a stream may process concurrent puts.
+type RecordMetadataExtractor interface {
+	Extract(context.Context, []byte) (map[string]string, error)
+}
+
+// PreparedMetadataExtractor is an optional construction-time extension. Existing
+// injected MetadataExtractors retain Validate/Extract through a bound adapter.
+type PreparedMetadataExtractor interface {
+	Prepare(context.Context, string) (RecordMetadataExtractor, error)
+}
+
+type boundMetadataExtractor struct {
+	extractor MetadataExtractor
+	query     string
+}
+
+func (bound boundMetadataExtractor) Extract(ctx context.Context, record []byte) (map[string]string, error) {
+	return bound.extractor.Extract(ctx, bound.query, record)
+}
+
+func prepareMetadataExtractor(ctx context.Context, extractor MetadataExtractor, query string) (RecordMetadataExtractor, error) {
+	if query == "" {
+		return nil, nil
+	}
+	if prepared, ok := extractor.(PreparedMetadataExtractor); ok {
+		processor, err := prepared.Prepare(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		if processor == nil {
+			return nil, fmt.Errorf("metadata extractor did not prepare the query")
+		}
+		return processor, nil
+	}
+	if err := extractor.Validate(ctx, query); err != nil {
+		return nil, err
+	}
+	return boundMetadataExtractor{extractor: extractor, query: query}, nil
+}
+
 type ProcessorParameter struct {
 	ParameterName  string
 	ParameterValue string
@@ -92,7 +133,7 @@ func (config StreamConfig) appendDelimiter() bool {
 	return false
 }
 
-func validateConfig(ctx context.Context, config StreamConfig, extractor MetadataExtractor) error {
+func validateConfig(config StreamConfig, extractor MetadataExtractor) error {
 	if !streamNameRE.MatchString(config.Name) {
 		return fmt.Errorf("DeliveryStreamName must match [a-zA-Z0-9_.-]{1,64}")
 	}
@@ -152,9 +193,6 @@ func validateConfig(ctx context.Context, config StreamConfig, extractor Metadata
 			}
 			if extractor == nil {
 				return fmt.Errorf("MetadataExtraction requires a configured metadata extractor")
-			}
-			if err := extractor.Validate(ctx, parameters["MetadataExtractionQuery"]); err != nil {
-				return fmt.Errorf("invalid MetadataExtractionQuery: %w", err)
 			}
 		case "AppendDelimiterToRecord":
 			if len(parameters) != 0 && (len(parameters) != 1 || parameters["Delimiter"] != "\\n") {
