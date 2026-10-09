@@ -1,57 +1,63 @@
 # Handoff
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT EventBus.
-Published release remains v0.11.4 while the v0.12.0 candidate is prepared.
-All new tickets #30/#31/#32 implemented; no unrelated Plans changes touched.
+Published v0.12.0: https://github.com/lyeith/eventbus/releases/tag/v0.12.0
+Clean tagged source 953ca65; Go 1.26.0, CGO_ENABLED=0, module v0.12.0.
+Eight service/gateway binaries + SHA256SUMS; all downloaded assets match builds.
+All new tickets #30/#31/#32 implemented, pushed and closed; board is clear.
 
 Owner commits:
-- 9f508f6: registered GetFunction metadata and genuine validated LocalStack S3 proof.
-- 4f33bd7: bounded warm Python/Node workers, local reload, completion scopes,
-  worker-lifetime leases, native messaging proof and measured SDK latency/RSS.
-- b6f94cb: six v1 configuration-set/destination operations and native Send/
+- 9f508f6: registered GetFunction metadata and validated LocalStack S3 proof.
+- 4f33bd7: bounded warm Python/Node workers, explicit local reload, completion
+  scopes, worker leases, native messaging proof and measured SDK latency/RSS.
+- b6f94cb: six v1 SES configuration-set/destination operations and native Send/
   explicit local Open/Bounce through the existing SNS delivery owner.
+- 953ca65: agent contracts, common ownership and verification guides.
 
-Shared execution uses native Runtime API events/context/result policies.
-Warm success joins response/log/per-request RPC boundaries, retaining the worker
-under a separate lease; error/timeout/reload/drain/Close retires and joins it.
-Global capacity includes retired generations and fresh fallbacks. Explicit recipe
-reload is local; registry snapshots are immutable and source reload is CAS-bound.
-Exact Python primary-source loading preserves normal package import/re-export
-semantics and avoids stale same-timestamp bytecode. Dependencies import normally.
+Warm success joins response/log/per-request RPC boundaries; a separate lease
+owns the worker until error/timeout/reload/drain/Close joins process and children.
+Global capacity counts retired generations and fresh fallbacks. Registry
+snapshots are immutable; source reload refuses a concurrent registration change.
+Exact Python primary-source loading preserves package import/re-export semantics
+and avoids stale same-timestamp bytecode. Dependencies import normally.
 
 SES separates management from durable send capture, snapshots Send routing and
 retains bounded metadata-only correlations. Concurrent updates preserve resource
-identity; delete/recreate is fenced. Accepted events survive caller disconnect.
-Downstream SNS admission failure cannot undo a captured SES acceptance.
+identity; delete/recreate is fenced. Accepted Send survives caller disconnect.
+Downstream SNS admission failure cannot undo captured SES acceptance.
+GetFunction shares Invoke selection; private paths/environment/code are omitted.
 
-Final independent review accepted ownership/seams/contracts; findings fixed:
-cancellation before launch, stale bytecode, exited-worker reuse, ordered logs,
-stalled admitted Runtime API body, truthful completion scope, SES acceptance
-cancellation, bounded expiry and concurrent destination updates.
+Independent integrated review accepted all ownership, contract and lifecycle
+fixes: cancellation before launch, stale bytecode, exited-worker reuse, ordered
+logs, stalled Runtime API body, truthful completion scope, SES cancellation,
+bounded correlation expiry and concurrent destination updates.
 
-Saved /tmp/eventbus-tickets-*-20261009.log:
-- Linux allWarm race9.077s; macOS arm64 allWarm5.206s.
-- Affected first Lambda/app/server/architecture race passed; latest app32.762s,
-  eventsource2.301s, architecture1.115s passed.
-- Latest full Lambda failed only managed fallback timing fixtures under load;
-  corrected deliberate phase margins/actual-budget assertions pass17.145s.
-  Production deadlines unchanged. Unknown-scope ACK refusal race1.046s passed.
-- SES full13.721s; cancellation1.018s; accepted bulk IDs/concurrent updates1.025s.
-- Real SES/SNS/Lambda SDK2.081s; full SDK race277.526s, warm native messaging included.
-- Real LocalStack3.8.1 S3 race13.134s: normal validation and original upstream
-  Put/Copy/multipart/version/filter records, native retries, graceful drain.
-- Vet with sdksmoke/integration/performance tags and five Python contracts passed.
-- Performance fixture4.806s: 32 accepted SDK sends; eight calls per mode.
-  Python fresh/warm median216.078/8.565ms; Node272.591/12.150ms.
-  Warm idle RSS medians46,610,432/97,937,408 bytes; no long-run stability claim.
+Verification:
+- Release-source CI passed both jobs; full unit race/vet, frozen Python/JS SDK
+  checks and unchanged Express/Swagger:
+  https://github.com/lyeith/eventbus/actions/runs/37941175215
+  CI Lambda 103.356s / SES 11.294s / SDK 231.840s / Swagger 4.603s.
+- Local full SDK race 277.526s, including actual warm SNS/SQS delivery/ACK/drain.
+- Linux allWarm race 9.077s; macOS arm64 allWarm 5.206s.
+- Local app 32.762s / eventsource 2.301s / architecture 1.115s races passed.
+- Initial full Lambda run failed Node fallback fixtures before module markers;
+  realistic deliberate phase margins/actual shared-budget assertions fixed the
+  fixture only. Targeted fallback 17.145s and full CI Lambda now pass.
+- SES core 13.721s; cancellation 1.018s; accepted bulk/concurrent updates 1.025s;
+  unchanged SES/SNS/Lambda SDK proof 2.081s.
+- Actual LocalStack 3.8.1 S3 race 13.134s: validation enabled, original Put/Copy/
+  multipart/version/filter records, native retries, pending graceful drain.
+- Vet with sdksmoke/integration/performance tags; five Python contracts.
+- Actual packaged Linux amd64/macOS arm64 metadata, warm/reload, native SES/
+  SNS/SQS Send/Open/Bounce and process shutdown. Other targets not executed.
+- Performance fixture: 32 accepted SDK sends; eight calls per runtime/mode,
+  including first. Python fresh/warm medians 216.078/8.565ms; Node 272.591/12.150ms.
+  Idle RSS medians 46,610,432/97,937,408 bytes; no sustained stability claim.
 
-Next steps: eight clean-source binary builds; actual packaged Linux amd64/macOS
-arm64 proof; push and CI; publish v0.12.0/check uploaded assets; prune owned scratch.
-Other two targets receive cross-build metadata/checksum verification only.
-
-Actual S3 fixture containers and introduced636MB image removed; exact buckets/
-objects/multipart/notifications cleaned. No dependency/default DB/live stack
-changes or temporary worktrees. macOS scratch is retained for packaged checks.
-Failed evidence779b0793/20a07398/4eaefff6 quiescent/unpinned, 24h expiry.
-Successful SSD operations remove scratch automatically. Host launcher optimization
-is separate from this runtime increment. Preserve unrelated laptop Plans edits.
+Cleanup: exact S3 resources/containers and introduced 636MB image removed;
+macOS archive/binary, release stage, probes and downloaded duplicates removed.
+No owned process, temporary worktree, dependency or application/default DB change.
+Task logs retained under receipt 4eaefff6, quiescent/unpinned, expire Oct10
+13:43:54 UTC; S3 fixture failures 779b0793/20a07398 expire 13:26:28/13:27:22 UTC.
+Successful SSD scratch removes automatically. Host launcher work is separate.
+Preserve unrelated laptop Plans edits; no remaining work for these tickets.

@@ -507,4 +507,6 @@ Other targets cross-built with verified metadata/checksums; not executed.
 The packaged gateway probe initially used an unquoted YAML path. Its registered
 owner was stopped and verified quiescent; corrected fixture/backend cleanup
 passed without source changes. Private state and release/download duplicates
-were removed. New core SES→SNS event work in #31 is separately triaged.
+were removed. Subsequent #30–#32 runtime and native event work shipped in
+[v0.12.0](https://github.com/lyeith/eventbus/releases/tag/v0.12.0); the
+[warm SDK comparison](LAMBDA.md#measured-sdk-calls) records latency and retained RSS.

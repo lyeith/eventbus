@@ -264,8 +264,8 @@ records measurements and the unchanged baseline tooling-suite blockers.
   GetFunction/DryRun destination validation, with app/test-owned transport.
   Actual original S3 events enter the existing native Event/retry owner.
 
-These three increments are implemented in current source; final combined
-verification and release are recorded in STATE/HANDOFF. They are absent from
+These three increments shipped in [v0.12.0](https://github.com/lyeith/eventbus/releases/tag/v0.12.0).
+Final combined verification is recorded in STATE/HANDOFF; they are absent from
 v0.11.4. [S3 notifications](S3-NOTIFICATIONS.md), [Lambda](LAMBDA.md) and
 [SES](SES.md) state their contracts. The earlier bounded audit remains at
 [current measurements](PERFORMANCE-AUDIT.md#follow-up-fixes-and-measurements).
