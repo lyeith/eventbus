@@ -129,6 +129,11 @@ reject the whole request. Admission failures return ordered per-entry AWS
 ErrorCode/ErrorMessage responses while later records can still succeed.
 Transport accepts base64 overhead; it is not restricted to the old 1 MiB body.
 
+Configured metadata queries compile once per stream; each record uses fresh
+execution state and its existing deadline. Compression runs outside the stream
+admission lock. Records under construction or awaiting destination cleanup still
+count toward both quotas; failures keep the original records available to retry.
+
 Each partition has its own size/age buffer. A stream retains at most 64 MiB of
 original record bytes and 100000 records, including pending deliveries. This
 state is in memory; restart loses configuration and undelivered records. There

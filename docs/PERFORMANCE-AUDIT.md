@@ -298,91 +298,195 @@ stages, probes and downloaded duplicates were removed on both hosts. Failed
 operations are verified quiescent/unpinned and retain diagnostic scratch under
 the same finite host policy; their expiry is recorded in STATE/HANDOFF.
 
-## Follow-up review and priorities
+## Follow-up fixes and measurements
 
-9 October 2026, read-only source review at `58d27a1`. No new benchmarks,
-regression executions or runtime edits were made. The mechanisms below are
-visible in source; expected gains beyond the earlier measurements are unmeasured.
-Effort estimates include focused verification and assume the current contracts.
+9 October 2026. The bounded ownership/performance follow-ups start at
+`b69f543`. Before measurements use a temporary Git archive of that source;
+the same frozen opt-in fixtures run against the final implementation. All
+measurements use one serial SSD lane, GOMAXPROCS=4 and GOFLAGS=-p=2, without
+the race detector. Setup is excluded unless stated. These are local fixture
+observations, not application/cloud throughput guarantees.
 
-### Correctness and ownership first
+### Owners and corrected behavior
 
-1. **Cognito enrollment must promote the exact secret that was verified.**
-   [VerifySoftwareToken](../internal/cognito/mfa.go#L108) validates pending secret
-   S1 from a user snapshot, then
-   [ConfirmPendingTOTPSecret](../internal/cognito/store.go#L469) promotes whichever
-   pending secret is current. Concurrent association can replace it with S2,
-   marking unverified S2 verified. Cognito's store should own a compare-and-promote
-   transition with expected secret and account state, check affected rows, and
-   let HTTP map refusal. Add deterministic replacement/revocation/deletion and
-   ordinary enrollment tests. Estimated half to one day; source-established
-   interleaving, not a reproduced regression in this pass.
+- Cognito `mfa_store.go` owns atomic enrollment and preference transitions.
+  Promotion requires the exact verified pending secret, current account revision,
+  enabled self-service user and unrevoked grant. Replacement, consumption,
+  deletion and authorization changes refuse without publishing another factor.
+- Consumer uses the contextual queue port; ordinary handler failures retain
+  retries/dead letters. Cleanup uncertainty fences new launches, cancels peers,
+  joins actual children and stays an error through Wait. App joins after caller
+  deadlines and retains SQLite/capture dependencies on uncertainty.
+- `localexec.TrackedOutput` owns output-copy evidence independently of Go's
+  command exit error. Nonzero exits/cancellation can mask ErrWaitDelay; all
+  consumer/Lambda/trigger runners now retain that uncertainty while preserving
+  their native result and deadline policies. Failed Start creates no copy evidence.
+- SQS clears removed backing slots during retention, replay restoration and
+  transfers. Shared dedup insertion tracks a conservative earliest expiry; current
+  receipt deletion avoids unrelated scans while native receive/maintenance owns
+  expiry/redrive. Shared fields/MD5 stay in messaging, with distinct HTTP selection
+  and Lambda encoding. Lambda receive counts leases without discarded snapshots.
+- Firehose streams own prepared jq with fresh per-record execution. The existing
+  flush slot owns immutable buffer snapshots and retry-object construction outside
+  the stream lock. Captured records remain quota-counted during construction;
+  publication moves only the captured prefix, preserving concurrent appends.
+  Counters decrease only after successful destination body cleanup.
+- Gateway owns immutable compiled redactions/mapping plans and fresh request
+  output. SecretsStore indexes exact canonical ARNs and names to one state;
+  rotation binds that ARN before external validation, so delete/recreate cannot
+  mutate a replacement generation.
+- Lambda HTTP reuses native invocation preparation/version helpers. Scheduler's
+  adapter owns unsupported group-management refusal; server forwards through its
+  HTTP port.
+- `tests/architecture_test.go` enforces production import classes across every
+  platform/build tag. PR/main CI runs it with unit races/vet; SDK checks run their
+  own package plus the unchanged Express/Swagger handler proof. Python and Node
+  are explicitly provisioned in both appropriate lanes.
 
-2. **Dev consumer cancellation and cleanup failures need a complete lifecycle seam.**
-   [Polling](../internal/consumer/manager.go#L91) uses a context-free five-second
-   receive despite the broker's existing
-   [contextual operation](../internal/messaging/sqs_consumption.go#L35).
-   [Process cleanup](../internal/consumer/process.go#L104) errors become ordinary
-   batch failures; the loop retries and `Wait` reports success once goroutines
-   finish, so app shutdown cannot retain that ownership uncertainty. Consumer
-   should use contextual polling, distinguish sticky ownership failure from
-   handler failure, fence affected execution, join and return the retained error.
-   Verify empty-queue cancellation, accepted-batch cancellation, retained pipes,
-   cleanup faults and app resource retention. Estimated one to two days.
+### Fixed-workload results
 
-3. **Enforce existing boundaries and consolidate actual duplicate responsibility.**
-   Import rules are documented but have no automated repository check. The
-   [Checks workflow](../.github/workflows/checks.yml#L3) is manual-only and its
-   SDK lane repeats the whole package race suite. A small production-import test
-   plus routine PR checks would catch ownership drift; scope SDK execution to
-   its owner after checking tagged coverage. Lambda HTTP
-   [invocation preparation](../internal/lambda/service.go#L284) duplicates its
-   existing [private helper](../internal/lambda/execution.go#L96) and version
-   parsing. The dispatcher also owns Scheduler group-management refusal that
-   belongs in Scheduler's adapter. Reuse those owners, preserving HTTP Tail,
-   DryRun, native envelopes and dispatcher delegation. Estimated one to two days
-   as separate small concerns using the existing owners.
+Times are milliseconds. Each cell is first / minimum / median / maximum.
+Counts apply separately to before and after.
 
-### Performance targets
+| Fixture | Count | Before | After |
+| --- | ---: | --- | --- |
+| FIFO 10k: unique send | 20 | 0.154595 / 0.136450 / 0.146274 / 0.176948 | 0.018936 / 0.013976 / 0.016211 / 0.068270 |
+| FIFO 10k: duplicate send | 20 | 0.017764 / 0.012564 / 0.014006 / 0.020449 | 0.014207 / 0.011381 / 0.013316 / 0.015650 |
+| FIFO 10k: ten strict deletes | 20 | 1.536042 / 0.997233 / 1.096823 / 1.588361 | 0.004228 / 0.002004 / 0.002540 / 0.005300 |
+| FIFO 10k: native ten-delete batch | 20 | 1.257299 / 1.027190 / 1.115309 / 1.691868 | 0.009247 / 0.005921 / 0.007333 / 0.020549 |
+| FIFO 10k: unexpired prune | 20 | 0.162400 / 0.113085 / 0.128817 / 0.274194 | 0.157260 / 0.089571 / 0.101133 / 0.157260 |
+| Lambda receive: ten 64KiB binary attributes | 20 | 4.047804 / 1.647864 / 3.343621 / 5.987327 | 3.354090 / 1.350707 / 3.347132 / 6.244785 |
+| Firehose 500 records: simple metadata | 20 | 8.866518 / 5.349311 / 6.728909 / 8.866518 | 6.694474 / 4.396920 / 5.033840 / 6.694474 |
+| Firehose 500 records: compound metadata | 20 | 18.651842 / 15.365219 / 17.818973 / 24.628236 | 7.844780 / 6.495887 / 7.810820 / 9.945820 |
+| Firehose 500 admissions: no pending objects | 20 | 6.098317 / 4.479678 / 6.068991 / 7.899705 | 3.706584 / 2.957013 / 4.122812 / 5.407581 |
+| Firehose 500 admissions: 10k pending objects | 20 | 11.968468 / 11.189662 / 11.798554 / 14.841492 | 3.866839 / 2.908068 / 3.663330 / 5.843241 |
+| Firehose admission during 32MiB GZIP | 5 | 599.451652 / 531.111169 / 553.900935 / 599.451652 | 0.023014 / 0.023014 / 0.032993 / 0.042191 |
+| Firehose 32MiB build + bounded transport read | 5 | 641.225604 / 571.888018 / 594.447704 / 641.225604 | 634.355235 / 598.284826 / 634.355235 / 712.655153 |
+| Gateway 100 redactions / 12 mappings | 20 | 0.105638 / 0.105638 / 0.127608 / 0.206012 | 0.055586 / 0.046065 / 0.058293 / 0.129470 |
+| Secrets 10k: canonical ARN GetValue | 20 | 0.130255 / 0.098890 / 0.116544 / 0.133276 | 0.001820 / 0.000672 / 0.001143 / 0.002026 |
+| Secrets 10k: missing canonical ARN | 20 | 0.111741 / 0.111178 / 0.114979 / 0.123843 | 0.000095 / 0.000078 / 0.000098 / 0.000626 |
 
-| Priority | Target and owner | Evidence and bounded approach | Estimated effort |
-| --- | --- | --- | --- |
-| First | SQS payload lifetime | Retention pruning, cached-attempt restoration and transfer shorten slices without clearing old slots. Clear removed references under the queue owner; receipt/dedup/attempt histories need only metadata. Verify expiry, replay and transfer/settlement. | Half to one day |
-| Next | FIFO send expiry bookkeeping, SQS | Every unique send scans the dedup map. Earlier 10k setup was about one second, one observation including other work. Share insertion bookkeeping with redrive and skip scans until the earliest expiry; measure before adopting an index. | About one day |
-| Next | Prepared jq configuration, Firehose | Validation discards compiled code; extraction recompiles the same query per record, up to 500 times per batch. Own prepared configuration per stream with fresh execution state; preserve injected processors, errors and deadlines. | Half to one day plus measurement |
-| Next | Firehose flush/admission contention | Concatenation/GZIP hold the stream mutex; admission waits while holding the manager read lock and repeatedly scans pending records. Measure backlog/GZIP contention, retain a count, and use the existing flush owner to construct outside the shared mutex with correct reservation/rollback/join. | One to two days |
-| Next | Lambda queue projection, SQS | Byte admission already creates detached wire records, then collection clones native snapshots the caller discards. Return selection count separately and avoid unused snapshots; retain native detached-copy semantics and share only identical field projection. | About one day |
-| Measure first | Cold application startup, runtime owners/apps/tooling | Latest managed-UV native Init was 388.942ms versus direct Python 41.873ms. Real consumer imports and multi-trigger Cognito chains are unmeasured. Attribute complete representative chains with the same interpreter/environment and actual joins before runtime reuse. | One to two days for attribution |
+FIFO 10k setup, including enqueue work, was one observation: 917.421→231.092ms.
+The due dedup sweep remains linear (0.714→0.650ms, one observation); retention
+pruning remains linear too. Duplicate send behavior is similar. Current deletion
+improves responsiveness without claiming unrelated expired records already moved.
 
-The SQS lifetime sites are [retention pruning](../internal/messaging/sqs_queue.go#L311),
-[attempt restoration](../internal/messaging/sqs_queue.go#L516) and
-[transfer](../internal/messaging/sqs_management.go#L701). Existing ordinary receive
-already clears its tail. Hidden backing slots can outlive native in-flight
-ownership and keep full bodies/attributes reachable after expiry or ACK.
+Lambda binary projection has no demonstrated wall-time improvement in this run:
+3.344→3.347ms median. Observed allocations fell from 988 to 886.5 per batch;
+bytes from 6,848,784 to 6,174,472. Runtime MemStats/JSON pools/GC vary between
+samples; these are observations, not a zero-allocation or exact heap claim.
+The removed second snapshot is covered separately by lease/detachment regressions.
 
-Firehose's [extractor](../internal/firehose/metadata.go#L37),
-[admission](../internal/firehose/manager.go#L284) and
-[flush](../internal/firehose/manager.go#L435) are the respective owners.
-SQS [dedup insertion](../internal/messaging/sqs_queue.go#L258) and
-[discarded projected-receive snapshots](../internal/messaging/sqs_consumption.go#L112)
-are private core concerns. Keep visibility, retention, FIFO, redrive, byte admission
-and native receipt versus strict settlement outcomes intact.
+Gateway 100-redaction allocation observations fell from 636 to 128 per operation
+and 85,448 to 44,448 bytes. Twenty samples each normalize ten full ServeHTTP calls
+with 12 mappings and bounded transport; correctness/borrowed-state assertions
+run outside the timed loop. Static route precedence/privacy remains intact.
 
-Lower-priority opportunities are static gateway redaction/mapping compilation,
-Secrets' canonical ARN index, and queue/receipt expiry guards on deletion.
-They have source-backed repeated work but no new latency attribution. Current
-authorizer hits are about 1.4µs, route selection still follows ordered linear
-precedence, and warm Cognito key/JWKS work is about 0.3ms (signing about 1.5ms).
-A route trie, global query/key cache or SQLite pool change is not yet justified.
+Secrets samples normalize 100 GetValue operations, excluding resource creation.
+The 10k name lookup remains constant-time (0.000604→0.001694ms median in this
+run); existing snapshot allocations remain 720B/five allocations per successful
+lookup. Only canonical ARN resolution changes from a state-wide scan to an index.
 
-Durable capture remains the measured throughput floor: SNS 100-destination
-publish was 4.949ms durable versus 0.609ms disabled. `devcapture` already owns
-serialized write/Sync, sticky failure and close; services own acceptance. Group
-commit needs a separate design that preserves acceptance after durable capture,
-complete failure propagation and actual process/capture joins.
+GZIP no longer blocks admission, but build/read time remains about 0.6 seconds
+and did not improve. Records remain fully charged during the unlocked build,
+with cancellation/failure rollback, concurrent same-group admission, 100k quota
+through body Close, retry replacement, deletion and retained-abort join tests.
 
-`localexec`, `devcapture` and app Execute/Admit adapters are proper common owners.
-Language wrappers keep different result/error/deadline policies; native mappings
-and dev recipes keep different settlement policies. Reuse matching mechanics
-without merging these contracts. Large HTTP bodies and application business
-chains remain representative-workload questions, not established bottlenecks.
+### Representative cold application chains
+
+Frozen fixtures use the existing Python 3.12.11 virtual environment,
+boto3 1.40.61/botocore 1.40.76 and Node 22.22.1 with SDK 3.1146.0.
+Interpreter aliases must resolve to the same executable and virtual-environment
+prefix. No dependency installation, warm pool or production interpreter change
+is part of these observations.
+
+Before consumer: five cold batches of five native SQS records, actual boto3
+sends, SQLite effects/commit, receipt settlement and child join. Median total
+1524.894ms (1276.460..1940.912); launch-to-module 1222.209ms,
+SDK import 136.954ms, client preparation 68.161ms, handler work 54.984ms.
+Phase medians do not add to total median.
+
+Before registered trigger chain: five actual five-invocation
+Define/Define/Create/Verify/Define chains with SES capture.
+Median joined chain 1239.375ms (959.951..1472.490);
+25 native invocations median 225.447ms (129.775..563.466).
+Create imports the actual SES SDK; the other real policy modules are smaller.
+Every timed operation checks actual direct child reaping and closes its runner.
+
+Before native SDK: three unchanged SRP/email/token chains each make three
+Cognito HTTP calls and five registered trigger invocations, capture an email
+and independently verify JWTs. Median native HTTP 1003.959ms
+(993.229..1066.043); full auth flow 1041.152ms
+(1027.124..1100.786), excluding separate token-validation timing.
+One whole driver/provisioning/import/three-flow/join observation 3764.681ms.
+
+After runs use the same frozen fixtures and preserve interpreter/environment
+identity. Consumer total median 1202.372ms (1046.374..1340.767),
+five-trigger chain 895.680ms (884.609..907.463), and native auth HTTP
+819.230ms (812.020..856.509); full auth flow 851.585ms
+(843.228..890.315). These changes are not attributed to a runtime speedup:
+fresh-process policy is unchanged, phase sampling and OS/host load differ.
+
+An additional attribution run selects installed native uv inside the same owned
+operation. The five-record workload, interpreter, virtual-environment prefix,
+uv frozen/offline/no-sync options, effects and joins remain identical. Median
+joined batch is 247.286ms (240.120..257.175); launch-to-module 25.994ms
+(25.312..26.524), versus managed after-run launch median 935.482ms.
+PATH selects the launcher and is also inherited by the child, so this is a
+launcher attribution comparison, not a byte-identical environment benchmark
+or a production bypass. Native uv must not replace host ownership checks.
+
+The managed project-mode launcher performs repeated workspace/version/digest
+and ownership proofs, including hashing its 60 MB uv binary several times.
+That responsibility belongs to ssd-dev-tools; consolidating those proofs needs
+its own correctness checks. No EventBus child/environment selection changed.
+
+Cold measurements identify fresh interpreter/import work, not an established
+bounded EventBus algorithm defect. SSD's project-mode uv launcher also performs
+workspace/version/digest and repeated ownership checks; that tooling owner needs
+separate attribution before changing its safety/selection behavior.
+Warm native worker issue [#30](https://github.com/lyeith/eventbus/issues/30)
+is a separate runtime-lifetime/state-sharing feature.
+
+### Verification and reproduction
+
+Full Cognito race passed 295.735s, closing the earlier 4m audit gap.
+Scoped initial races passed consumer/app, eventsource, gateway, Lambda,
+Scheduler and dispatcher; final messaging/Firehose/architecture/Secrets races
+passed 6.012/7.070/1.045/1.409s. Both native Firehose integration proofs passed
+against a fresh owned RustFS, including SNS filtering/partition/GZIP/errors/
+recovery/final drain; RustFS child/group joined and private data was removed.
+Full SDK/retained-stack race passed 278.385s; unchanged Express/Swagger passed
+9.179s. The optional older-SDK lane initially skipped without an explicit
+environment, then passed separately in 25.023s with unmodified
+boto3/botocore 1.39.4, including batch/concurrency/retry/teardown proofs.
+That isolated environment was removed by its successful owner operation.
+After-cold/attribution fixtures all passed. Final full runner races passed:
+localexec 6.175s, consumer 12.222s, Cognito triggers 8.866s, Lambda 100.112s,
+app 19.970s, devquiescence 1.039s and architecture 1.041s. All-package vet
+with sdksmoke/integration/performance tags passed. macOS arm64 localexec race
+passed 6.873s, including real retained pipes and merged stdout/stderr ordering.
+Linux-only retained-descriptor fault injection is not executed on macOS.
+
+Reproduce after frozen dependencies are provisioned, using the managed SSD lane:
+
+```sh
+env GOMAXPROCS=4 GOFLAGS=-p=2 ssd-dev operation --purpose test -- \
+  go test -p 2 -count=1 -tags performance -run '^TestPerformanceSQSFollowup' -v ./internal/messaging
+# Same lane, serially:
+go test -p 2 -count=1 -tags performance -run '^TestPerformanceFollowupFirehose' -v ./internal/firehose
+go test -p 2 -count=1 -tags performance -run '^TestPerformanceReviewGatewayStaticPlans$' -v ./internal/gateway
+go test -p 2 -count=1 -tags performance -run '^TestPerformanceReviewSecretsCanonicalLookup$' -v ./internal/secrets
+EVENTBUS_SMOKE_PYTHON="$PWD/.venv/bin/python" go test -p 2 -count=1 -tags performance \
+  -run '^TestPerformance' -v ./internal/consumer ./internal/cognitotrigger
+go test -p 2 -count=1 -tags sdksmoke,performance \
+  -run '^TestPerformanceCognitoNativeSDKAuth$' -v ./tests/sdk
+```
+
+Save output before filtering; wrap every SSD command in its owned test operation.
+Logs are SSD /tmp/eventbus-followup-*-20261009.log, existing 24h lifetime.
+The initial SQS fixture compile/invalid dedup input failures were corrected
+without relaxing native validation. The first cold command selected no test
+packages; it contributed no samples. Consumer interpreter alias assertion failed
+before its first observation; executable+environment identity checks replaced
+string equality. Successful trigger observations were retained without repetition.
