@@ -3,7 +3,8 @@
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
 and agent development harness. All second-round performance targets implemented.
 Current report: docs/PERFORMANCE-IMPROVEMENTS-ROUND-2.md.
-Published binaries remain v0.12.0 (tagged runtime 953ca65); no new release published.
+Published latest release v0.13.0; annotated tag points to clean source b97996f.
+Eight Linux/macOS amd64/arm64 EventBus/gateway binaries and SHA256SUMS are public.
 
 Owners now retain ordered SSM names, publication-local SNS filter inputs,
 prepared Firehose timezones, shared SNS/SQS dedup expiry, scanned SES MIME lines,
@@ -32,7 +33,10 @@ assumptions; private sync-undefined contract regression fixed and covered.
 Full SDK race 302.197s, retained SDK/RustFS 28.085s, real Swagger 10.527s.
 All-tag vet, five frozen Python fixture tests, formatting/architecture passed.
 Eight Linux/Darwin amd64/arm64 binaries built and hashes checked; native help
-checks passed. Build outputs removed with owned successful scratch.
+checks passed. Release rebuild metadata records b97996f, CGO=0 and clean VCS.
+Packaged Linux amd64/macOS arm64 warm Lambda, private warm Cognito SRP/custom
+auth, SES capture and joined shutdown passed. All nine uploaded assets were
+downloaded; checksums match. CI 37955422569 is green. Temporary outputs removed.
 
 No pending implementation target from this audit. No dependencies, application/
 default DB, live stack, branch or worktree change. Source commits are on main.
@@ -43,3 +47,6 @@ Wrapper finalization failures a33970dd/31f8660f/e257c705 are quiescent; owned
 scratch removed. Metadata awaits existing janitor orphan reconciliation after
 24h, then failure retention 24h. Successful archives/probes/builds auto-removed.
 Shared caches retain host bounds. Unrelated laptop Plans edits preserved.
+
+Release: https://github.com/lyeith/eventbus/releases/tag/v0.13.0
+Release logs: /tmp/eventbus-release-v0.13.0-*-20261010.log, existing 24h expiry.

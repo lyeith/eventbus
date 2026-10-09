@@ -2,7 +2,8 @@
 
 Canonical SSD /home/spite/Projects/eventbus, main. All second-round performance
 targets implemented; report docs/PERFORMANCE-IMPROVEMENTS-ROUND-2.md.
-Published runtime remains v0.12.0; this work verifies builds without publication.
+Published v0.13.0 as latest; tag points to verified clean source b97996f.
+https://github.com/lyeith/eventbus/releases/tag/v0.13.0
 
 Core changes:
 - SSM sorted index and cursor/prefix selection with hierarchy/mutation tests.
@@ -44,7 +45,13 @@ Verification:
   explicitly rerun with frozen interpreter; earlier Node/bench results retained.
 - Baseline archives resolved snapshot/cold timing variance. Snapshot totals
   comparable; cold trigger paired 936→930ms, warm steady 34–40ms.
-- Eight release binaries built+SHA256 checked, both native help proofs passed.
+- Release rebuild: eight CGO-free binaries, clean b97996f metadata, Go 1.26.0.
+- Packaged Linux amd64/macOS arm64: warm Lambda serialization/reuse, private
+  warm Cognito SRP/custom auth, SES capture and joined shutdown passed.
+- Initial disposable smoke assumed non-SRP custom auth; corrected to the native
+  SRP contract using the unchanged SDK arithmetic helper. No source fix needed.
+- All nine uploaded assets downloaded; SHA256SUMS and all binaries match.
+- GitHub race/vet and SDK/Swagger CI 37955422569 passed.
 
 Report includes caveats: first warm imports, separate capacity, unchanged
 single-producer Sync counts, host timing variation, detached RSA export cost
@@ -58,3 +65,6 @@ Host wrapper finalization errors a33970dd/31f8660f/e257c705 followed completed
 Go/doc work; quiescent trees and disposable scratch removed, orphan metadata
 reconciles under existing 24h+24h policy. No host framework changes.
 No pending audit implementation. Preserve unrelated laptop Plans edits.
+
+Release build/downloads and laptop copies removed; owned package processes
+joined. Release logs use /tmp/eventbus-release-v0.13.0-*-20261010.log (24h).
