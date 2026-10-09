@@ -149,6 +149,7 @@ func TestPerformanceRound2SNSFIFODedup(t *testing.T) {
 				entry.Expires = expired
 				topic.dedup[key] = entry
 			}
+			topic.dedupExpiry = time.Time{} // Test mutation invalidates the conservative bound.
 			topic.publishMu.Unlock()
 			require.Equal(t, depth+performanceMessagingSamples, historyCount)
 			input.MessageDeduplicationID = "after-expiry"

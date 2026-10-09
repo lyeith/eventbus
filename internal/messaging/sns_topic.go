@@ -32,6 +32,7 @@ type Topic struct {
 	publishMu            sync.Mutex
 	sequence             uint64
 	dedup                map[string]snsDeduplication
+	dedupExpiry          time.Time
 	archive              []snsArchivedPublication
 	archiveBytes         int
 	deletedSubscriptions map[string]*Subscription
@@ -620,11 +621,7 @@ func (b *Broker) PublishSNS(input SNSPublishInput) (SNSPublishResult, error) {
 	}
 	now := time.Now()
 	retention, _ := snsArchiveRetention(attributes["ArchivePolicy"])
-	for key, value := range topic.dedup {
-		if !now.Before(value.Expires) {
-			delete(topic.dedup, key)
-		}
-	}
+	pruneDedupEntries(topic.dedup, &topic.dedupExpiry, now, func(entry snsDeduplication) time.Time { return entry.Expires })
 	if fifo {
 		if previous, exists := topic.dedup[key]; exists {
 			if err := b.CaptureSNS(snsCapturePublication(input, previous.Result, []SNSCaptureDelivery{}, map[string]any{"deduplicated": true})); err != nil {
@@ -646,7 +643,9 @@ func (b *Broker) PublishSNS(input SNSPublishInput) (SNSPublishResult, error) {
 	}
 	if fifo {
 		topic.sequence++
-		topic.dedup[key] = snsDeduplication{result, now.Add(5 * time.Minute)}
+		expiry := now.Add(5 * time.Minute)
+		topic.dedup[key] = snsDeduplication{result, expiry}
+		lowerDedupExpiry(&topic.dedupExpiry, expiry)
 	}
 	if retention > 0 {
 		snsCommitArchive(topic, input, result, now)

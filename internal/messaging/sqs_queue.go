@@ -271,23 +271,8 @@ func sqsDedupKeyLocked(q *Queue, group, id string) string {
 	return id
 }
 
-// dedupExpiry is a conservative lower bound: replacing an entry can leave an
-// earlier bound, but no insertion can move the bound later. Unknown bounds
-// sweep once; a due sweep recomputes the exact earliest remaining expiry.
 func pruneSQSDedupLocked(q *Queue, now time.Time) {
-	if !q.dedupExpiry.IsZero() && now.Before(q.dedupExpiry) {
-		return
-	}
-	q.dedupExpiry = time.Time{}
-	for key, entry := range q.dedup {
-		if !now.Before(entry.Expires) {
-			delete(q.dedup, key)
-			continue
-		}
-		if q.dedupExpiry.IsZero() || entry.Expires.Before(q.dedupExpiry) {
-			q.dedupExpiry = entry.Expires
-		}
-	}
+	pruneDedupEntries(q.dedup, &q.dedupExpiry, now, func(entry sqsDedupEntry) time.Time { return entry.Expires })
 }
 
 func rememberSQSDedupLocked(q *Queue, key, id, sequence string, now time.Time) {
@@ -297,9 +282,7 @@ func rememberSQSDedupLocked(q *Queue, key, id, sequence string, now time.Time) {
 	}
 	expiry := now.Add(5 * time.Minute)
 	q.dedup[key] = sqsDedupEntry{ID: id, Sequence: sequence, Expires: expiry}
-	if q.dedupExpiry.IsZero() || expiry.Before(q.dedupExpiry) {
-		q.dedupExpiry = expiry
-	}
+	lowerDedupExpiry(&q.dedupExpiry, expiry)
 }
 
 // pruneQueueLocked owns retention and visibility transitions; a receive never
