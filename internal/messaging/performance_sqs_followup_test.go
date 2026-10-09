@@ -165,17 +165,23 @@ func TestPerformanceSQSFollowupBinaryProjection(t *testing.T) {
 				runtime.ReadMemStats(&before)
 				started := time.Now()
 				var event sqsevent.Event
-				var err error
+				var payload []byte
+				var err, marshalErr error
 				if mode == "native_projection" {
 					var messages []*Message
 					messages, err = broker.ReceiveMessagesContext(context.Background(), queue, 10, 0)
 					if err == nil {
 						event = BuildSQSLambdaEvent(messages, queue.ARN)
 					}
+					payload, marshalErr = json.Marshal(event)
 				} else {
-					event, err = broker.ReceiveSQSLambdaEventContext(context.Background(), queue, 10, 0, 6<<20)
+					var batch sqsevent.Batch
+					batch, err = broker.ReceiveSQSLambdaBatchContext(context.Background(), queue, 10, 0, 6<<20)
+					event = sqsevent.Event{Records: batch.Records}
+					// Match the real mapping boundary: lease/admission plus
+					// mutable invocation bytes, without encoding records again.
+					payload = []byte(batch.Payload)
 				}
-				payload, marshalErr := json.Marshal(event)
 				wallMS = append(wallMS, performanceMessagingMS(started))
 				runtime.ReadMemStats(&after)
 				allocationBytes = append(allocationBytes, float64(after.TotalAlloc-before.TotalAlloc))
@@ -183,6 +189,9 @@ func TestPerformanceSQSFollowupBinaryProjection(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, marshalErr)
 				require.LessOrEqual(t, len(payload), 6<<20)
+				expected, expectedErr := json.Marshal(event)
+				require.NoError(t, expectedErr)
+				require.Equal(t, expected, payload, "dispatch must use the exact admitted native wire")
 				require.Len(t, event.Records, 10)
 				for index, record := range event.Records {
 					require.Equal(t, ids[index], record.MessageID)

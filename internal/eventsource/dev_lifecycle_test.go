@@ -111,15 +111,15 @@ func (q *retainedMappingQueue) PendingRetained() (bool, <-chan struct{}, error) 
 	}
 	return pending, changed, nil
 }
-func (q *retainedMappingQueue) Receive(ctx context.Context, max int) ([]Record, error) {
-	records, err := q.fakeQueue.Receive(ctx, max)
+func (q *retainedMappingQueue) Receive(ctx context.Context, max int) (Batch, error) {
+	batch, err := q.fakeQueue.Receive(ctx, max)
 	q.mu.Lock()
-	q.pending += len(records)
+	q.pending += len(batch.Records)
 	q.notifyLocked()
 	q.mu.Unlock()
-	return records, err
+	return batch, err
 }
-func (q *retainedMappingQueue) ReceiveRetained(ctx context.Context, max int) ([]Record, error) {
+func (q *retainedMappingQueue) ReceiveRetained(ctx context.Context, max int) (Batch, error) {
 	select {
 	case q.ownedEntered <- struct{}{}:
 	default:
@@ -127,14 +127,14 @@ func (q *retainedMappingQueue) ReceiveRetained(ctx context.Context, max int) ([]
 	for {
 		pending, changed, err := q.PendingRetained()
 		if err != nil || !pending {
-			return nil, err
+			return Batch{}, err
 		}
 		select {
 		case records := <-q.owned:
-			return records, nil
+			return fixtureBatch(records)
 		case <-changed:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return Batch{}, ctx.Err()
 		}
 	}
 }

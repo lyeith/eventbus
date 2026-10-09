@@ -26,11 +26,12 @@ func sendSQSLambdaBatchFixture(t *testing.T, broker *Broker, queue *Queue, body,
 	return result.MessageID
 }
 
-func requireSQSLambdaBatchPayload(t *testing.T, event sqsevent.Event, limit int) {
+func requireSQSLambdaBatchPayload(t *testing.T, batch sqsevent.Batch, limit int) {
 	t.Helper()
-	payload, err := json.Marshal(event)
+	payload, err := json.Marshal(sqsevent.Event{Records: batch.Records})
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(payload), limit)
+	require.Equal(t, string(payload), batch.Payload, "admitted JSON must be the complete exact native invocation payload")
+	require.LessOrEqual(t, len(batch.Payload), limit)
 }
 
 func TestSQSLambdaBatchReceivesFiveWithNativeMetadata(t *testing.T) {
@@ -40,7 +41,7 @@ func TestSQSLambdaBatchReceivesFiveWithNativeMetadata(t *testing.T) {
 	for index := range 7 {
 		ids = append(ids, sendSQSLambdaBatchFixture(t, broker, queue, fmt.Sprintf("message-%d", index), ""))
 	}
-	event, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 5, 0, testSQSLambdaPayloadLimit)
+	event, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 5, 0, testSQSLambdaPayloadLimit)
 	require.NoError(t, err)
 	require.Len(t, event.Records, 5)
 	requireSQSLambdaBatchPayload(t, event, testSQSLambdaPayloadLimit)
@@ -70,7 +71,7 @@ func TestSQSLambdaBatchByteLimitDoesNotLeaseOrRedriveExcludedTail(t *testing.T) 
 		ids = append(ids, sendSQSLambdaBatchFixture(t, broker, queue, body, ""))
 		visibleAt = append(visibleAt, queue.messages[index].VisibleAt)
 	}
-	event, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 10, 0, testSQSLambdaPayloadLimit)
+	event, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 10, 0, testSQSLambdaPayloadLimit)
 	require.NoError(t, err)
 	require.Len(t, event.Records, 5, "six near-1MiB bodies plus actual metadata exceed the 6MiB invocation limit")
 	requireSQSLambdaBatchPayload(t, event, testSQSLambdaPayloadLimit)
@@ -94,7 +95,7 @@ func TestSQSLambdaBatchByteLimitDoesNotLeaseOrRedriveExcludedTail(t *testing.T) 
 	for _, record := range event.Records {
 		require.True(t, broker.DeleteMessage(queue, record.ReceiptHandle))
 	}
-	second, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 10, 0, testSQSLambdaPayloadLimit)
+	second, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 10, 0, testSQSLambdaPayloadLimit)
 	require.NoError(t, err)
 	require.Len(t, second.Records, 5)
 	for index, record := range second.Records {
@@ -122,12 +123,13 @@ func TestSQSLambdaBatchBudgetCountsEscapingBinaryAttributesAndSeparators(t *test
 	encoded, err := json.Marshal(BuildSQSLambdaEvent(prospective, queue.ARN))
 	require.NoError(t, err)
 	limit := len(encoded)
-	event, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 3, 0, limit)
+	event, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 3, 0, limit)
 	require.NoError(t, err)
 	require.Len(t, event.Records, 2)
-	actual, err := json.Marshal(event)
+	actual, err := json.Marshal(sqsevent.Event{Records: event.Records})
 	require.NoError(t, err)
 	require.Equal(t, limit, len(actual), "budget must cover the exact Records envelope and comma")
+	require.Equal(t, string(actual), event.Payload)
 	require.Contains(t, string(actual), `\u003c\u003e\u0026`)
 	require.Contains(t, string(actual), `"binaryValue":"AAH/"`)
 	require.Zero(t, queue.messages[0].ReceiveCount)
@@ -141,7 +143,7 @@ func TestSQSLambdaBatchFIFORejectBlocksTailButAllowsOtherGroups(t *testing.T) {
 	second := sendSQSLambdaBatchFixture(t, broker, queue, strings.Repeat("x", 4096), "A")
 	third := sendSQSLambdaBatchFixture(t, broker, queue, "A3", "A")
 	other := sendSQSLambdaBatchFixture(t, broker, queue, "B1", "B")
-	event, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 10, 0, 2048)
+	event, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 10, 0, 2048)
 	require.NoError(t, err)
 	require.Len(t, event.Records, 2)
 	require.Equal(t, []string{first, other}, []string{event.Records[0].MessageID, event.Records[1].MessageID})
@@ -150,13 +152,13 @@ func TestSQSLambdaBatchFIFORejectBlocksTailButAllowsOtherGroups(t *testing.T) {
 		require.Zero(t, message.ReceiveCount)
 		require.Empty(t, message.ReceiptHandle)
 	}
-	blocked, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 10, 0, testSQSLambdaPayloadLimit)
+	blocked, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 10, 0, testSQSLambdaPayloadLimit)
 	require.NoError(t, err)
 	require.Empty(t, blocked.Records, "another receive cannot enter an already leased FIFO group")
 	for _, record := range event.Records {
 		require.True(t, broker.DeleteMessage(queue, record.ReceiptHandle))
 	}
-	resumed, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 10, 0, testSQSLambdaPayloadLimit)
+	resumed, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 10, 0, testSQSLambdaPayloadLimit)
 	require.NoError(t, err)
 	require.Len(t, resumed.Records, 2)
 	require.Equal(t, second, resumed.Records[0].MessageID)
@@ -171,7 +173,7 @@ func TestSQSLambdaBatchConcurrentFIFOReceivesKeepGroupsAndOrder(t *testing.T) {
 		sendSQSLambdaBatchFixture(t, broker, queue, body, body[:1])
 	}
 	type received struct {
-		event sqsevent.Event
+		event sqsevent.Batch
 		err   error
 	}
 	start := make(chan struct{})
@@ -182,7 +184,7 @@ func TestSQSLambdaBatchConcurrentFIFOReceivesKeepGroupsAndOrder(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			<-start
-			event, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 2, 0, testSQSLambdaPayloadLimit)
+			event, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 2, 0, testSQSLambdaPayloadLimit)
 			results <- received{event, err}
 		}()
 	}
@@ -202,13 +204,13 @@ func TestSQSLambdaBatchConcurrentFIFOReceivesKeepGroupsAndOrder(t *testing.T) {
 		leased = append(leased, result.event.Records...)
 	}
 	require.Len(t, groups, 2)
-	blocked, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 2, 0, testSQSLambdaPayloadLimit)
+	blocked, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 2, 0, testSQSLambdaPayloadLimit)
 	require.NoError(t, err)
 	require.Empty(t, blocked.Records)
 	for _, record := range leased {
 		require.True(t, broker.DeleteMessage(queue, record.ReceiptHandle))
 	}
-	tail, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 2, 0, testSQSLambdaPayloadLimit)
+	tail, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 2, 0, testSQSLambdaPayloadLimit)
 	require.NoError(t, err)
 	require.Len(t, tail.Records, 2)
 	require.Equal(t, "A3", tail.Records[0].Body)
@@ -221,7 +223,7 @@ func TestSQSLambdaBatchCannotFitReturnsWithoutLeaseOrLongPoll(t *testing.T) {
 	sendSQSLambdaBatchFixture(t, broker, queue, strings.Repeat("\n", 1000), "")
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	event, err := broker.ReceiveSQSLambdaEventContext(ctx, queue, 10, 20*time.Second, 1000)
+	event, err := broker.ReceiveSQSLambdaBatchContext(ctx, queue, 10, 20*time.Second, 1000)
 	require.ErrorIs(t, err, ErrSQSLambdaPayloadTooLarge)
 	require.Empty(t, event.Records)
 	require.NoError(t, ctx.Err(), "eligible oversized record must not repeatedly long poll")
@@ -235,32 +237,32 @@ func TestSQSLambdaBatchContextOwnershipBoundsAndOrdinaryReceive(t *testing.T) {
 	broker := newTestBroker()
 	queue := broker.CreateQueue("lambda-owned", time.Minute, 0)
 	foreign := newTestBroker()
-	_, err := foreign.ReceiveSQSLambdaEventContext(t.Context(), queue, 1, 0, testSQSLambdaPayloadLimit)
+	_, err := foreign.ReceiveSQSLambdaBatchContext(t.Context(), queue, 1, 0, testSQSLambdaPayloadLimit)
 	require.ErrorIs(t, err, ErrQueueUnavailable)
 	for _, max := range []int{0, 11} {
-		_, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, max, 0, testSQSLambdaPayloadLimit)
+		_, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, max, 0, testSQSLambdaPayloadLimit)
 		require.Error(t, err)
 	}
 	for _, wait := range []time.Duration{-time.Second, 21 * time.Second} {
-		_, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 1, wait, testSQSLambdaPayloadLimit)
+		_, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 1, wait, testSQSLambdaPayloadLimit)
 		require.Error(t, err)
 	}
-	_, err = broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 1, 0, 0)
+	_, err = broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 1, 0, 0)
 	require.Error(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	sendSQSLambdaBatchFixture(t, broker, queue, "retained", "")
-	_, err = broker.ReceiveSQSLambdaEventContext(ctx, queue, 1, 0, testSQSLambdaPayloadLimit)
+	_, err = broker.ReceiveSQSLambdaBatchContext(ctx, queue, 1, 0, testSQSLambdaPayloadLimit)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, queue.messages[0].ReceiveCount)
 	broker.DeleteQueue(queue.Name)
 	replacement := broker.CreateQueue(queue.Name, time.Minute, 0)
-	_, err = broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 1, 0, testSQSLambdaPayloadLimit)
+	_, err = broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 1, 0, testSQSLambdaPayloadLimit)
 	require.ErrorIs(t, err, ErrQueueUnavailable)
 	pollCtx, stop := context.WithCancel(t.Context())
 	result := make(chan error, 1)
 	go func() {
-		_, err := broker.ReceiveSQSLambdaEventContext(pollCtx, replacement, 10, 20*time.Second, testSQSLambdaPayloadLimit)
+		_, err := broker.ReceiveSQSLambdaBatchContext(pollCtx, replacement, 10, 20*time.Second, testSQSLambdaPayloadLimit)
 		result <- err
 	}()
 	stop()
@@ -291,7 +293,7 @@ func TestSQSLambdaByteRejectionPreservesNativeReceiveAttemptReplay(t *testing.T)
 	queue.mu.Lock()
 	queue.inFlight[first[0].ReceiptHandle].VisibleAt = time.Now().Add(-time.Second)
 	queue.mu.Unlock()
-	_, err := broker.ReceiveSQSLambdaEventContext(t.Context(), queue, 1, 0, 100)
+	_, err := broker.ReceiveSQSLambdaBatchContext(t.Context(), queue, 1, 0, 100)
 	require.ErrorIs(t, err, ErrSQSLambdaPayloadTooLarge)
 	replayed, failure := broker.receiveSQS(t.Context(), queue, 1, 0, nil, "native-attempt")
 	require.Nil(t, failure, "a byte-rejected candidate must not invalidate a cached native receive attempt")

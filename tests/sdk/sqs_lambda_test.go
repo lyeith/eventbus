@@ -43,9 +43,8 @@ func (source sdkMappingSource) ResolveQueue(ctx context.Context, arn string) (ev
 	return sdkMappingQueue{broker: source.broker, queue: queue, info: eventsource.QueueInfo{ARN: info.ARN, VisibilityTimeout: info.VisibilityTimeout}}, nil
 }
 func (queue sdkMappingQueue) Info() eventsource.QueueInfo { return queue.info }
-func (queue sdkMappingQueue) Receive(ctx context.Context, max int) ([]eventsource.Record, error) {
-	event, err := queue.broker.ReceiveSQSLambdaEventContext(ctx, queue.queue, max, time.Second, eventsource.MaxBatchPayloadBytes)
-	return event.Records, err
+func (queue sdkMappingQueue) Receive(ctx context.Context, max int) (eventsource.Batch, error) {
+	return queue.broker.ReceiveSQSLambdaBatchContext(ctx, queue.queue, max, time.Second, eventsource.MaxBatchPayloadBytes)
 }
 func (queue sdkMappingQueue) Delete(ctx context.Context, receipt string) (bool, error) {
 	if err := ctx.Err(); err != nil {

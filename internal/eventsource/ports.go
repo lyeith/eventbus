@@ -26,9 +26,10 @@ type QueueInfo struct {
 const MaxBatchPayloadBytes = 6 << 20
 
 // Queue retains the broker's native visibility, FIFO and redrive behavior.
-// Receive is cancellation-aware and returns owned snapshots of at most max
-// leased messages. The encoded SQSEvent must fit MaxBatchPayloadBytes; remaining
-// records stay unleased in queue order. Delete joins acknowledgment of the
+// Receive is cancellation-aware and transfers a Batch of at most max leased
+// records plus the immutable native wire JSON used for byte admission. The
+// payload must fit MaxBatchPayloadBytes and correspond to these exact receipts;
+// remaining records stay unleased in queue order. Delete joins acknowledgment of the
 // original owned delivery: true means that exact receipt was settled while
 // current, either now or previously by the handler. Expired, unknown, superseded
 // or otherwise discarded receipts must not acknowledge a later lease. A replaced
@@ -38,7 +39,7 @@ const MaxBatchPayloadBytes = 6 << 20
 // retain transient waits locally.
 type Queue interface {
 	Info() QueueInfo
-	Receive(context.Context, int) ([]Record, error)
+	Receive(context.Context, int) (Batch, error)
 	Delete(context.Context, string) (bool, error)
 }
 
@@ -55,3 +56,6 @@ type FunctionInvoker interface {
 type Record = sqsevent.Record
 type MessageAttribute = sqsevent.MessageAttribute
 type SQSEvent = sqsevent.Event
+
+// Batch carries the one native wire encoding across the consumer port.
+type Batch = sqsevent.Batch

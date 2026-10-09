@@ -66,19 +66,26 @@ var ErrSQSLambdaPayloadTooLarge = errors.New("visible SQS record exceeds the Lam
 // a receipt, receive count, first-receive timestamp or visibility lease. The
 // ordinary SQS receive/FIFO/redrive path still owns selection and all state.
 func (b *Broker) ReceiveSQSLambdaEventContext(ctx context.Context, queue *Queue, max int, wait time.Duration, maxPayloadBytes int) (sqsevent.Event, error) {
-	return b.receiveSQSLambdaEventContext(ctx, queue, max, wait, maxPayloadBytes, false)
+	batch, err := b.ReceiveSQSLambdaBatchContext(ctx, queue, max, wait, maxPayloadBytes)
+	return sqsevent.Event{Records: batch.Records}, err
 }
 
-func (b *Broker) receiveSQSLambdaEventContext(ctx context.Context, queue *Queue, max int, wait time.Duration, maxPayloadBytes int, ownedOnly bool) (sqsevent.Event, error) {
-	event := BuildSQSLambdaEvent(nil, "")
+// ReceiveSQSLambdaBatchContext retains the exact JSON used to admit each record,
+// so native mappings do not need to marshal their leased batch again.
+func (b *Broker) ReceiveSQSLambdaBatchContext(ctx context.Context, queue *Queue, max int, wait time.Duration, maxPayloadBytes int) (sqsevent.Batch, error) {
+	return b.receiveSQSLambdaBatchContext(ctx, queue, max, wait, maxPayloadBytes, false)
+}
+
+func (b *Broker) receiveSQSLambdaBatchContext(ctx context.Context, queue *Queue, max int, wait time.Duration, maxPayloadBytes int, ownedOnly bool) (sqsevent.Batch, error) {
+	batch := sqsevent.Batch{Records: []sqsevent.Record{}, Payload: sqsevent.EmptyBatchPayload}
 	if err := b.validateBoundReceive(ctx, queue, max, wait); err != nil {
-		return event, err
+		return batch, err
 	}
-	emptyPayload, err := json.Marshal(event)
-	if err != nil || maxPayloadBytes < len(emptyPayload) {
-		return event, errors.New("invalid SQS Lambda event byte budget")
+	if maxPayloadBytes < len(sqsevent.EmptyBatchPayload) {
+		return batch, errors.New("invalid SQS Lambda event byte budget")
 	}
-	used := len(emptyPayload)
+	used := len(sqsevent.EmptyBatchPayload)
+	var recordJSON [][]byte
 	region := sqsRegionFromARN(queue.ARN)
 	var admissionErr error
 	admit := func(candidate *Message) bool {
@@ -93,11 +100,11 @@ func (b *Broker) receiveSQSLambdaEventContext(ctx context.Context, queue *Queue,
 			return false
 		}
 		bytes := len(payload)
-		if len(event.Records) != 0 {
+		if len(batch.Records) != 0 {
 			bytes++ // The actual comma between adjacent JSON records.
 		}
 		if bytes > maxPayloadBytes-used {
-			if len(event.Records) == 0 {
+			if len(batch.Records) == 0 {
 				admissionErr = ErrSQSLambdaPayloadTooLarge
 			}
 			return false
@@ -107,18 +114,19 @@ func (b *Broker) receiveSQSLambdaEventContext(ctx context.Context, queue *Queue,
 			return false
 		}
 		used += bytes
-		event.Records = append(event.Records, record)
+		batch.Records = append(batch.Records, record)
+		recordJSON = append(recordJSON, payload)
 		return true
 	}
 	selected, failure := b.receiveSQSWithOwnership(ctx, queue, max, wait, nil, "", admit, sqsReceiveOptions{ownedOnly: ownedOnly && queue.devCustody != nil})
 	if failure != nil {
-		return event, ErrQueueUnavailable
+		return batch, ErrQueueUnavailable
 	}
 	if selected.count != 0 {
-		return event, nil
+		return sqsevent.AssembleBatch(batch.Records, recordJSON), nil
 	}
 	if err := ctx.Err(); err != nil {
-		return event, err
+		return batch, err
 	}
-	return event, admissionErr
+	return batch, admissionErr
 }

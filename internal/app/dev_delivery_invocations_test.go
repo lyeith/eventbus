@@ -101,8 +101,9 @@ func TestDevReceiptAdapterDelegatesInspectionAndSettlementToOriginalQueue(t *tes
 	bound, err := (sqsMappingSource{broker: broker}).ResolveQueue(t.Context(), queue.ARN)
 	require.NoError(t, err)
 	adapter := bound.(*sqsMappingQueue)
-	records, err := adapter.Receive(t.Context(), 2)
+	batch, err := adapter.Receive(t.Context(), 2)
 	require.NoError(t, err)
+	records := batch.Records
 	require.Len(t, records, 2)
 	before, err := adapter.InspectReceipt(t.Context(), records[0].ReceiptHandle)
 	require.NoError(t, err)

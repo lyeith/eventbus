@@ -2,7 +2,6 @@ package eventsource
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -421,7 +420,7 @@ func (s *Service) poll(ctx context.Context, item *entry) {
 }
 
 func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPolling bool) {
-	records, complete, err := s.receive(ctx, item)
+	batch, complete, err := s.receive(ctx, item)
 	var evidenceErr error
 	if complete != nil {
 		defer func() { complete(evidenceErr) }() // Ordinary business failure retains queue custody.
@@ -433,21 +432,20 @@ func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPollin
 		s.disableSource(item, "Source receive failed")
 		return false, false // A deleted bound source is never looked up again.
 	}
+	records := batch.Records
 	if len(records) == 0 {
 		return true, true
 	}
-	payload, err := json.Marshal(SQSEvent{Records: records})
-	if len(records) > item.mapping.BatchSize || len(payload) > MaxBatchPayloadBytes {
+	if len(records) > item.mapping.BatchSize || len(batch.Payload) > MaxBatchPayloadBytes || batch.Payload == "" {
 		s.disableSource(item, "Source batch exceeds the supported count or payload limit")
 		return false, false // Invalid adapter leases remain unacknowledged.
 	}
-	if err == nil && s.deliveryCapture != nil {
+	payload := []byte(batch.Payload) // Invocation owns mutable transport bytes, not the admitted string.
+	if s.deliveryCapture != nil {
 		keepPolling, evidenceErr = s.deliverObserved(ctx, item, records, payload)
 		return false, keepPolling
 	}
-	if err == nil {
-		err = s.functions.InvokeTarget(ctx, item.mapping.FunctionARN, payload)
-	}
+	err = s.functions.InvokeTarget(ctx, item.mapping.FunctionARN, payload)
 	if ctx.Err() != nil {
 		return false, false
 	}

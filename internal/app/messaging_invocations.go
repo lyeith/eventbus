@@ -80,9 +80,8 @@ type sqsMappingQueue struct {
 var _ eventsource.Queue = (*sqsMappingQueue)(nil)
 
 func (queue *sqsMappingQueue) Info() eventsource.QueueInfo { return queue.info }
-func (queue *sqsMappingQueue) Receive(ctx context.Context, max int) ([]eventsource.Record, error) {
-	event, err := queue.broker.ReceiveSQSLambdaEventContext(ctx, queue.queue, max, 20*time.Second, eventsource.MaxBatchPayloadBytes)
-	return event.Records, err
+func (queue *sqsMappingQueue) Receive(ctx context.Context, max int) (eventsource.Batch, error) {
+	return queue.broker.ReceiveSQSLambdaBatchContext(ctx, queue.queue, max, 20*time.Second, eventsource.MaxBatchPayloadBytes)
 }
 func (queue *sqsMappingQueue) Delete(ctx context.Context, receipt string) (bool, error) {
 	return queue.broker.AcknowledgeSQSLambdaReceiptContext(ctx, queue.queue, receipt)
@@ -96,7 +95,6 @@ func (queue *sqsMappingQueue) RegisterRetained() (func(), error) {
 func (queue *sqsMappingQueue) PendingRetained() (bool, <-chan struct{}, error) {
 	return queue.broker.SQSLambdaCustodyState(queue.queue)
 }
-func (queue *sqsMappingQueue) ReceiveRetained(ctx context.Context, max int) ([]eventsource.Record, error) {
-	event, err := queue.broker.ReceiveOwnedSQSLambdaEventContext(ctx, queue.queue, max, 20*time.Second, eventsource.MaxBatchPayloadBytes)
-	return event.Records, err
+func (queue *sqsMappingQueue) ReceiveRetained(ctx context.Context, max int) (eventsource.Batch, error) {
+	return queue.broker.ReceiveOwnedSQSLambdaBatchContext(ctx, queue.queue, max, 20*time.Second, eventsource.MaxBatchPayloadBytes)
 }

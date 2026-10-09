@@ -41,7 +41,7 @@ func newFakeQueue() *fakeQueue {
 	return &fakeQueue{info: QueueInfo{ARN: sourceARN, VisibilityTimeout: time.Second}, messages: make(chan *Record, 10), batches: make(chan []Record, 8), receiveErr: make(chan error, 1), deleted: make(chan string, 10), entered: make(chan struct{}, 10)}
 }
 func (q *fakeQueue) Info() QueueInfo { return q.info }
-func (q *fakeQueue) Receive(ctx context.Context, max int) ([]Record, error) {
+func (q *fakeQueue) Receive(ctx context.Context, max int) (Batch, error) {
 	select {
 	case q.entered <- struct{}{}:
 	default:
@@ -49,7 +49,7 @@ func (q *fakeQueue) Receive(ctx context.Context, max int) ([]Record, error) {
 	select {
 	case record := <-q.messages:
 		if record == nil {
-			return nil, nil
+			return Batch{}, nil
 		}
 		records := []Record{*record}
 		for len(records) < max {
@@ -57,17 +57,21 @@ func (q *fakeQueue) Receive(ctx context.Context, max int) ([]Record, error) {
 			case record := <-q.messages:
 				records = append(records, *record)
 			default:
-				return records, nil
+				return fixtureBatch(records)
 			}
 		}
-		return records, nil
+		return fixtureBatch(records)
 	case records := <-q.batches:
-		return records, nil
+		return fixtureBatch(records)
 	case err := <-q.receiveErr:
-		return nil, err
+		return Batch{}, err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return Batch{}, ctx.Err()
 	}
+}
+func fixtureBatch(records []Record) (Batch, error) {
+	payload, err := json.Marshal(SQSEvent{Records: records})
+	return Batch{Records: records, Payload: string(payload)}, err
 }
 func (q *fakeQueue) Delete(ctx context.Context, receipt string) (bool, error) {
 	if err := ctx.Err(); err != nil {

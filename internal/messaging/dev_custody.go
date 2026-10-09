@@ -134,7 +134,14 @@ func (b *Broker) SQSLambdaCustodyState(q *Queue) (bool, <-chan struct{}, error) 
 // byte admission. Only retained message IDs can gain a new receipt. Empty
 // custody ends a continuation long poll immediately, including after peer ack.
 func (b *Broker) ReceiveOwnedSQSLambdaEventContext(ctx context.Context, q *Queue, max int, wait time.Duration, budget int) (sqsevent.Event, error) {
-	return b.receiveSQSLambdaEventContext(ctx, q, max, wait, budget, true)
+	batch, err := b.ReceiveOwnedSQSLambdaBatchContext(ctx, q, max, wait, budget)
+	return sqsevent.Event{Records: batch.Records}, err
+}
+
+// ReceiveOwnedSQSLambdaBatchContext carries the same admitted wire payload for
+// retained continuations. Custody changes neither native selection nor leases.
+func (b *Broker) ReceiveOwnedSQSLambdaBatchContext(ctx context.Context, q *Queue, max int, wait time.Duration, budget int) (sqsevent.Batch, error) {
+	return b.receiveSQSLambdaBatchContext(ctx, q, max, wait, budget, true)
 }
 
 func beginDevSQSMessage(owner *devQueueCustody, id string) (func(error), error) {
