@@ -33,7 +33,10 @@ before configuring endpoints or cleaning fixtures.
   delivery uses versioned JSONL capture. Keep registry/entity locks independent.
 - `internal/eventsource` owns native SQS mappings through queue and function ports;
   batch/concurrency limits are enforced by joined workers; only successful whole-
-  batch execution and actual child join permit native ACK. Messaging accepts a
+  batch execution and its confirmed completion boundary permit native ACK.
+  Fresh execution joins the process; opt-in warm execution joins the managed
+  response/log boundary and retains a separately leased worker until retirement.
+  Messaging accepts a
   current, unexpired receipt or proven prior settlement of that original receipt;
   stale HTTP delete success alone is insufficient. SQS owns leases,
   FIFO and redrive; Lambda owns execution. Close mappings before the runtime.
@@ -70,7 +73,9 @@ before configuring endpoints or cleaning fixtures.
   use a separate exclusively trusted loopback listener; keep suite roots public,
   native auth intact and callback JWKS available through accepted-work joins.
   Headers cannot turn public requests into descendants.
-- `internal/ses` owns fixtures, capture records, MIME and both sending adapters.
+- `internal/ses` owns native configuration sets/destinations, event selection,
+  mail correlation, capture, MIME and both sending adapters. App connects its
+  EventPublisher port to SNS; explicit local outcomes stay in `dev_outcomes.go`.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.
 - Do not reset a developer identity database or interrupt an application stack.

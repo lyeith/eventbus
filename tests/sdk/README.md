@@ -154,3 +154,20 @@ go test -race ./internal/app \
 Both proofs passed and shipped in [v0.9.0](https://github.com/lyeith/eventbus/releases/tag/v0.9.0); [Gateway](../../docs/GATEWAY.md#trusted-http-continuations)
 documents endpoint configuration and the exclusive trusted-port contract.
 [HANDOFF](../../HANDOFF.md) records release verification.
+
+## Configuration-set events and validated S3 notifications
+
+`TestSESConfigurationEventsPythonSDKSmoke` uses the unchanged installed SES v1
+management model, actual v1/v2 sends and native SNS/Python Lambda delivery.
+It checks MessageId correlation, Send/Open/Bounce, MIME/API selection, destination
+filter/update/delete and native failure retry while preserving the original
+capture. It runs in the normal `sdksmoke` lane.
+
+`TestWarmNativeMessagingPythonSDKSmoke` checks actual SNS/SQS SDK producers and
+registered warm handler reuse, independent request identities, native mapping
+ACK and worker-lifetime quiescence. The default fresh fixtures remain separate.
+
+The optional `sdksmoke,integration` LocalStack proof needs an explicitly selected
+owned container. See [S3 notifications](../../docs/S3-NOTIFICATIONS.md) for the
+pinned image, `EVENTBUS_LOCALSTACK_S3_INTEGRATION=1`, routing, transport and cleanup.
+The normal SDK lane skips that container fixture; it never uses an unowned stack.

@@ -147,6 +147,7 @@ Held callbacks also permit exact synchronous native deletion:
 | API | Allowed operations |
 | --- | --- |
 | SNS Query | `DeleteTopic`, `Unsubscribe` |
+| SES v1 Query (root path) | `DeleteConfigurationSet`, `DeleteConfigurationSetEventDestination` |
 | SQS Query/JSON | `DeleteQueue`, `DeleteMessage`, `DeleteMessageBatch`, `PurgeQueue` |
 | Lambda mappings REST | `DeleteEventSourceMapping` |
 | Scheduler REST | `DeleteSchedule`, `DeleteScheduleGroup` |
@@ -276,3 +277,11 @@ Implementation owners: [shared activity/source ports](../internal/devactivity/),
 [app listeners/profile](../internal/app/dev_retained_owner.go),
 [declared cleanup](../internal/app/dev_cleanup.go) and
 [gateway admission](../internal/gateway/dev_retained_owner.go).
+
+Warm Python/Node workers hold lifecycle leases until actual process/listener and
+child cleanup. Quiescence fences reuse and retires idle workers; active workers
+retire when their accepted invocation finishes. Accepted callbacks during drain
+run fresh within the same global worker limit. Resume permits warm reuse again.
+Local SES outcomes and Lambda reload controls produce work and remain refused
+through the held callback endpoint; only the native SES deletions above are
+cleanup admissions.

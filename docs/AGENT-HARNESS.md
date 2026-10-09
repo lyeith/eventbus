@@ -24,7 +24,9 @@ entirely there. Each system owns its resources and state; unsupported EventBus
 operations return errors rather than forwarding to LocalStack.
 See [AWS endpoint configuration](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html)
 and [LocalStack networking](https://docs.localstack.cloud/aws/customization/networking/accessing-endpoint-url/)
-for client and container addressing.
+for client and container addressing. [Validated S3 notifications](S3-NOTIFICATIONS.md)
+documents the mixed-provider routing needed for real LocalStack uploads to invoke
+registered EventBus functions.
 
 For retained-suite interruption/recovery, opt into [Retained owner](RETAINED-OWNER.md).
 Its source URL is for suite roots; registered handlers/owned native peers use the
@@ -131,7 +133,13 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   IDs to correlate requests; [Cognito](COGNITO.md) documents the evidence fields.
 - Read SES JSONL from the selected `--ses-log` file. Use `request` and
   `outcome` for assertions; [SES capture](SES.md) explains bulk failures and
-  derived email views.
+  derived email views. Native SES configuration-set SNS Send events correlate
+  through `mail.messageId`; explicit local Open/Bounce controls reuse that exact
+  accepted ID and configured destinations. See [SES events](SES.md).
+- For repeated Python/Node calls, opt into [warm workers](LAMBDA.md#warm-workers).
+  Reload a selected function explicitly after recipe/source/environment edits.
+  Successful warm invocation evidence covers the handler response/log boundary;
+  quiesce the retained owner before treating worker/child cleanup as complete.
 - Read SNS JSONL from `--sns-log`; [Messaging](MESSAGING.md) documents the versioned
   schema, subscription tokens, sandbox OTPs and external delivery intents.
   Assert the message ID and per-delivery status; capture proves local intent,

@@ -1,68 +1,57 @@
 # Handoff
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT EventBus.
-Published v0.11.4: https://github.com/lyeith/eventbus/releases/tag/v0.11.4
-Clean tagged source 4bac246; Go 1.26.0, CGO_ENABLED=0, module v0.11.4.
-Eight binaries + SHA256SUMS; every downloaded asset matched the local build.
-All agreed Oct9 audit targets completed and shipped.
-No Plans/application data/default Cognito DB touched or dependency files changed.
+Published release remains v0.11.4 while the v0.12.0 candidate is prepared.
+All new tickets #30/#31/#32 implemented; no unrelated Plans changes touched.
 
 Owner commits:
-- 3778034 Cognito atomic MFA authorization and exact-secret promotion.
-- 6ddeacf SQS references, dedup expiry, native deletion and projection owners.
-- 99cf493 Firehose prepared jq, retained counts and unlocked snapshot construction.
-- 1cf7e63 gateway immutable static mapping/redaction plans.
-- 4b68dc9 Secrets canonical index and rotation-generation admission.
-- f6f0cd9 Lambda HTTP preparation/version parity.
-- 8618ba2 Scheduler capability refusal moved from dispatcher to adapter.
-- ee0cc9e production import guard, automatic/scoped CI and verification docs.
-- 2f45911 shared output-copy evidence; native result/error/retry and merged pipes.
-- 105a441 consumer cancellation, sticky fences and app dependency retention.
-- f92de66 frozen real cold-start/native-auth fixtures and measured audit.
+- 9f508f6: registered GetFunction metadata and genuine validated LocalStack S3 proof.
+- 4f33bd7: bounded warm Python/Node workers, local reload, completion scopes,
+  worker-lifetime leases, native messaging proof and measured SDK latency/RSS.
+- b6f94cb: six v1 configuration-set/destination operations and native Send/
+  explicit local Open/Bounce through the existing SNS delivery owner.
 
-Independent reviews accepted Cognito/consumer flows, gateway/Secrets generations,
-Firehose counters/snapshot/retry publication, shared output-copy joins and CI.
-Reviews found and fixed masked pipe errors, writer-identity ordering/equality,
-deadline-first app retention and Secrets delete/recreate during validation.
-docs/ARCHITECTURE.md maps common owners; docs/PERFORMANCE-AUDIT.md is evidence.
+Shared execution uses native Runtime API events/context/result policies.
+Warm success joins response/log/per-request RPC boundaries, retaining the worker
+under a separate lease; error/timeout/reload/drain/Close retires and joins it.
+Global capacity includes retired generations and fresh fallbacks. Explicit recipe
+reload is local; registry snapshots are immutable and source reload is CAS-bound.
+Exact Python primary-source loading preserves normal package import/re-export
+semantics and avoids stale same-timestamp bytecode. Dependencies import normally.
 
-PASS, saved complete /tmp/eventbus-followup-*-20261009.log:
-- Cognito full race 295.735s; earlier package-wide timeout gap is closed.
-- Messaging 6.012s / Firehose 7.070s / Secrets 1.409s / architecture 1.045s races.
-- Gateway 20.955s / Scheduler 1.592s / dispatcher 2.152s initial races.
-- Final localexec 6.175s / consumer 12.222s / triggers 8.866s / Lambda 100.112s /
-  app 19.970s / quiescence 1.039s / architecture 1.041s races.
-- Full native SDK/retained-stack race 278.385s; Swagger 9.179s.
-  Optional older SDK initially skipped, then explicit 1.39.4 proof passed 25.023s.
-- Both fresh owned RustFS native Firehose proofs passed; process/group/data joined.
-- Vet all packages with sdksmoke/integration/performance tags.
-- macOS arm64 localexec race 6.873s; Unix exits/pipes/order executed, Linux-only
-  retained FD fault injection excluded by platform.
-- Frozen before/after fixtures and actual consumer/trigger/SRP-email-token chains.
-- Release-source GitHub CI: actions/runs/37908234098 passed both jobs.
-- Actual packaged Linux amd64/macOS arm64: Cognito enrollment/MFA, Node native
-  result/merged-log/child joins, REQUEST authorizer and compiled HTTP mappings.
-  Other targets checked for clean metadata/checksums, not executed.
+SES separates management from durable send capture, snapshots Send routing and
+retains bounded metadata-only correlations. Concurrent updates preserve resource
+identity; delete/recreate is fenced. Accepted events survive caller disconnect.
+Downstream SNS admission failure cannot undo a captured SES acceptance.
 
-Local medians: GZIP admission554ms ->33us, FIFO10k ten deletes1.10ms ->2.54us,
-Secrets10k ARN117us ->1.14us, gateway100redactions128us ->58us/636 ->128allocs.
-GZIP build/read remains~0.6s; binary projection wall time similar despite fewer
-snapshots/allocations. Distributions and limitations are retained in the audit.
+Final independent review accepted ownership/seams/contracts; findings fixed:
+cancellation before launch, stale bytecode, exited-worker reuse, ordered logs,
+stalled admitted Runtime API body, truthful completion scope, SES acceptance
+cancellation, bounded expiry and concurrent destination updates.
 
-Source uses fresh processes; no interpreter/SDK selection, durability or native
-management surface change. #30 warm workers is a separate design.
-New #31 SES configuration-set SNS events belongs in core; explicit local
-outcome injection belongs in a named dev adapter. See ISSUE-TRIAGE.
-Native-uv consumer attribution 0.25s vs managed1.20s identifies repeated SSD
-project-mode wrapper proofs/digest/workspace work; host tooling follow-up is
-separate. PATH differs in that attribution; no production bypass introduced.
+Saved /tmp/eventbus-tickets-*-20261009.log:
+- Linux allWarm race9.077s; macOS arm64 allWarm5.206s.
+- Affected first Lambda/app/server/architecture race passed; latest app32.762s,
+  eventsource2.301s, architecture1.115s passed.
+- Latest full Lambda failed only managed fallback timing fixtures under load;
+  corrected deliberate phase margins/actual-budget assertions pass17.145s.
+  Production deadlines unchanged. Unknown-scope ACK refusal race1.046s passed.
+- SES full13.721s; cancellation1.018s; accepted bulk IDs/concurrent updates1.025s.
+- Real SES/SNS/Lambda SDK2.081s; full SDK race277.526s, warm native messaging included.
+- Real LocalStack3.8.1 S3 race13.134s: normal validation and original upstream
+  Put/Copy/multipart/version/filter records, native retries, graceful drain.
+- Vet with sdksmoke/integration/performance tags and five Python contracts passed.
+- Performance fixture4.806s: 32 accepted SDK sends; eight calls per mode.
+  Python fresh/warm median216.078/8.565ms; Node272.591/12.150ms.
+  Warm idle RSS medians46,610,432/97,937,408 bytes; no long-run stability claim.
 
-Successful test archives, temporary older-SDK environment and private RustFS
-data were removed; macOS scratch, release stages/probes/download duplicates removed. No owned active process/worktree/
-environment remains. Failed diagnostics verified quiescent/unpinned with 24h TTL:
-47266c55 / a396cb0b / 044356a5 expire Oct10 08:16:37 / 08:31:29 / 08:35:11 UTC.
-Initial packaged gateway fixture had an unquoted YAML path; corrected fixture
-and robust backend cleanup, no source change. Its registered owner was stopped/
-verified quiescent and scratch removed. All packaged checks then passed.
-Preserve unrelated laptop Plans edits; next work is separately triaged #30/#31
-and SSD project-mode launcher optimization, with current native contracts intact.
+Next steps: eight clean-source binary builds; actual packaged Linux amd64/macOS
+arm64 proof; push and CI; publish v0.12.0/check uploaded assets; prune owned scratch.
+Other two targets receive cross-build metadata/checksum verification only.
+
+Actual S3 fixture containers and introduced636MB image removed; exact buckets/
+objects/multipart/notifications cleaned. No dependency/default DB/live stack
+changes or temporary worktrees. macOS scratch is retained for packaged checks.
+Failed evidence779b0793/20a07398/4eaefff6 quiescent/unpinned, 24h expiry.
+Successful SSD operations remove scratch automatically. Host launcher optimization
+is separate from this runtime increment. Preserve unrelated laptop Plans edits.

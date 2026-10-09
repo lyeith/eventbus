@@ -199,3 +199,26 @@ Service HTTP tests run just that service; dispatcher tests verify composition.
 Fixtures own their listeners, paths and IDs. No test resets a developer runtime.
 
 See [test commands](../tests/README.md) and [SDK fixtures](../tests/sdk/README.md).
+
+## Retained runtimes and SES event publishing
+
+- Lambda owns immutable function generations, global Python/Node worker capacity,
+  Runtime API execution, per-call response/log boundaries and complete worker
+  retirement. `dev_warm.go` supplies mode/drain controls; `dev_registration.go`
+  resolves and publishes validated local registration snapshots. `app/dev_lambda_reload.go`
+  rereads the configured recipe for one explicitly requested target.
+- Warm workers hold separate retained-owner activity leases until actual
+  process/listener/child joins. Reversible drain retires idle workers and lets
+  accepted active calls finish, while counted callbacks run fresh. Native
+  invocation success and whole-worker quiescence are distinct facts.
+- Lambda's GetFunction projection shares target resolution and exposes only the
+  documented registered metadata subset. LocalStack owns S3 and original
+  notification production; the owned SDK integration covers its normal validation.
+- SES owns mutable configuration sets/destinations, native event selection and
+  immutable accepted mail correlation. Its EventPublisher port is adapted in
+  `app/ses_events.go` to the existing SNS broker; SNS keeps envelopes, filtering
+  and asynchronous Lambda retry/lifetime. Capture precedes Send-event admission.
+- `ses/dev_outcomes.go` and `app/dev_ses.go` expose explicitly local Open/Bounce
+  controls. They reuse current native destinations and never infer SMTP delivery.
+  Held cleanup admits only the two native SES deletions; local controls remain
+  work-producing roots.

@@ -244,7 +244,7 @@ reuse and batched fresh storage proofs. [Performance review](PERFORMANCE-REVIEW.
 records measurements and the unchanged baseline tooling-suite blockers.
 
 
-## New follow-ups after the v0.11.4 audit
+## Runtime and native event increments after v0.11.4
 
 - [#30](https://github.com/lyeith/eventbus/issues/30): warm Python/Node worker
   lifetime, admission and per-request context belong to Lambda execution core.
@@ -258,8 +258,17 @@ records measurements and the unchanged baseline tooling-suite blockers.
   adapter using those same destinations; capture cannot imply actual delivery
   or opening. Application effects/assertions stay in the consuming repository.
 
-These requests arrived outside the completed bounded audit; neither is
-implemented in v0.11.4. See [current measurements](PERFORMANCE-AUDIT.md#follow-up-fixes-and-measurements).
+- [#32](https://github.com/lyeith/eventbus/issues/32): registered GetFunction
+  metadata and native qualifier errors belong to Lambda core; the public subset
+  omits local paths/environment/code. LocalStack owns S3 generation and normal
+  GetFunction/DryRun destination validation, with app/test-owned transport.
+  Actual original S3 events enter the existing native Event/retry owner.
+
+These three increments are implemented in current source; final combined
+verification and release are recorded in STATE/HANDOFF. They are absent from
+v0.11.4. [S3 notifications](S3-NOTIFICATIONS.md), [Lambda](LAMBDA.md) and
+[SES](SES.md) state their contracts. The earlier bounded audit remains at
+[current measurements](PERFORMANCE-AUDIT.md#follow-up-fixes-and-measurements).
 The earlier SSD launcher fix covered the no-project path. Project-mode launches
 still repeat workspace/digest/ownership work; this belongs to ssd-dev-tools.
 The same fixed consumer workload measured 1.20s managed versus 0.25s native-uv

@@ -75,15 +75,12 @@ records final acceptance and cleanup. Released in [v0.9.0](https://github.com/ly
 
 ## Low priority: remaining SES APIs
 
-SES sending is capture-only. Implement the non-sending APIs after the nine
-sending operations, preserving the AWS wire contracts and state transitions.
-The current official inventories contain 65 remaining SES v1 and 113 remaining
-SES v2 operations:
+SES captures all nine sending operations and now supports six v1 configuration-set/destination operations with SNS event publishing. Remaining non-sending APIs are low priority; preserve AWS wire contracts and state transitions. The remaining operation families include:
 
-- [SES v1 actions](https://docs.aws.amazon.com/ses/latest/APIReference/API_Operations.html): identities and verification, templates/rendering, configuration sets/events/tracking, account/quota/statistics, receiving rules/filters/policies.
+- [SES v1 actions](https://docs.aws.amazon.com/ses/latest/APIReference/API_Operations.html): identities and verification, templates/rendering, remaining configuration-set operations/tracking, account/quota/statistics, receiving rules/filters/policies.
 - [SES v2 actions](https://docs.aws.amazon.com/ses/latest/APIReference-V2/API_Operations.html): identities/certificates/policies, templates/rendering, configuration and account settings, contacts/lists/suppression, tags, dedicated IPs, deliverability/metrics/insights, import/export jobs, multi-region endpoints, tenants/resources/reputation.
 
-Until those APIs exist, `--ses-config` supplies immutable sending prerequisites.
+For remaining APIs, `--ses-config` supplies sending prerequisites. Its configuration-set names seed the mutable native registry.
 Fixture configuration is a development convenience, not an AWS operation.
 Advanced stored-template Handlebars rendering is also low priority; captures
 retain the source request and template data, with an optional simple rendering
@@ -106,4 +103,4 @@ separate work. The Go/Python dev recipe consumer retains harness policy.
 Request gateway contracts are covered in GATEWAY.md. API Gateway management/deployment
 APIs, other authorizer types are separate features. HTTP API authorizers/Lambda proxy 1.0/2.0 and Lambda
 Event invocation are now implemented in the bounded request/runtime scope.
-Warm runtime reuse and management/provisioning APIs remain separate work.
+Warm Python/Node reuse and read-only registered GetFunction metadata are implemented; other Lambda management/provisioning APIs remain separate work.
