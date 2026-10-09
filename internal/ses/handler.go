@@ -1,6 +1,7 @@
 package ses
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -68,10 +69,22 @@ func sesV1SendingAction(action string) bool {
 	return false
 }
 func matchQuery(r *http.Request, action string) bool {
-	return sesV1SendingAction(action) || r.FormValue("Version") == "2010-12-01" || strings.Contains(r.Header.Get("Authorization"), "/ses/aws4_request")
+	return sesV1SendingAction(action) || sesV1ConfigurationAction(action) || r.FormValue("Version") == "2010-12-01" || strings.Contains(r.Header.Get("Authorization"), "/ses/aws4_request")
 }
 func (s *Handler) handleSES(w http.ResponseWriter, r *http.Request, api, action string, parseError *sesAPIError) {
 	id := awsprotocol.RequestID()
+	if api == "v1" && sesV1ConfigurationAction(action) {
+		input, apiErr := map[string]any{}, parseError
+		if apiErr == nil {
+			input, apiErr = sesV1Decode(r, action)
+		}
+		var output map[string]any
+		if apiErr == nil {
+			output, apiErr = s.ses.configurationV1(action, input)
+		}
+		sesV1Write(w, action, id, output, apiErr)
+		return
+	}
 	input := map[string]any{}
 	apiErr := parseError
 	if apiErr == nil {
@@ -95,6 +108,13 @@ func (s *Handler) handleSES(w http.ResponseWriter, r *http.Request, api, action 
 			result, apiErr = s.ses.sendV2(action, input)
 		}
 	}
+	var events []preparedMessage
+	if apiErr == nil {
+		events, apiErr = s.ses.prepareEvents(api, input, result.Emails)
+		if apiErr != nil {
+			result = sesSendResult{}
+		}
+	}
 	status := http.StatusOK
 	outcome := map[string]any{"http_status": status, "response": result.Output}
 	if apiErr != nil {
@@ -110,6 +130,10 @@ func (s *Handler) handleSES(w http.ResponseWriter, r *http.Request, api, action 
 	if err := s.ses.capture.append(record); err != nil {
 		log.Error().Err(err).Str("operation", action).Str("request_id", id).Msg("SES capture failed; request not accepted")
 		apiErr = &sesAPIError{Code: "InternalFailure", Message: "Unable to capture email request", Status: http.StatusInternalServerError}
+	} else if apiErr == nil {
+		// Capture commits SES acceptance. A caller disconnect cannot cancel its
+		// Send event; synchronous admission still belongs to this drained request.
+		s.ses.acceptEvents(context.WithoutCancel(r.Context()), id, events)
 	}
 	if api == "v1" {
 		sesV1Write(w, action, id, result.Output, apiErr)

@@ -1,19 +1,29 @@
 package ses
 
 import (
+	"container/list"
 	"maps"
 	"net/http"
 	"net/mail"
 	"slices"
 	"strings"
+	"sync"
 )
 
 type SESManager struct {
 	fixtures SESFixtures
 	capture  *SESCapture
+
+	mu                sync.Mutex
+	configurationSets map[string]*configurationSet
+	eventPublisher    EventPublisher
+	region, accountID string
+	accepted          map[string]*acceptedMessage
+	acceptedOrder     *list.List
+	acceptedBytes     int
 }
 
-func NewSESManager(fixtures SESFixtures, capture *SESCapture) *SESManager {
+func NewSESManager(fixtures SESFixtures, capture *SESCapture, options ...ManagerOption) *SESManager {
 	// Fixtures contain no mutable runtime state; make the caller's maps/pointers
 	// independent before concurrent HTTP readers are admitted.
 	owned := fixtures
@@ -30,7 +40,15 @@ func NewSESManager(fixtures SESFixtures, capture *SESCapture) *SESManager {
 		enabled := *fixtures.SendingEnabled
 		owned.SendingEnabled = &enabled
 	}
-	return &SESManager{fixtures: owned, capture: capture}
+	manager := &SESManager{fixtures: owned, capture: capture, configurationSets: make(map[string]*configurationSet),
+		region: "us-east-1", accountID: "000000000000", accepted: make(map[string]*acceptedMessage), acceptedOrder: list.New()}
+	for _, name := range owned.ConfigurationSets {
+		manager.configurationSets[name] = &configurationSet{name: name, destinations: make(map[string]*eventDestination)}
+	}
+	for _, option := range options {
+		option(manager)
+	}
+	return manager
 }
 func (manager *SESManager) Close() error {
 	if manager == nil {
@@ -58,16 +76,16 @@ func (manager *SESManager) checkConfigurationSet(api, name string) *sesAPIError 
 	if name == "" {
 		return nil
 	}
-	for _, configured := range manager.fixtures.ConfigurationSets {
-		if configured == name {
-			return nil
-		}
+	manager.mu.Lock()
+	_, exists := manager.configurationSets[name]
+	manager.mu.Unlock()
+	if exists {
+		return nil
 	}
-	code, status := "NotFoundException", http.StatusNotFound
 	if api == "v1" {
-		code, status = "ConfigurationSetDoesNotExist", http.StatusBadRequest
+		return missingConfigurationSet(name)
 	}
-	return &sesAPIError{Code: code, Message: "Configuration set does not exist: " + name, Status: status}
+	return &sesAPIError{Code: "NotFoundException", Message: "Configuration set does not exist: " + name, Status: http.StatusNotFound}
 }
 func (manager *SESManager) template(name string) (SESTemplate, bool) {
 	if strings.HasPrefix(name, "arn:") {

@@ -78,3 +78,9 @@ func retainedRESTDeletion(path string) bool {
 func retainedCleanupNamespace(target lambdaservice.DevInvokeTarget, region, accountID string) bool {
 	return (target.Region == "" || target.Region == region) && (target.AccountID == "" || target.AccountID == accountID)
 }
+
+// Native SES deletion cannot create a Send event or local outcome. Other SES
+// operations and developer reload/outcome controls stay work-producing.
+func retainedSESDeletion(action string) bool {
+	return action == "DeleteConfigurationSet" || action == "DeleteConfigurationSetEventDestination"
+}

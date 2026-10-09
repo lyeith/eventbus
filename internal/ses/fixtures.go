@@ -28,8 +28,8 @@ type SESReceivedMessage struct {
 	Recipients []string  `json:"recipients" yaml:"recipients"`
 }
 
-// Fixtures supply sending prerequisites without pretending to implement SES's
-// management APIs or performing DNS checks, account changes, or email delivery.
+// Fixtures supply sending prerequisites. Configuration-set names seed the native
+// mutable registry; fixtures perform no DNS checks or external email delivery.
 type SESFixtures struct {
 	Templates                   map[string]SESTemplate                   `json:"templates" yaml:"templates"`
 	CustomVerificationTemplates map[string]SESCustomVerificationTemplate `json:"custom_verification_templates" yaml:"custom_verification_templates"`

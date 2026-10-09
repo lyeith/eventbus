@@ -130,7 +130,11 @@ func sesV1Write(w http.ResponseWriter, action, requestID string, output map[stri
 		if apiErr.Status >= 500 {
 			errType = "Receiver"
 		}
-		_ = sesV1Encode(encoder, "Error", map[string]any{"Type": errType, "Code": apiErr.Code, "Message": apiErr.Message})
+		details := map[string]any{"Type": errType, "Code": apiErr.Code, "Message": apiErr.Message}
+		for key, value := range apiErr.Fields {
+			details[key] = value
+		}
+		_ = sesV1Encode(encoder, "Error", details)
 		_ = sesV1Encode(encoder, "RequestId", requestID)
 		_ = encoder.EncodeToken(start.End())
 	} else {
@@ -797,6 +801,10 @@ func sesV1NormalizeQueryLists(action string, input map[string]any) {
 	}
 	destination := func(value any) { normalize(sesObject(value), "ToAddresses", "CcAddresses", "BccAddresses") }
 	switch action {
+	case "DescribeConfigurationSet":
+		normalize(input, "ConfigurationSetAttributeNames")
+	case "CreateConfigurationSetEventDestination", "UpdateConfigurationSetEventDestination":
+		normalize(sesObject(input["EventDestination"]), "MatchingEventTypes")
 	case "SendEmail", "SendTemplatedEmail", "SendBulkTemplatedEmail":
 		normalize(input, "ReplyToAddresses")
 		if action == "SendBulkTemplatedEmail" {

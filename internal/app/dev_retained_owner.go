@@ -144,7 +144,9 @@ func retainedCleanupHandler(router http.Handler) http.Handler {
 			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if r.ParseForm() == nil {
 				action, version := r.FormValue("Action"), r.FormValue("Version")
-				allowed := version == "2010-03-31" && (action == "DeleteTopic" || action == "Unsubscribe") || version == "2012-11-05" && retainedSQSDeletion(action)
+				allowed := version == "2010-03-31" && (action == "DeleteTopic" || action == "Unsubscribe") ||
+					version == "2012-11-05" && retainedSQSDeletion(action) ||
+					r.URL.Path == "/" && version == "2010-12-01" && retainedSESDeletion(action)
 				if allowed {
 					router.ServeHTTP(w, r)
 					return

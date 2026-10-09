@@ -94,7 +94,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("failed to open SES capture: %w", err)
 	}
-	sesManager := ses.NewSESManager(sesFixtures, capture)
+	sesManager := ses.NewSESManager(sesFixtures, capture, ses.WithEventPublisher(sesSNSPublisher{broker: broker}, cfg.region, cfg.accountID))
 	owned.ses = sesManager
 	cognitoLog := cfg.cognitoLog
 	if cognitoLog == "" {
@@ -215,6 +215,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		return fmt.Errorf("failed to configure Scheduler: %w", err)
 	}
 	owned.scheduler = schedules
+	sesHandler := ses.NewHandler(sesManager)
 	services := server.Services{
 		Messaging:      messaging.NewHandler(broker),
 		Lambda:         functionHandler,
@@ -224,14 +225,14 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		SSM:            ssm.NewHandler(ssmStore),
 		Secrets:        secrets.NewHandler(secretsStore, rotation),
 		Cognito:        cognito.NewHandler(cognitoStore, cognitoOptions),
-		SES:            ses.NewHandler(sesManager),
+		SES:            sesHandler,
 		CognitoURLs:    &server.CognitoURLs{Issuer: strings.TrimRight(cfg.issuerBase, "/"), JWKS: strings.TrimRight(jwksURL, "/")},
 		QueryBodyLimit: ses.QueryBodyLimit,
 	}
 	if retained != nil {
 		services = retainedServices(services)
 	}
-	var router http.Handler = server.New(services)
+	var router http.Handler = withDevSESOutcomes(server.New(services), sesHandler)
 	if functions != nil {
 		router = withDevLambdaReload(router, functions, cfg.lambdaFunctions, projectRoot)
 	}

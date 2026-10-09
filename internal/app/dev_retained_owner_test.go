@@ -126,6 +126,15 @@ func TestRetainedCleanupCannotRouteDeletionHeaderIntoNativeInvoke(t *testing.T) 
 		{"/", "", "Action=DeleteTopic&Version=2012-11-05", false},
 		{"/", "", "Action=DeleteTopic&Version=2010-03-31", true},
 		{"/queue/owned", "", "Action=DeleteMessageBatch&Version=2012-11-05", true},
+		{"/", "", "Action=DeleteConfigurationSet&Version=2010-12-01", true},
+		{"/", "", "Action=DeleteConfigurationSetEventDestination&Version=2010-12-01", true},
+		{"/", "", "Action=DeleteConfigurationSet&Version=2010-03-31", false},
+		{"/queue/owned", "", "Action=DeleteConfigurationSet&Version=2010-12-01", false},
+		{"/", "", "Action=CreateConfigurationSet&Version=2010-12-01", false},
+		{"/", "", "Action=UpdateConfigurationSetEventDestination&Version=2010-12-01", false},
+		{"/", "", "Action=SendEmail&Version=2010-12-01", false},
+		{"/__eventbus/dev/ses/outcomes", "", "Action=DeleteConfigurationSet&Version=2010-12-01", false},
+		{"/__eventbus/dev/lambda/functions/processor/reload", "", "Action=DeleteConfigurationSet&Version=2010-12-01", false},
 	} {
 		invoked = false
 		r := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
