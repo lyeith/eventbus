@@ -1,62 +1,60 @@
 # Handoff
 
-Canonical SSD /home/spite/Projects/eventbus, main. Published runtime remains
-v0.12.0 (tagged source 953ca65); no release change in this audit round.
-Previous tickets #30/#31/#32 remain implemented; see Git/release documentation.
+Canonical SSD /home/spite/Projects/eventbus, main. All second-round performance
+targets implemented; report docs/PERFORMANCE-IMPROVEMENTS-ROUND-2.md.
+Published runtime remains v0.12.0; this work verifies builds without publication.
 
-Completed second performance audit against main 1a842d1:
-docs/PERFORMANCE-AUDIT-ROUND-2.md leads with ranked remaining work and gives
-native measurements, exact owner boundaries, required contracts and reproduction.
-README links current and historical reports. Seven performance_round2_test.go
-files belong to devcapture, firehose, gateway, lambda, messaging, ses and ssm.
-Production source and dependencies are unchanged.
+Core changes:
+- SSM sorted index and cursor/prefix selection with hierarchy/mutation tests.
+- SNS lazy publication filter decoding and earliest FIFO expiry; expiry
+  mechanics shared with SQS, native acceptance/sequence rules remain separate.
+- Stream-owned Firehose timezone used by admission/build/error/retry paths.
+- SES scanning preserves line accounting without allocating a line index.
+- Lambda successful results encoded once; awsprotocol owns bounded length-hint
+  reads with oversize/read-error checks. Native callback behavior preserved.
+- Cognito decoded immutable keys, detached exports, generation outside mutex,
+  cancellation retry/deletion rollback/generation fencing/Close joins.
+- Gateway bounded same-identity flights; each current ARN evaluated, last
+  cancellation and shutdown join; native TTL-zero/overflow path retained.
 
-Strongest bounded targets:
-1. SSM ordered-name index/prefix-cursor selection: 10k SDK traversal 4.397s,
-   core 3.338s. Each current ten-item page rescans/sorts all names.
-2. SNS immutable filter inputs per publication: 100 destinations/64KiB body
-   124.020ms and 40.446MB allocated vs 31.310ms/7.796MB without filters.
-3. Firehose stream-owned prepared location: 500 records UTC 1.545ms,
-   Singapore 6.630ms, New York 10.214ms.
-Then: Lambda warm encode-once/bounded response capacity; SNS FIFO expiry;
-SES MIME line-index removal; gateway cached-identity in-flight coalescing.
-Gateway 16 forced misses caused 16 actual authorizer invocations; fresh/warm-
-cap-one bursts 719.401/70.697ms. This is controlled structural evidence.
-Do not equate separate workload timings or claim unmeasured speedups.
-
-Larger seam: Cognito triggers still launch Node each step (prior five-step
-median 895.680ms). App should compose a consumer-owned execution port into
-the trigger adapter backed by the existing Lambda managed execution owner.
-Preserve trigger-specific privacy, strict event validation, deadlines/output
-caps and actual joins; avoid a second pool or peer-package imports.
-Cognito key decoding remains uncached; immutable pool keys need deletion/
-generation invalidation and final account/revocation checks.
-Capture throughput 195–235 durable records/s on owned XFS is Sync-limited;
-more producers mostly add waiting. Any group commit must await actual durable
-completion and retain sticky failures, order, drain/Close and evidence.
+Execution/evidence seams:
+- Cognito event/response/deadline port composed by app into private Lambda
+  instance. Duplicate Node wrapper/process owner deleted. Fresh default,
+  separately capped warm option, private error/log limits, per-pool imports,
+  strict validation before reuse, retained drain/resume. Debug logs suppressed.
+- Capture bounded synchronous group commit: complete writes+covering Sync before
+  owned-file success, prefix Err/draining Close, sticky partial/Sync failures,
+  panic/Goexit cleanup. No background worker or delay.
+- SQS exact candidate encoding reused through immutable Batch payload; all app,
+  eventsource and tagged SDK consumers migrated. Original custody/ACK intact.
+- Async terminal ring; detached snapshots sort outside Service.mu.
 
 Verification:
-- Non-race owner measurements: messaging 14.342s, Firehose 0.531s,
-  Lambda 10.632s incl isolated benchmarks, SSM 23.398s, gateway 5.800s,
-  capture 1.991s, SES 1.514s. All native assertions passed.
-- Runtime API 4MiB attribution: ReadAll 90.71% sampled allocation space;
-  required JSON validation 73.28% cumulative CPU. Profiles removed.
-- Scoped new-fixture races: capture 4.422s, Firehose 3.137s, gateway 9.296s,
-  Lambda 60.725s, messaging 110.069s, SES 20.455s.
-- Initial SSM race 30s SDK deadline failed; instrumentation magnified known
-  store cost. -short now runs one full traversal, bounded 2m context and exact
-  page-count guards; all sizes/paths passed in 51.332s.
-- Final FIFO fixture race 19.067s after moving fatal assertions outside locks.
-- Performance-tag vet across all seven owners and formatting/diff checks passed.
-- Independent fixture/report review accepted after bounded failure paths and
-  precise warm-serialization/store-timing/native-deny-cache wording.
-- Full SDK suite/release rebuild not rerun: production behavior unchanged.
+- Full Go race run passed all unchanged owners including Cognito 342.741s,
+  gateway 17.813s, messaging 6.608s and architecture. New app deadline fixtures
+  were corrected to actual startup/warm gates; full app rerun 38.740s passed.
+- Lambda new serialization fixture corrected to Promise-resolved undefined;
+  final affected suite 14.167s passed; full remaining Lambda tests passed earlier.
+- Independent review caught private sync-undefined becoming timeout; shared
+  private hook restored direct-return/Promise contract with fresh/warm proof.
+- Full SDK race 302.197s incl fresh/warm auth and unchanged handlers.
+- Full retained SDK/RustFS 28.085s; unchanged Express/Swagger 10.527s.
+- All-tag vet passed; Python fixture contracts: five tests passed; gofmt/diff clean.
+- Serial non-race measurements passed. Initial Python perf omission was
+  explicitly rerun with frozen interpreter; earlier Node/bench results retained.
+- Baseline archives resolved snapshot/cold timing variance. Snapshot totals
+  comparable; cold trigger paired 936→930ms, warm steady 34–40ms.
+- Eight release binaries built+SHA256 checked, both native help proofs passed.
 
-Cleanup: private fixtures, actual children/listeners and profiles joined/removed;
-no temporary worktree, dependency, default DB or live stack change.
-Raw logs in /tmp/eventbus-audit-round2-*-20261009.log have existing 24h retention.
-Failure receipt 52df5492 verified quiescent/unpinned; expiry Oct10 14:36:28 UTC.
-Previous release receipt 4eaefff6 expires13:43:54 UTC; S3 failures 779b0793/
-20a07398 expire 13:26:28/13:27:22 UTC on Oct10. Success scratch auto-removes.
-Preserve unrelated laptop Plans changes. Remaining optimizations are proposals,
-not implemented behavior; this audit's requested work is complete.
+Report includes caveats: first warm imports, separate capacity, unchanged
+single-producer Sync counts, host timing variation, detached RSA export cost
+0.65–0.68ms while native crypto paths borrow cached immutable keys.
+
+Cleanup: owned children/listeners/archives/build artifacts removed; no worktree,
+dependency, default DB or live-stack change. Raw logs have existing 24h expiry.
+Failure receipts 3d134fe1/e5ed6c12/3c325bb6/30b9ae5a quiescent/unpinned,
+expire Oct10 15:01/15:06/15:18/15:22 UTC.
+Host wrapper finalization errors a33970dd/31f8660f/e257c705 followed completed
+Go/doc work; quiescent trees and disposable scratch removed, orphan metadata
+reconciles under existing 24h+24h policy. No host framework changes.
+No pending audit implementation. Preserve unrelated laptop Plans edits.

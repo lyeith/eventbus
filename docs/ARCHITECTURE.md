@@ -17,7 +17,7 @@ internal/
   gateway/               REST/HTTP API REQUEST events, IAM/simple responses and HTTP/Lambda proxy
   lambda/                App-owned multi-language execution, Invoke/Runtime API and child lifetime
   cognito/               SQLite identities, lifecycle, shared challenge state, SRP/auth and JWT/JWKS
-  cognitotrigger/        Application-owned Node trigger execution and child lifetime
+  cognitotrigger/        Configured trigger events, responses, deadlines and execution port
   messaging/             Shared registry; separate queue and topic engines/adapters
   eventsource/           Native SQS mapping state, bounded workers and completion-based ack
   sqsevent/              Shared native SQS Lambda wire types
@@ -80,21 +80,33 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   Messaging applies the Lambda event byte budget before leasing queue records.
   Optional `dev_delivery.go` correlates observed native Lambda identity with
   queue-owned receipt classifications; it cannot infer a join or business success.
-- `sqsevent` owns shared SQS Lambda wire types. Messaging owns projection from
-  immutable receive snapshots. Both native mappings and dev consumers use it.
+- `sqsevent` owns shared SQS Lambda wire types and immutable encoded batches.
+  Messaging projects detached snapshots and encodes each candidate once for exact
+  byte admission before leasing it. Native mappings dispatch that admitted payload;
+  dev consumers retain their event-only view.
 - `consumer` declares its `QueueBroker` port and uses messaging's queue/message
   types. It owns dev subprocess recipes, batch responses, retries and dead letters.
   Contextual polling cancels promptly; ownership faults fence further launches,
   remain sticky through Wait, and prevent shutdown from releasing dependencies.
   Ordinary handler failures keep their existing retry/dead-letter policy.
 - `cognito` declares its TriggerInvoker port and owns challenge state and decisions.
-  `cognitotrigger` executes configured app handlers; it imports no Cognito package.
-  `app` injects and joins the runner before releasing stores/capture.
+  `cognitotrigger` owns configuration, strict serialized responses, admission and
+  deadlines through its consumer-owned Execution port. `app` maps configured
+  handlers to a private instance of Lambda's runtime implementation and joins it
+  before releasing stores/capture. It exposes no private native Invoke targets.
+  Fresh execution is default; optional trigger `dev_warm` uses separately bounded
+  capacity, per-pool imports and the same managed worker/drain owner.
+  Cognito's `signing_keys.go` owns immutable decoded keys and coalesced first-use
+  generation outside the store lock. Committed pool deletion invalidates keys and
+  pending generations; exported RSA snapshots detach mutable state.
   Store bootstrap owns one transaction for schema/identity/verification setup;
   the `dev_seed_store.go` adapter uses the native credential owner.
 - `gateway` consumes authorizers only through AWS Lambda Invoke HTTP. It knows no
   application policy, identity, private route format or database. Apps configure
   opaque context mappings and credential removal.
+  Cache-enabled same-identity misses share a bounded, joined flight. Each waiter
+  evaluates the returned policy against its own ARN; cancellation cannot release
+  a peer's work. TTL-zero and overflow callers retain direct native execution.
   Its development continuation ingress uses the same native handlers and auth;
   exclusive private-port ownership is an explicit harness trust assumption.
 - `lambda` owns execution and runtime protocol; application handlers own policy.
@@ -105,7 +117,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   native results/retries and redacted async metadata keep their existing contracts.
   `dev_python_stacks.go` and its Python collector own bounded live wait snapshots
   in that same sink; live evidence cannot attest invocation join or business success.
-  `async.go` owns capture transitions separately from the shared service mutex.
+  `async.go` owns capture transitions separately from the shared service mutex,
+  bounded terminal-history ring retention and snapshot sorting outside that mutex.
   Pending admissions count capacity/activity before capture but cannot execute
   or publish queued state until durable acceptance. Drain joins workers, pending
   admissions and terminal capture; fencing/cancellation never waits on capture I/O.
@@ -119,8 +132,11 @@ and [ticket ownership](ISSUE-TRIAGE.md).
 - `awsprotocol` holds reusable wire helpers, without service state. Callers own
   protocol admission and body budgets; over-budget bodies must fail, never truncate.
   SES/Cognito/SQS retain distinct serializers, size limits and error envelopes.
-- `devcapture` owns file/borrowed-writer lifetime, serialized JSONL append, fsync
-  and terminal write failure. Services own schemas, timestamps and acceptance.
+- `devcapture` owns file/borrowed-writer lifetime, ordered JSONL append, bounded
+  synchronous group commit and sticky failures. Already waiting records can share
+  a real Sync without a timer or background worker; owned-file success awaits its
+  covering Sync. Err joins its admitted prefix; Close fences and drains admission
+  before joining file closure. Services own schemas, timestamps and acceptance.
 - `devquiescence` owns the process-exclusive source fence, counted HTTP envelopes,
   non-expiring gateway leases, declared cleanup epochs, held proof and resume.
   `devactivity` owns optional source/descendant ports, not service policy. Native
@@ -129,7 +145,7 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   Applications own callback configuration, authentication and exact cleanup.
   No PID/grace-period proof replaces join; business success stays an app assertion.
 - `localexec` owns OS process groups, cancellation, retained-pipe bounds,
-  descendant cleanup and capped output buffers. Lambda, triggers and consumers
+  descendant cleanup and capped output buffers. Lambda and dev consumers
   own their protocols, results, deadlines, environment and retries; each runner
   must Wait its directly launched child. Output-copy completion must also be
   checked independently: Go can hide a forced pipe cutoff behind a nonzero exit
@@ -161,11 +177,14 @@ private. Application acceptance behavior belongs in the consuming application.
 | MFA enrollment and preferences | Cognito `mfa_store.go` owns atomic authorization and exact-secret promotion; HTTP maps refusals |
 | Shared challenge continuation state | Cognito `challenge_state.go`; custom trigger decisions stay in `custom_auth.go` |
 | Password policy and credential revision | Cognito `password_policy.go` and store lifecycle; keep existing distinct error formatting |
+| SQS/SNS dedup expiry | Messaging `dedup_expiry.go` shares conservative earliest-expiry bookkeeping; queue/topic owners retain native identity and sequence policy |
 | SQS expiry, native deletion and field projection | Messaging queue/receipt owners preserve leases, strict settlement and detached views; no peer reads private state |
-| Firehose prepared queries and buffered delivery | Stream owns immutable jq execution plans and quota counters; flush owner builds outside the admission lock and publishes its captured prefix atomically |
-| Static gateway mappings and redactions | Gateway compiles immutable recipe plans once, then owns fresh per-request mutable output |
+| SSM ordered names | Store mutates its name index with versions; pagination selects raw-name prefix/cursor ranges |
+| SNS filter inputs | Each publication lazily owns decoded attributes/selected bodies; subscription policy remains SNS-owned |
+| Firehose prepared queries/timezones and buffered delivery | Stream owns immutable jq plans, timezone and quota counters; flush owner builds outside the admission lock and publishes its captured prefix atomically |
+| Static gateway mappings and authorizer flights | Gateway owns immutable compiled recipes/cache entries, bounded joined flights and per-caller ARN decisions |
 | Secret identity and rotation generations | SecretsStore indexes name/canonical ARN to one state; rotation binds the resolved ARN before external validation |
-| SQS Lambda wire records and projection | `sqsevent` owns types; messaging owns snapshots, leases and settlement |
+| SQS Lambda wire records and encoded batches | `sqsevent` owns framing; messaging owns snapshots, exact admission, leases and settlement; eventsource reuses admitted bytes |
 | Synchronous completion and asynchronous admission adapters | `app`; narrow consumer ports retain service policy, Lambda owns children |
 | Fixture provisioning and local recipe loading | Named `dev_*.go` adapters; test-only store mutation helpers stay in `_test.go` |
 | Opt-in performance observation summaries | `testperf`; service fixtures own native workloads, sample order and correctness checks |
@@ -184,7 +203,7 @@ owners. Do not merge these policies into a generic runner or wire decoder.
 | REQUEST formats, policy/simple decisions, Lambda/HTTP proxy, cache and upgrade lifetime | `internal/gateway` tests |
 | Lambda Invoke, Runtime API, language handlers, child cleanup and private diagnostics | `internal/lambda` tests; actual native SDK evidence lane in `tests/sdk` |
 | Store, validation, capture, filtering or operation behavior | Colocated service tests; real SQLite for Cognito |
-| Node custom trigger configuration, execution, deadlines and child cleanup | `internal/cognitotrigger` tests |
+| Custom trigger configuration, strict response and execution-port lifetime | `internal/cognitotrigger` tests; actual Node fresh/warm/private-runtime composition in `internal/app` |
 | SQS mapping validation, polling, acknowledgment, correlated evidence and join barriers | `internal/eventsource` tests; queue-owned classifications in messaging; real Python SDK in `tests/sdk` |
 | Consumer configuration, process execution or settlement | `internal/consumer` tests |
 | Target/path selection, health or protocol fallback | `internal/server` tests with composed service handlers |

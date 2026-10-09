@@ -1,5 +1,8 @@
 # Performance audit: second round
 
+Implementation and comparison: [second-round improvements](PERFORMANCE-IMPROVEMENTS-ROUND-2.md).
+The measurements and recommendations below describe the pre-change baseline.
+
 9 October 2026. Runtime baseline: `main 1a842d1` (published v0.12.0 runtime).
 This round adds opt-in measurements and ranks work; it changes no production
 behavior, dependencies or release binaries. The [previous audit](PERFORMANCE-AUDIT.md)

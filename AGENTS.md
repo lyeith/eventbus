@@ -42,12 +42,15 @@ before configuring endpoints or cleaning fixtures.
   FIFO and redrive; Lambda owns execution. Close mappings before the runtime.
 - `internal/consumer` owns dev recipes, process execution and recipe settlement
   through QueueBroker. It does not implement native event-source mappings.
-- `internal/sqsevent` owns SQS Lambda wire types; messaging projects receive
-  snapshots for both consumer paths. Keep queue state private.
+- `internal/sqsevent` owns SQS Lambda wire types and encoded batches; messaging
+  owns exact byte admission and detached receive snapshots. Native mappings reuse
+  the admitted payload; keep queue state private.
 - `internal/cognito` owns lifecycle, SRP and persisted challenge decisions; its
   TriggerInvoker port receives an application-owned runner from `internal/app`.
-- `internal/cognitotrigger` owns Node execution, deadlines and child cleanup;
-  it imports no Cognito service. Apps own handler policy and dependencies.
+- `internal/cognitotrigger` owns configured events, strict responses, admission
+  and deadlines through its Execution port. `app` composes a private Lambda
+  runtime instance; Lambda owns fresh/warm Node execution and child cleanup.
+  Apps own handler policy and dependencies. Private triggers have no Invoke route.
 - `internal/gateway` owns generic REQUEST-authorizer and HTTP proxy contracts;
   applications own authorizers and all private integration mappings. It imports
   no consuming application package or store.
@@ -57,7 +60,8 @@ before configuring endpoints or cleaning fixtures.
   and [private Lambda diagnostics](docs/LAMBDA.md#private-invocation-diagnostics)
   use actual native request IDs and joined lifetimes. Keep diagnostics private;
   runtime success is not business success and uncertainty never attests completion.
-- Shared mechanics have one owner: `devcapture` for durable JSONL sinks,
+- Shared mechanics have one owner: `devcapture` for bounded synchronous JSONL
+  group commit (every successful owned-file append awaits its covering Sync),
   `localexec` for process groups/descendants and capped output, `awsprotocol`
   for wire mechanics.
   Services keep schemas, admission, result policies and native validation.

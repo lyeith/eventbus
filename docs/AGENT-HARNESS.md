@@ -57,7 +57,8 @@ remain outside the profile; see the guide for exact refusals and endpoint settin
 
 For custom SRP/email MFA, pass `--cognito-triggers <path> --work-dir <app-root>`
 with the app-owned Node handlers and declared local SES endpoint/credentials.
-[Custom triggers](CUSTOM-TRIGGERS.md) documents the execution contract.
+[Custom triggers](CUSTOM-TRIGGERS.md) documents the execution contract and
+optional separately bounded warm trigger workers.
 
 An SDK endpoint override changes where real SDK requests go. Use the
 application's existing SDK and configuration; EventBus does not install client
