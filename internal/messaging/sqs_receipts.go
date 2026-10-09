@@ -56,21 +56,50 @@ func pruneSQSReceiptsLocked(q *Queue, now time.Time) {
 // consumers share the same locked settlement; previously issued stale handles
 // may be accepted as HTTP no-ops, but cannot delete a later lease.
 func (b *Broker) DeleteMessage(q *Queue, receipt string) bool {
+	settled, _ := b.deleteSQSReceipt(q, receipt)
+	return settled
+}
+
+// deleteSQSReceipt owns native deletion mechanics for typed and HTTP callers.
+// Exact current settlement needs no unrelated queue-wide scans. Noncurrent
+// receipts retain the existing redrive/expiry transitions before deciding the
+// AWS issued-stale no-op. The adapter chooses whether that no-op is success.
+func (b *Broker) deleteSQSReceipt(q *Queue, receipt string) (bool, *sqsError) {
+	if q == nil {
+		return false, newSQSError("QueueDoesNotExist", "The specified queue does not exist")
+	}
+	q.mu.Lock()
 	now := time.Now()
+	if q.deleted {
+		q.mu.Unlock()
+		return false, newSQSError("QueueDoesNotExist", "The specified queue does not exist")
+	}
+	if settleCurrentSQSReceiptLocked(q, receipt, sqsReceiptNativeSettlement, now) {
+		q.mu.Unlock()
+		return true, nil
+	}
+	q.mu.Unlock()
+
 	b.redriveExpiredSQS(q, now)
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	pruneQueueLocked(q, time.Now())
-	return deleteCurrentSQSReceiptLocked(q, receipt)
+	now = time.Now()
+	pruneQueueLocked(q, now)
+	if q.deleted {
+		return false, newSQSError("QueueDoesNotExist", "The specified queue does not exist")
+	}
+	if settleCurrentSQSReceiptLocked(q, receipt, sqsReceiptNativeSettlement, now) {
+		return true, nil
+	}
+	if issued, known := q.receipts[receipt]; known && now.Before(issued.Expires) {
+		return false, nil
+	}
+	return false, newSQSError("ReceiptHandleIsInvalid", "The receipt handle is invalid")
 }
 
 func currentSQSReceiptLocked(q *Queue, receipt string, now time.Time) (*Message, bool) {
 	message := q.inFlight[receipt]
 	return message, message != nil && now.Before(message.VisibleAt) && (q.RetentionPeriod <= 0 || now.Before(message.SentTimestamp.Add(q.RetentionPeriod)))
-}
-
-func deleteCurrentSQSReceiptLocked(q *Queue, receipt string) bool {
-	return settleCurrentSQSReceiptLocked(q, receipt, sqsReceiptNativeSettlement, time.Now())
 }
 
 func settleCurrentSQSReceiptLocked(q *Queue, receipt string, origin sqsReceiptSettlement, now time.Time) bool {

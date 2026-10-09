@@ -79,13 +79,14 @@ func (b *Broker) receiveSQSLambdaEventContext(ctx context.Context, queue *Queue,
 		return event, errors.New("invalid SQS Lambda event byte budget")
 	}
 	used := len(emptyPayload)
+	region := sqsRegionFromARN(queue.ARN)
 	var admissionErr error
 	admit := func(candidate *Message) bool {
 		if err := ctx.Err(); err != nil {
 			admissionErr = err
 			return false
 		}
-		record := BuildSQSLambdaEvent([]*Message{candidate}, queue.ARN).Records[0]
+		record := buildSQSLambdaRecord(candidate, queue.ARN, region)
 		payload, err := json.Marshal(record)
 		if err != nil {
 			admissionErr = err
@@ -109,11 +110,11 @@ func (b *Broker) receiveSQSLambdaEventContext(ctx context.Context, queue *Queue,
 		event.Records = append(event.Records, record)
 		return true
 	}
-	_, failure := b.receiveSQSWithOwnership(ctx, queue, max, wait, nil, "", admit, ownedOnly && queue.devCustody != nil)
+	selected, failure := b.receiveSQSWithOwnership(ctx, queue, max, wait, nil, "", admit, sqsReceiveOptions{ownedOnly: ownedOnly && queue.devCustody != nil})
 	if failure != nil {
 		return event, ErrQueueUnavailable
 	}
-	if len(event.Records) != 0 {
+	if selected.count != 0 {
 		return event, nil
 	}
 	if err := ctx.Err(); err != nil {

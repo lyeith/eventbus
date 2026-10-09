@@ -2,9 +2,7 @@ package messaging
 
 import (
 	"context"
-	"crypto/md5"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net/url"
@@ -31,6 +29,7 @@ type Queue struct {
 	deleted                                 bool
 	receipts                                map[string]sqsReceipt
 	dedup                                   map[string]sqsDedupEntry
+	dedupExpiry                             time.Time
 	attempts                                map[string]sqsReceiveAttempt
 	sequence                                uint64
 	lastFairGroup                           string
@@ -239,10 +238,7 @@ func (b *Broker) SendQueueMessage(q *Queue, input QueueMessageInput) (QueueSendR
 	}
 	result := QueueSendResult{MD5OfMessageBody: md5Body(input.Body), MD5OfMessageAttributes: md5Attributes(input.Attributes), MD5OfMessageSystemAttributes: md5Attributes(input.SystemAttributes)}
 	now := time.Now()
-	dedupKey := input.MessageDeduplicationID
-	if q.Attributes["DeduplicationScope"] == "messageGroup" {
-		dedupKey = input.MessageGroupID + "\x00" + dedupKey
-	}
+	dedupKey := sqsDedupKeyLocked(q, input.MessageGroupID, input.MessageDeduplicationID)
 	if q.fifoLocked() {
 		if existing, ok := q.dedup[dedupKey]; ok && now.Before(existing.Expires) {
 			result.MessageID = existing.ID
@@ -255,13 +251,8 @@ func (b *Broker) SendQueueMessage(q *Queue, input QueueMessageInput) (QueueSendR
 		return QueueSendResult{}, err
 	}
 	if q.fifoLocked() {
-		for key, entry := range q.dedup {
-			if !now.Before(entry.Expires) {
-				delete(q.dedup, key)
-			}
-		}
 		result.SequenceNumber = q.nextSequenceLocked()
-		q.dedup[dedupKey] = sqsDedupEntry{ID: result.MessageID, Sequence: result.SequenceNumber, Expires: now.Add(5 * time.Minute)}
+		rememberSQSDedupLocked(q, dedupKey, result.MessageID, result.SequenceNumber, now)
 	}
 	sender := input.SenderID
 	if sender == "" {
@@ -272,36 +263,43 @@ func (b *Broker) SendQueueMessage(q *Queue, input QueueMessageInput) (QueueSendR
 	notifyQueueLocked(q)
 	return result, nil
 }
-func md5Body(body string) string { sum := md5.Sum([]byte(body)); return hex.EncodeToString(sum[:]) }
-func md5Attributes(attributes map[string]MessageAttribute) string {
-	if len(attributes) == 0 {
-		return ""
+
+func sqsDedupKeyLocked(q *Queue, group, id string) string {
+	if q.Attributes["DeduplicationScope"] == "messageGroup" {
+		return group + "\x00" + id
 	}
-	names := make([]string, 0, len(attributes))
-	for name := range attributes {
-		names = append(names, name)
+	return id
+}
+
+// dedupExpiry is a conservative lower bound: replacing an entry can leave an
+// earlier bound, but no insertion can move the bound later. Unknown bounds
+// sweep once; a due sweep recomputes the exact earliest remaining expiry.
+func pruneSQSDedupLocked(q *Queue, now time.Time) {
+	if !q.dedupExpiry.IsZero() && now.Before(q.dedupExpiry) {
+		return
 	}
-	sort.Strings(names)
-	hash := md5.New()
-	encode := func(value []byte) {
-		var length [4]byte
-		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
-		_, _ = hash.Write(length[:])
-		_, _ = hash.Write(value)
-	}
-	for _, name := range names {
-		attribute := attributes[name]
-		encode([]byte(name))
-		encode([]byte(attribute.DataType))
-		if strings.SplitN(attribute.DataType, ".", 2)[0] == "Binary" {
-			_, _ = hash.Write([]byte{2})
-			encode(attribute.BinaryValue)
-		} else {
-			_, _ = hash.Write([]byte{1})
-			encode([]byte(attribute.StringValue))
+	q.dedupExpiry = time.Time{}
+	for key, entry := range q.dedup {
+		if !now.Before(entry.Expires) {
+			delete(q.dedup, key)
+			continue
+		}
+		if q.dedupExpiry.IsZero() || entry.Expires.Before(q.dedupExpiry) {
+			q.dedupExpiry = entry.Expires
 		}
 	}
-	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func rememberSQSDedupLocked(q *Queue, key, id, sequence string, now time.Time) {
+	pruneSQSDedupLocked(q, now)
+	if q.dedup == nil {
+		q.dedup = make(map[string]sqsDedupEntry)
+	}
+	expiry := now.Add(5 * time.Minute)
+	q.dedup[key] = sqsDedupEntry{ID: id, Sequence: sequence, Expires: expiry}
+	if q.dedupExpiry.IsZero() || expiry.Before(q.dedupExpiry) {
+		q.dedupExpiry = expiry
+	}
 }
 
 // pruneQueueLocked owns retention and visibility transitions; a receive never
@@ -317,6 +315,7 @@ func pruneQueueLocked(q *Queue, now time.Time) int {
 			changed = true
 		}
 	}
+	clear(q.messages[len(waiting):])
 	q.messages = waiting
 	count := 0
 	for handle, message := range q.inFlight {
@@ -362,10 +361,20 @@ func (b *Broker) RequeueExpired(q *Queue) int {
 	return pruneQueueLocked(q, now)
 }
 
+type sqsReceiveOptions struct {
+	ownedOnly       bool
+	nativeSnapshots bool
+}
+
+type sqsReceiveResult struct {
+	messages []*Message // Detached native snapshots, only when requested.
+	count    int        // Actual leases, independent of their wire projection.
+}
+
 // admission observes a prospective native receive snapshot before its receipt,
 // count or visibility is committed. Lambda batch byte admission uses this same
 // FIFO/fairness owner; ordinary SQS receives pass nil and keep their wire flow.
-func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration, now time.Time, admission func(*Message) bool) []*Message {
+func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration, now time.Time, admission func(*Message) bool, snapshots bool) sqsReceiveResult {
 	fifo := q.fifoLocked()
 	blocked := make(map[string]bool)
 	if fifo {
@@ -373,7 +382,7 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 			blocked[message.GroupID] = true
 		}
 	}
-	var result []*Message
+	var result sqsReceiveResult
 	// Queue.mu exclusively owns this slice. In-place stable compaction only
 	// writes behind the current read index; returned delivery values are copies.
 	candidates := q.messages
@@ -385,7 +394,7 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 		})
 	}
 	for index, message := range candidates {
-		if len(result) >= max {
+		if result.count >= max {
 			remaining = append(remaining, candidates[index:]...)
 			break
 		}
@@ -418,7 +427,10 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 		q.inFlight[message.ReceiptHandle] = message
 		issueSQSReceiptLocked(q, message)
 		q.lastFairGroup = message.GroupID
-		result = append(result, cloneMessage(message))
+		result.count++
+		if snapshots {
+			result.messages = append(result.messages, cloneMessage(message))
+		}
 	}
 	// The reused backing array must not retain selected/settled messages beyond
 	// the waiting slice. In-flight ownership lives in q.inFlight independently.
@@ -444,23 +456,24 @@ func (b *Broker) receiveSQS(ctx context.Context, q *Queue, max int, wait time.Du
 }
 
 func (b *Broker) receiveSQSWithAdmission(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string, admission func(*Message) bool) ([]*Message, *sqsError) {
-	return b.receiveSQSWithOwnership(ctx, q, max, wait, visibility, attempt, admission, false)
+	result, failure := b.receiveSQSWithOwnership(ctx, q, max, wait, visibility, attempt, admission, sqsReceiveOptions{nativeSnapshots: true})
+	return result.messages, failure
 }
 
-func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string, admission func(*Message) bool, ownedOnly bool) ([]*Message, *sqsError) {
+func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string, admission func(*Message) bool, options sqsReceiveOptions) (sqsReceiveResult, *sqsError) {
 	deadline := time.Now().Add(wait)
 	for {
 		now := time.Now()
-		if ownedOnly {
+		if options.ownedOnly {
 			q.mu.Lock()
 			empty := !hasDevSQSCustodyLocked(q)
 			deleted := q.deleted
 			q.mu.Unlock()
 			if deleted {
-				return nil, newSQSError("QueueDoesNotExist", "Queue does not exist")
+				return sqsReceiveResult{}, newSQSError("QueueDoesNotExist", "Queue does not exist")
 			}
 			if empty {
-				return nil, nil
+				return sqsReceiveResult{}, nil
 			}
 		} else {
 			b.advanceSQSMessageMoveTasks(now)
@@ -469,12 +482,12 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 		q.mu.Lock()
 		if q.deleted {
 			q.mu.Unlock()
-			return nil, newSQSError("QueueDoesNotExist", "Queue does not exist")
+			return sqsReceiveResult{}, newSQSError("QueueDoesNotExist", "Queue does not exist")
 		}
 		pruneQueueLocked(q, now)
-		if ownedOnly && !hasDevSQSCustodyLocked(q) {
+		if options.ownedOnly && !hasDevSQSCustodyLocked(q) {
 			q.mu.Unlock()
-			return nil, nil
+			return sqsReceiveResult{}, nil
 		}
 		timeout := q.VisibilityTimeout
 		if visibility != nil {
@@ -484,7 +497,7 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 			if cached, ok := q.attempts[attempt]; ok {
 				if cached.Invalid {
 					q.mu.Unlock()
-					return nil, newSQSError("InvalidParameterValue", "ReceiveRequestAttemptId has been modified")
+					return sqsReceiveResult{}, newSQSError("InvalidParameterValue", "ReceiveRequestAttemptId has been modified")
 				}
 				selected := make([]*Message, 0, len(cached.Handles))
 				for i, handle := range cached.Handles {
@@ -499,7 +512,7 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 					}
 					if message == nil {
 						q.mu.Unlock()
-						return nil, newSQSError("InvalidParameterValue", "ReceiveRequestAttemptId has been modified")
+						return sqsReceiveResult{}, newSQSError("InvalidParameterValue", "ReceiveRequestAttemptId has been modified")
 					}
 					selected = append(selected, message)
 				}
@@ -519,47 +532,48 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 						remaining = append(remaining, message)
 					}
 				}
+				clear(q.messages[len(remaining):])
 				q.messages = remaining
 
 				q.mu.Unlock()
-				return result, nil
+				return sqsReceiveResult{messages: result, count: len(selected)}, nil
 			}
 		}
 		candidateSeen := false
 		choose := admission
-		if admission != nil || ownedOnly {
+		if admission != nil || options.ownedOnly {
 			choose = func(candidate *Message) bool {
-				if ownedOnly && !ownsDevSQSMessageLocked(q, candidate.ID) {
+				if options.ownedOnly && !ownsDevSQSMessageLocked(q, candidate.ID) {
 					return false
 				}
 				candidateSeen = true
 				return admission == nil || admission(candidate)
 			}
 		}
-		messages := collectVisibleForReceiveLocked(q, max, timeout, now, choose)
-		if len(messages) > 0 {
+		result := collectVisibleForReceiveLocked(q, max, timeout, now, choose, options.nativeSnapshots || attempt != "")
+		if result.count > 0 {
 			if attempt != "" {
-				handles := make([]string, len(messages))
-				ids := make([]string, len(messages))
-				for i, message := range messages {
+				handles := make([]string, len(result.messages))
+				ids := make([]string, len(result.messages))
+				for i, message := range result.messages {
 					handles[i] = message.ReceiptHandle
 					ids[i] = message.ID
 				}
 				q.attempts[attempt] = sqsReceiveAttempt{Handles: handles, IDs: ids, Expires: now.Add(5 * time.Minute)}
 			}
 			q.mu.Unlock()
-			return messages, nil
+			return result, nil
 		}
 		// A consumer byte budget that rejects every eligible candidate is a
 		// completed bounded receive, not an empty queue to repeatedly long poll.
 		if candidateSeen || wait <= 0 || !now.Before(deadline) {
 			q.mu.Unlock()
-			return nil, nil
+			return sqsReceiveResult{}, nil
 		}
 		wake := q.notify
 		until := deadline.Sub(now)
 		retentionWake := func(message *Message) {
-			if ownedOnly && q.RetentionPeriod > 0 {
+			if options.ownedOnly && q.RetentionPeriod > 0 {
 				remaining := message.SentTimestamp.Add(q.RetentionPeriod).Sub(now)
 				if remaining > 0 && remaining < until {
 					until = remaining
@@ -583,7 +597,7 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, nil
+			return sqsReceiveResult{}, nil
 		case <-wake:
 			timer.Stop()
 		case <-timer.C:

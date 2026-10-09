@@ -452,21 +452,8 @@ func (s *Handler) deleteSQSReceipt(q *Queue, handle string) *sqsError {
 	if handle == "" {
 		return newSQSError("MissingParameter", "ReceiptHandle is required")
 	}
-	now := time.Now()
-	s.broker.redriveExpiredSQS(q, now)
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	pruneQueueLocked(q, time.Now())
-	if q.deleted {
-		return newSQSError("QueueDoesNotExist", "The specified queue does not exist")
-	}
-	if deleteCurrentSQSReceiptLocked(q, handle) {
-		return nil
-	}
-	if _, issued := q.receipts[handle]; issued {
-		return nil
-	}
-	return newSQSError("ReceiptHandleIsInvalid", "The receipt handle is invalid")
+	_, failure := s.broker.deleteSQSReceipt(q, handle)
+	return failure
 }
 func (s *Handler) changeSQSVisibility(q *Queue, handle string, seconds *int) *sqsError {
 	if handle == "" || seconds == nil {
@@ -597,22 +584,7 @@ func (s *Handler) receiveSQSResponse(ctx context.Context, q *Queue, input sqsReq
 	}
 	result := make([]map[string]any, 0, len(messages))
 	for _, msg := range messages {
-		values := map[string]string{"SenderId": msg.SenderID, "SentTimestamp": strconv.FormatInt(msg.SentTimestamp.UnixMilli(), 10), "ApproximateReceiveCount": strconv.Itoa(msg.ReceiveCount), "ApproximateFirstReceiveTimestamp": strconv.FormatInt(msg.FirstReceivedAt.UnixMilli(), 10)}
-		if msg.GroupID != "" {
-			values["MessageGroupId"] = msg.GroupID
-		}
-		if msg.DeduplicationID != "" {
-			values["MessageDeduplicationId"] = msg.DeduplicationID
-		}
-		if msg.SequenceNumber != "" {
-			values["SequenceNumber"] = msg.SequenceNumber
-		}
-		if msg.OriginalSourceARN != "" {
-			values["DeadLetterQueueSourceArn"] = msg.OriginalSourceARN
-		}
-		if trace, ok := msg.SystemAttributes["AWSTraceHeader"]; ok {
-			values["AWSTraceHeader"] = trace.StringValue
-		}
+		values := sqsMessageSystemValues(msg)
 		selected := make(map[string]string)
 		for _, name := range systemNames {
 			if name == "All" {

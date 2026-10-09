@@ -687,18 +687,14 @@ func (b *Broker) sqsMoveOneLocked(task *sqsMoveTask, source *Queue, now time.Tim
 		// New enqueue identity prevents deduplication of independently redriven items.
 		msg.DeduplicationID = selected.ID
 		msg.SequenceNumber = destination.nextSequenceLocked()
-		dedupKey := msg.DeduplicationID
-		if destination.Attributes["DeduplicationScope"] == "messageGroup" {
-			dedupKey = msg.GroupID + "\x00" + dedupKey
-		}
-		if destination.dedup == nil {
-			destination.dedup = make(map[string]sqsDedupEntry)
-		}
-		destination.dedup[dedupKey] = sqsDedupEntry{ID: msg.ID, Sequence: msg.SequenceNumber, Expires: now.Add(5 * time.Minute)}
+		dedupKey := sqsDedupKeyLocked(destination, msg.GroupID, msg.DeduplicationID)
+		rememberSQSDedupLocked(destination, dedupKey, msg.ID, msg.SequenceNumber, now)
 	}
 	delay, _ := strconv.Atoi(destination.Attributes["DelaySeconds"])
 	msg.VisibleAt = now.Add(time.Duration(delay) * time.Second)
-	source.messages = append(source.messages[:index], source.messages[index+1:]...)
+	copy(source.messages[index:], source.messages[index+1:])
+	source.messages[len(source.messages)-1] = nil
+	source.messages = source.messages[:len(source.messages)-1]
 	destination.messages = append(destination.messages, &msg)
 	releaseDevSQSMessageLocked(source, selected.ID)
 	notifyQueueLocked(source)
