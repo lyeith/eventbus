@@ -93,9 +93,9 @@ environment and timeout share imports within a pool. Different pools are
 isolated. Module state persists in warm mode, so handlers must reset per-call
 state and await work.
 
-Config/environment changes require reconfiguration or restart. Module edits become
-visible after actual worker retirement, using retained quiesce/resume or restart.
-Public Lambda reload controls do not expose these private targets.
+Config/environment changes require reconfiguration or restart.
+[Selected source reload](#development-source-reload) refreshes private imports
+without restarting the broker. Public Lambda reload controls remain separate.
 
 Strict response and output validation happens before worker reuse. Failed,
 invalid, timed-out or canceled workers retire. Retained-owner quiescence drains
@@ -106,3 +106,50 @@ Embedded hosts compose this same owner with
 `app.NewCognitoTriggers(config, workDir)`, then inject the returned runner through
 Cognito's TriggerInvoker port and close it before its store. Tests use that
 composition boundary too.
+
+## Development source reload
+
+After editing a configured handler or its imported modules, reload one selected
+pool/trigger through the local dev endpoint:
+
+```sh
+curl -X POST \
+  http://localhost:4100/__eventbus/dev/cognito/pools/us-east-1_LocalPool/triggers/CreateAuthChallenge/reload
+```
+
+HTTP 200 returns
+`{"pool_id":"us-east-1_LocalPool","trigger":"CreateAuthChallenge","status":"reloaded"}`.
+No request body is required. Select the configured `DefineAuthChallenge`,
+`CreateAuthChallenge` or `VerifyAuthChallengeResponse` name.
+
+Identical entries within that pool share one imported generation. Reloading
+any one of them replaces that shared generation for all matching entries.
+Distinct entries and other pools keep their generations, even if they reference
+the same source file. Public Lambda functions also keep their own generations.
+
+Lambda's existing runtime validates the source path, publishes the replacement,
+then joins old workers. Active old calls finish normally; subsequent calls can
+use the new imports while the reload request is still waiting. HTTP 200 confirms
+old warm-worker retirement. Caller cancellation/deadline returns
+`reload_wait_interrupted` (HTTP 504); a replacement already published remains
+active, and that canceled wait does not cancel old invocations.
+Reload does not pre-execute the handler or attest application success.
+
+This is source-only reload: handler selection, environment and timeouts retain
+their configured values. Cognito pools, clients, users, signing keys, tokens and
+challenge/session state remain intact. Pending challenges run their subsequent
+stages with the newly imported code. No global drain or broker restart is needed.
+The retained-owner profile keeps its ordinary source/callback admission fence.
+
+An unknown pool/trigger returns `trigger_not_configured` (404); other methods
+return `reload_requires_post` (405). Unsupported/closed execution or reload
+failure returns a static 503 error. Source paths, hidden target names,
+environment values and runtime diagnostics never enter the response.
+With no configured trigger runner, the dev route is absent (404).
+This endpoint is a harness control, not an AWS Cognito operation; private
+targets still have no public Lambda Invoke route.
+
+Embedded hosts call `runner.DevReloadTrigger(ctx, poolID, triggerName)` or attach
+`cognitotrigger.NewDevReloadHandler(runner)` through `server.Services.CognitoDev`.
+The optional consumer-owned `DevTriggerReloader` port keeps generation retirement
+in the existing Lambda runtime.

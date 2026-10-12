@@ -96,6 +96,9 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   before releasing stores/capture. It exposes no private native Invoke targets.
   Fresh execution is default; optional trigger `dev_warm` uses separately bounded
   capacity, per-pool imports and the same managed worker/drain owner.
+  `cognitotrigger/dev_reload*.go` owns selected source reload admission and the
+  separate CognitoDev HTTP port. App resolves its immutable hidden target;
+  Lambda alone publishes/joins the shared generation. Native Cognito state is untouched.
   Cognito's `signing_keys.go` owns immutable decoded keys and coalesced first-use
   generation outside the store lock. Committed pool deletion invalidates keys and
   pending generations; exported RSA snapshots detach mutable state.

@@ -282,6 +282,7 @@ Do not replace the ownership wrapper as a production workaround.
 | [#33](https://github.com/lyeith/eventbus/issues/33) Nested warm starvation | Native execution/concurrency in `lambda`; local caps in `dev_warm` | Separate active and idle budgets, fail-fast native throttling, joined LRU/retirement and existing async queue requeue |
 | [#34](https://github.com/lyeith/eventbus/issues/34) Pool/client discovery | Cognito core inventory and shared cursor owner | Native summaries, errors, scoped stable pagination and persisted identities; no client secrets |
 | [#35](https://github.com/lyeith/eventbus/issues/35) Lost async completion | Named Lambda dev fault/HTTP adapters | Exact existing event/attempt one-shot; real handler effects and original payload/identity/retry policy, explicit injection diagnostics |
+| [#36](https://github.com/lyeith/eventbus/issues/36) Private Cognito source reload | Cognito trigger dev port; app target mapping; Lambda generation owner | Selected pool/trigger and coalesced entries reload coherently; old active work joins, native identity/session state and peers remain |
 
 These changes are separate from application orchestration and storage-provider
 faults. Native defaults keep fresh execution and completion-loss injection

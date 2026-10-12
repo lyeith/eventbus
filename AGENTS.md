@@ -51,6 +51,8 @@ before configuring endpoints or cleaning fixtures.
   and deadlines through its Execution port. `app` composes a private Lambda
   runtime instance; Lambda owns fresh/warm Node execution and child cleanup.
   Apps own handler policy and dependencies. Private triggers have no Invoke route.
+  Selected trigger source reload uses the named Cognito dev port and Lambda's
+  existing generation retirement; it never resets Cognito state or drains peers.
 - `internal/gateway` owns generic REQUEST-authorizer and HTTP proxy contracts;
   applications own authorizers and all private integration mappings. It imports
   no consuming application package or store.

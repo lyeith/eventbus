@@ -184,3 +184,25 @@ The optional `sdksmoke,integration` LocalStack proof needs an explicitly selecte
 owned container. See [S3 notifications](../../docs/S3-NOTIFICATIONS.md) for the
 pinned image, `EVENTBUS_LOCALSTACK_S3_INTEGRATION=1`, routing, transport and cleanup.
 The normal SDK lane skips that container fixture; it never uses an unowned stack.
+
+## Selected private Cognito source reload
+
+`TestCognitoTriggerReloadJavascriptSDKSmoke` uses the pinned Cognito/SES clients
+and one editable shared Define/Create/Verify handler. It completes an existing
+challenge after selected source reload, signs in again, verifies old access and
+refresh tokens plus unchanged JWKS/client/user metadata, and checks other-pool
+and public Lambda imports remain unchanged.
+
+Set `EVENTBUS_SMOKE_BINARY` to an absolute packaged EventBus executable to run
+that same proof against an owned CLI process. The driver creates all recipes,
+state, captures and listeners, checks readiness, then sends SIGTERM and joins
+the process; it never connects to a developer stack.
+
+```sh
+EVENTBUS_SMOKE_BINARY="$PWD/dist/eventbus-linux-amd64" \
+go test -race -count=1 -timeout 5m -tags sdksmoke ./tests/sdk \
+  -run '^TestCognitoTriggerReloadJavascriptSDKSmoke$'
+```
+
+Select `eventbus-darwin-arm64` for the corresponding macOS packaged proof.
+The ordinary SDK lane keeps its embedded composition mode.

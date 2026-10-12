@@ -141,6 +141,9 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   Reload a selected function explicitly after recipe/source/environment edits.
   Successful warm invocation evidence covers the handler response/log boundary;
   quiesce the retained owner before treating worker/child cleanup as complete.
+- After editing private Cognito handlers, use [selected trigger source reload](CUSTOM-TRIGGERS.md#development-source-reload).
+  It refreshes one shared import generation while preserving native identity,
+  tokens, pending sessions and unrelated functions.
 - Read SNS JSONL from `--sns-log`; [Messaging](MESSAGING.md) documents the versioned
   schema, subscription tokens, sandbox OTPs and external delivery intents.
   Assert the message ID and per-delivery status; capture proves local intent,
