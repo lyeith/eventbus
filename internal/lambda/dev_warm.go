@@ -37,17 +37,45 @@ func (service *Service) DevResumeWarm() error {
 	if service.warm == nil {
 		return nil
 	}
-	service.warm.mu.Lock()
-	defer service.warm.mu.Unlock()
-	if service.warm.closed {
+	pool := service.warm
+	pool.mu.Lock()
+	if pool.closed {
+		pool.mu.Unlock()
 		return errClosed
 	}
-	if service.warm.closeErr != nil {
-		return service.warm.closeErr
+	if pool.closeErr != nil {
+		err := pool.closeErr
+		pool.mu.Unlock()
+		return err
 	}
-	if len(service.warm.workers) != 0 {
+	var retiring []*warmWorker
+	for worker, state := range pool.workers {
+		switch state.phase {
+		case warmRetiringIdle, warmRetiringExecution:
+			retiring = append(retiring, worker)
+		default:
+			pool.mu.Unlock()
+			return errors.New("Lambda warm workers have not joined")
+		}
+	}
+	pool.mu.Unlock()
+	// Activity release can reach the lifecycle coordinator before close() has
+	// returned and published pool removal. Join those existing retirements
+	// through the same owner, without holding the pool lock or reopening reuse.
+	for _, worker := range retiring {
+		_ = pool.retire(worker)
+	}
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if pool.closed {
+		return errClosed
+	}
+	if pool.closeErr != nil {
+		return pool.closeErr
+	}
+	if len(pool.workers) != 0 {
 		return errors.New("Lambda warm workers have not joined")
 	}
-	service.warm.draining = false
+	pool.draining = false
 	return nil
 }
