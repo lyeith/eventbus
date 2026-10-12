@@ -62,6 +62,7 @@ type invocationDiagnosticRecord struct {
 	CompletionScope           CompletionScope     `json:"completion_scope,omitempty"`
 	State                     InvocationState     `json:"state"`
 	FunctionError             bool                `json:"function_error"`
+	InjectedCompletionLoss    bool                `json:"injected_completion_loss,omitempty"`
 	OwnershipConfirmed        bool                `json:"ownership_confirmed"`
 	StdoutIsResponse          bool                `json:"stdout_is_response,omitempty"`
 	Stdout                    *diagnosticOutput   `json:"stdout,omitempty"`
@@ -207,8 +208,9 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		CompletionScope: result.completionScope, Runtime: entry.runtime, InvocationType: "RequestResponse", Attempt: identity.Attempt,
 		StartedAt: started.UTC(), CompletedAt: completion.at.UTC(), State: result.state,
 		FunctionError: result.functionError, OwnershipConfirmed: result.ownershipErr == nil,
-		Stderr: diagnosticBytes(result.diagnostics.stderr, result.diagnostics.stderrBytes),
-		Tail:   diagnosticBytes(logs, result.diagnostics.tailBytes), ContextError: completion.contextError,
+		InjectedCompletionLoss: result.devCompletionLoss,
+		Stderr:                 diagnosticBytes(result.diagnostics.stderr, result.diagnostics.stderrBytes),
+		Tail:                   diagnosticBytes(logs, result.diagnostics.tailBytes), ContextError: completion.contextError,
 		TerminationCause: completion.cause, ElapsedMS: float64(completion.at.Sub(started)) / float64(time.Millisecond),
 		ConfiguredTimeoutMS: entry.timeout.Milliseconds(), NativeResponseSynthesized: completion.synthesized,
 		ExecutionPhases: diagnosticPhases(result.phases),

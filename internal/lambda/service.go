@@ -64,6 +64,7 @@ type Service struct {
 	asyncTasks                                         map[string]*asyncTask
 	asyncHistory                                       []AsyncRecord
 	asyncHistoryNext                                   int
+	asyncCompletionLossEnabled                         bool
 	asyncOutstanding, asyncCapacity, asyncHistoryLimit int
 	asyncRetryDelays                                   [2]time.Duration
 	asyncWake                                          chan struct{}
@@ -322,14 +323,15 @@ type invocation struct {
 }
 
 type invocationResult struct {
-	payload         []byte
-	functionError   bool
-	logs            []byte
-	state           InvocationState
-	completionScope CompletionScope
-	admitted        bool
-	diagnostics     invocationDiagnostics
-	phases          []runtimePhaseRecord
+	payload           []byte
+	functionError     bool
+	logs              []byte
+	state             InvocationState
+	completionScope   CompletionScope
+	admitted          bool
+	devCompletionLoss bool
+	diagnostics       invocationDiagnostics
+	phases            []runtimePhaseRecord
 	// Private ownership uncertainty cannot be supplied by a handler or projected
 	// onto native responses. It only makes a developer lifecycle lease dirty.
 	ownershipErr error
@@ -430,6 +432,9 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		// evidence may hold this lifetime through append/join, never turn an
 		// already completed function into a configured-budget timeout.
 		completion.at = time.Now()
+		if asynchronous && normalCompletion && result.state != InvocationNotStarted {
+			result.devCompletionLoss = service.devCompleteAsyncAttempt(input, err == nil && !result.functionError && result.ownershipErr == nil && result.state == InvocationSucceeded)
+		}
 		result.ownershipErr = errors.Join(result.ownershipErr, service.captureDiagnostics(entry, input, result, asynchronous, started, completion))
 		diagnosticCompletion = true
 	}()

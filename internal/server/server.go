@@ -46,6 +46,7 @@ type Services struct {
 	SES            SESHandler
 	EventSources   http.Handler
 	Lambda         http.Handler
+	LambdaDev      http.Handler
 	Scheduler      http.Handler
 	CognitoURLs    *CognitoURLs
 	QueryBodyLimit int64
@@ -68,6 +69,14 @@ func New(services Services) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/__eventbus/dev/lambda/async/") {
+		if s.services.LambdaDev == nil {
+			http.NotFound(w, r)
+		} else {
+			s.services.LambdaDev.ServeHTTP(w, r)
+		}
+		return
+	}
 	if r.URL.Path == "/2015-03-31/event-source-mappings" || strings.HasPrefix(r.URL.Path, "/2015-03-31/event-source-mappings/") {
 		if s.services.EventSources == nil {
 			writeRESTError(w, http.StatusServiceUnavailable, "ServiceException", "Lambda event-source mappings are not configured")

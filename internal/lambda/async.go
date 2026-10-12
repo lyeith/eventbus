@@ -19,31 +19,38 @@ const maxEventAge = 6 * time.Hour
 // handler. No input, function output, error message, credentials or logs enter
 // this record. Completed records are bounded by the explicit harness history.
 type AsyncRecord struct {
-	SchemaVersion string    `json:"schema_version"`
-	RequestID     string    `json:"request_id"`
-	FunctionName  string    `json:"function_name"`
-	State         string    `json:"state"`
-	Attempts      int       `json:"attempts"`
-	QueuedAt      time.Time `json:"queued_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	NextAttemptAt time.Time `json:"next_attempt_at,omitempty"`
-	CompletedAt   time.Time `json:"completed_at,omitempty"`
-	ErrorType     string    `json:"error_type,omitempty"`
+	SchemaVersion          string    `json:"schema_version"`
+	RequestID              string    `json:"request_id"`
+	FunctionName           string    `json:"function_name"`
+	State                  string    `json:"state"`
+	Attempts               int       `json:"attempts"`
+	QueuedAt               time.Time `json:"queued_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
+	NextAttemptAt          time.Time `json:"next_attempt_at,omitempty"`
+	CompletedAt            time.Time `json:"completed_at,omitempty"`
+	ErrorType              string    `json:"error_type,omitempty"`
+	InjectedCompletionLoss bool      `json:"injected_completion_loss,omitempty"`
 }
 type asyncTask struct {
-	entry           executableFunction
-	input           invocation
-	record          AsyncRecord
-	readyAt         time.Time
-	release         func(error)
-	ownershipErr    error
-	throttleRetries int
+	entry                    executableFunction
+	input                    invocation
+	record                   AsyncRecord
+	readyAt                  time.Time
+	release                  func(error)
+	ownershipErr             error
+	completionLossAttempt    int
+	completionDecidedAttempt int
+	throttleRetries          int
 }
 
 // Admit transfers a private copy into this instance's bounded in-memory queue.
 // Capacity includes queued, retry-waiting and running tasks. Accepted events
 // outlive caller cancellation; no persistent/restart guarantee is implied.
 func (service *Service) Admit(ctx context.Context, input InvokeInput) (Admission, error) {
+	return service.admit(ctx, input, false)
+}
+
+func (service *Service) admit(ctx context.Context, input InvokeInput, completionLoss bool) (Admission, error) {
 	if err := ctx.Err(); err != nil {
 		return Admission{}, err
 	}
@@ -59,6 +66,9 @@ func (service *Service) Admit(ctx context.Context, input InvokeInput) (Admission
 	now := time.Now().UTC()
 	requestID := uuid.NewString()
 	task := &asyncTask{entry: entry, input: prepareInvocation(entry, name, input, requestID), readyAt: now, record: AsyncRecord{SchemaVersion: "eventbus.lambda.async.v1", RequestID: requestID, FunctionName: name, State: "queued", QueuedAt: now, UpdatedAt: now}}
+	if completionLoss {
+		task.completionLossAttempt = 1
+	}
 	// Async transitions serialize durable capture and publication independently
 	// of the shared invocation/registry mutex. Always take transitionMu before mu.
 	service.asyncTransitionMu.Lock()
@@ -168,6 +178,7 @@ func (service *Service) AsyncSnapshot() []AsyncRecord {
 func nextAsyncRecord(record AsyncRecord, state, errorType string) AsyncRecord {
 	record.State = state
 	record.ErrorType = errorType
+	record.InjectedCompletionLoss = false
 	record.UpdatedAt = time.Now().UTC()
 	if state == "succeeded" || state == "failed" || state == "canceled" {
 		record.CompletedAt = record.UpdatedAt
@@ -200,6 +211,7 @@ func (service *Service) recordAsync(task *asyncTask, record AsyncRecord) {
 func (service *Service) finishAsync(task *asyncTask, state, errorType string) {
 	service.mu.Lock()
 	record := nextAsyncRecord(task.record, state, errorType)
+	record.InjectedCompletionLoss = errorType == devCompletionLostError
 	record.NextAttemptAt = time.Time{}
 	service.mu.Unlock()
 	service.captureAsyncRecord(record)
@@ -302,6 +314,9 @@ func (service *Service) takeAsync() *asyncTask {
 }
 
 func asyncErrorType(result invocationResult) string {
+	if result.devCompletionLoss {
+		return devCompletionLostError
+	}
 	var value struct {
 		Type string `json:"errorType"`
 	}
@@ -364,22 +379,23 @@ func (service *Service) completeAsync(task *asyncTask, result invocationResult, 
 		if delay > time.Minute {
 			delay = time.Minute
 		}
-		service.retryAsync(task, record, "TooManyRequestsException", delay)
+		service.retryAsync(task, record, "TooManyRequestsException", delay, false)
 	case err != nil:
 		service.finishAsync(task, "failed", "ServiceError")
-	case !result.functionError:
+	case !result.functionError && !result.devCompletionLoss:
 		service.finishAsync(task, "succeeded", "")
 	case record.Attempts <= 2:
-		service.retryAsync(task, record, asyncErrorType(result), service.asyncRetryDelays[record.Attempts-1])
+		service.retryAsync(task, record, asyncErrorType(result), service.asyncRetryDelays[record.Attempts-1], result.devCompletionLoss)
 	default:
 		service.finishAsync(task, "failed", asyncErrorType(result))
 	}
 }
 
 // The caller owns asyncTransitionMu; capture remains outside service.mu.
-func (service *Service) retryAsync(task *asyncTask, record AsyncRecord, errorType string, delay time.Duration) {
+func (service *Service) retryAsync(task *asyncTask, record AsyncRecord, errorType string, delay time.Duration, completionLost bool) {
 	readyAt := time.Now().Add(delay)
 	record = nextAsyncRecord(record, "retrying", errorType)
+	record.InjectedCompletionLoss = completionLost
 	record.NextAttemptAt = readyAt.UTC()
 	service.recordAsync(task, record)
 	service.mu.Lock()

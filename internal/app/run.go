@@ -233,6 +233,9 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		CognitoURLs:    &server.CognitoURLs{Issuer: strings.TrimRight(cfg.issuerBase, "/"), JWKS: strings.TrimRight(jwksURL, "/")},
 		QueryBodyLimit: ses.QueryBodyLimit,
 	}
+	if functions != nil {
+		services.LambdaDev = lambdaservice.NewDevAsyncHandler(functions)
+	}
 	if retained != nil {
 		services = retainedServices(services)
 	}

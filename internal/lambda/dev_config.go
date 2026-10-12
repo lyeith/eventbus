@@ -20,11 +20,12 @@ import (
 // accelerates the native one-/two-minute retry intervals in isolated tests; it
 // does not change the native maximum of two function-error retries.
 type DevAsyncConfig struct {
-	Workers      int             `yaml:"workers,omitempty"`
-	Capacity     int             `yaml:"capacity,omitempty"`
-	HistoryLimit int             `yaml:"history_limit,omitempty"`
-	RetryDelays  []time.Duration `yaml:"retry_delays,omitempty"`
-	LogPath      string          `yaml:"log_path,omitempty"`
+	CompletionLoss bool            `yaml:"completion_loss,omitempty"`
+	Workers        int             `yaml:"workers,omitempty"`
+	Capacity       int             `yaml:"capacity,omitempty"`
+	HistoryLimit   int             `yaml:"history_limit,omitempty"`
+	RetryDelays    []time.Duration `yaml:"retry_delays,omitempty"`
+	LogPath        string          `yaml:"log_path,omitempty"`
 	// A borrowed writer supports embedded harnesses and deterministic I/O faults.
 	LogWriter io.Writer `yaml:"-"`
 }
@@ -57,6 +58,7 @@ func validateDevAsync(config *DevAsyncConfig) error {
 }
 
 func (service *Service) configureAsync(config *DevAsyncConfig, workDir string) error {
+	service.asyncCompletionLossEnabled = config != nil && config.CompletionLoss
 	service.asyncCapacity = 64
 	service.asyncHistoryLimit = 256
 	service.asyncRetryDelays = [2]time.Duration{time.Minute, 2 * time.Minute}
