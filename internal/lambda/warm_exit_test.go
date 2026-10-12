@@ -6,7 +6,7 @@ import (
 )
 
 func TestWarmPoolNeverReusesClosedSuccessfulWorker(t *testing.T) {
-	pool := newWarmWorkers(1)
+	pool := newWarmWorkers(1, 1)
 	entry := executableFunction{generation: &functionGeneration{}}
 	worker, err := pool.acquire(context.Background(), entry, true)
 	if err != nil {

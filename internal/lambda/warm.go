@@ -3,33 +3,68 @@ package lambda
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 )
 
-// warmWorkers is the sole pool/generation owner. Admission counts reservations,
-// busy workers, idle workers and workers being retired against one global cap.
+type warmWorkerPhase uint8
+
+const (
+	warmIdle warmWorkerPhase = iota
+	warmExecuting
+	warmRetiringIdle
+	warmRetiringExecution
+)
+
+type warmWorkerState struct {
+	phase     warmWorkerPhase
+	idleOrder uint64
+}
+
+// warmWorkers is the sole pool/generation owner. Retained idle environments and
+// execution reservations have separate budgets. Each retiring environment keeps
+// its original budget until its process, listener and activity lease have joined.
 // Never acquire Service.mu while holding this mutex.
 type warmWorkers struct {
-	mu               sync.Mutex
-	limit            int
-	workers          map[*warmWorker]bool // true while reserved, executing or retiring
-	wake             chan struct{}
-	closed, draining bool
-	closeErr         error
+	mu                        sync.Mutex
+	idleLimit, executionLimit int
+	nextIdle                  uint64
+	workers                   map[*warmWorker]warmWorkerState
+	closed, draining          bool
+	closeErr                  error
 }
 
-func newWarmWorkers(limit int) *warmWorkers {
-	if limit == 0 {
-		limit = 2
+func newWarmWorkers(idleLimit, executionLimit int) *warmWorkers {
+	if idleLimit == 0 {
+		idleLimit = 2
 	}
-	return &warmWorkers{limit: limit, workers: make(map[*warmWorker]bool), wake: make(chan struct{})}
+	if executionLimit == 0 {
+		executionLimit = 64
+	}
+	return &warmWorkers{idleLimit: idleLimit, executionLimit: executionLimit, workers: make(map[*warmWorker]warmWorkerState)}
 }
-func (pool *warmWorkers) changedLocked() { close(pool.wake); pool.wake = make(chan struct{}) }
+
+// countsLocked includes retirement so cancellation or reload cannot temporarily
+// free capacity before the actual owner has joined.
+func (pool *warmWorkers) countsLocked() (executing, retained int) {
+	for _, state := range pool.workers {
+		switch state.phase {
+		case warmExecuting, warmRetiringExecution:
+			executing++
+		case warmIdle, warmRetiringIdle:
+			retained++
+		}
+	}
+	return
+}
 
 func (pool *warmWorkers) acquire(ctx context.Context, entry executableFunction, allowReuse bool) (*warmWorker, error) {
-acquire:
 	for {
 		pool.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			pool.mu.Unlock()
+			return nil, err
+		}
 		if pool.closeErr != nil {
 			err := pool.closeErr
 			pool.mu.Unlock()
@@ -39,57 +74,73 @@ acquire:
 			pool.mu.Unlock()
 			return nil, errClosed
 		}
+		executing, _ := pool.countsLocked()
+		if executing >= pool.executionLimit {
+			pool.mu.Unlock()
+			return nil, invocationError(http.StatusTooManyRequests, "TooManyRequestsException", "ConcurrentInvocationLimitExceeded: Lambda execution concurrency is exhausted")
+		}
 		retain := allowReuse && !pool.draining && !entry.generation.retired
-		var victim *warmWorker
-		for worker, busy := range pool.workers {
-			if !busy {
-				if retain && worker.entry.generation == entry.generation {
-					pool.workers[worker] = true
-					pool.mu.Unlock()
-					select {
-					case <-worker.processDone:
-						pool.retire(worker)
-						continue acquire
-					default:
-						return worker, nil
-					}
+		var reused *warmWorker
+		if retain {
+			for worker, state := range pool.workers {
+				if state.phase == warmIdle && worker.entry.generation == entry.generation {
+					reused = worker
+					pool.workers[worker] = warmWorkerState{phase: warmExecuting}
+					break
 				}
-				victim = worker
 			}
 		}
-		if len(pool.workers) < pool.limit {
-			worker := &warmWorker{entry: entry, freshOnly: !retain, retired: make(chan struct{})}
-			pool.workers[worker] = true
+		if reused != nil {
 			pool.mu.Unlock()
-			return worker, nil
+			select {
+			case <-reused.processDone:
+				pool.retire(reused)
+				continue
+			default:
+				return reused, nil
+			}
 		}
-		if victim != nil {
-			pool.workers[victim] = true
-			pool.mu.Unlock()
-			pool.retire(victim)
-			continue
-		}
-		wake := pool.wake
+		worker := &warmWorker{entry: entry, freshOnly: !retain, retired: make(chan struct{})}
+		pool.workers[worker] = warmWorkerState{phase: warmExecuting}
 		pool.mu.Unlock()
-		select {
-		case <-wake:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+		return worker, nil
 	}
 }
 
 func (pool *warmWorkers) release(worker *warmWorker, healthy bool) (CompletionScope, error) {
 	pool.mu.Lock()
-	retire := worker.freshOnly || !healthy || pool.closed || pool.draining || worker.entry.generation.retired
-	select {
-	case <-worker.retired:
-		retire = true
-	default:
+	retire := pool.mustRetireLocked(worker, healthy)
+	_, retained := pool.countsLocked()
+	var victim *warmWorker
+	if !retire && retained >= pool.idleLimit {
+		var oldest uint64
+		for candidate, state := range pool.workers {
+			if state.phase == warmIdle && (victim == nil || state.idleOrder < oldest) {
+				victim, oldest = candidate, state.idleOrder
+			}
+		}
+		if victim != nil {
+			pool.workers[victim] = warmWorkerState{phase: warmRetiringIdle}
+		}
 	}
+	if victim != nil {
+		// Keep this execution reservation and the victim's idle reservation
+		// until actual retirement joins. Other invocations can still use the
+		// remaining bounded execution capacity.
+		pool.mu.Unlock()
+		victimErr := pool.retire(victim)
+		pool.mu.Lock()
+		retire = pool.mustRetireLocked(worker, healthy) || victimErr != nil
+		if victimErr != nil {
+			pool.mu.Unlock()
+			return CompletionProcess, errors.Join(victimErr, pool.retire(worker))
+		}
+	}
+	_, retained = pool.countsLocked()
+	retire = retire || retained >= pool.idleLimit
 	if !retire {
-		pool.workers[worker] = false
-		pool.changedLocked()
+		pool.nextIdle++
+		pool.workers[worker] = warmWorkerState{phase: warmIdle, idleOrder: pool.nextIdle}
 	}
 	pool.mu.Unlock()
 	if retire {
@@ -97,51 +148,76 @@ func (pool *warmWorkers) release(worker *warmWorker, healthy bool) (CompletionSc
 	}
 	return CompletionInvocation, nil
 }
+
+func (pool *warmWorkers) mustRetireLocked(worker *warmWorker, healthy bool) bool {
+	if worker.freshOnly || !healthy || pool.closed || pool.draining || pool.closeErr != nil || worker.entry.generation.retired {
+		return true
+	}
+	select {
+	case <-worker.retired:
+		return true
+	default:
+		return false
+	}
+}
+
 func (pool *warmWorkers) retire(worker *warmWorker) error {
+	pool.mu.Lock()
+	if state, present := pool.workers[worker]; present {
+		switch state.phase {
+		case warmIdle:
+			pool.workers[worker] = warmWorkerState{phase: warmRetiringIdle}
+		case warmExecuting:
+			pool.workers[worker] = warmWorkerState{phase: warmRetiringExecution}
+		}
+	}
+	pool.mu.Unlock()
 	err := worker.close()
 	pool.mu.Lock()
-	delete(pool.workers, worker)
-	pool.closeErr = errors.Join(pool.closeErr, err)
-	pool.changedLocked()
+	if _, present := pool.workers[worker]; present {
+		delete(pool.workers, worker)
+		pool.closeErr = errors.Join(pool.closeErr, err)
+	}
 	pool.mu.Unlock()
 	return err
 }
+
 func (pool *warmWorkers) retireGeneration(generation *functionGeneration) []*warmWorker {
 	pool.mu.Lock()
 	generation.retired = true
 	var workers, idle []*warmWorker
-	for worker, busy := range pool.workers {
+	for worker, state := range pool.workers {
 		if worker.entry.generation == generation {
 			workers = append(workers, worker)
-			if !busy {
-				pool.workers[worker] = true
+			if state.phase == warmIdle {
+				pool.workers[worker] = warmWorkerState{phase: warmRetiringIdle}
 				idle = append(idle, worker)
 			}
 		}
 	}
-	pool.changedLocked()
 	pool.mu.Unlock()
 	for _, worker := range idle {
 		go pool.retire(worker)
 	}
 	return workers
 }
+
 func (pool *warmWorkers) beginDrain() {
 	pool.mu.Lock()
 	pool.draining = true
 	var idle []*warmWorker
-	for worker, busy := range pool.workers {
-		if !busy {
-			pool.workers[worker] = true
+	for worker, state := range pool.workers {
+		if state.phase == warmIdle {
+			pool.workers[worker] = warmWorkerState{phase: warmRetiringIdle}
 			idle = append(idle, worker)
 		}
 	}
-	pool.changedLocked()
 	pool.mu.Unlock()
 	for _, worker := range idle {
 		go pool.retire(worker)
 	}
 }
+
 func (service *Service) closeWarmWorkers() error {
 	if service.warm == nil {
 		return nil
@@ -153,7 +229,6 @@ func (service *Service) closeWarmWorkers() error {
 	for worker := range pool.workers {
 		workers = append(workers, worker)
 	}
-	pool.changedLocked()
 	pool.mu.Unlock()
 	for _, worker := range workers {
 		_ = pool.retire(worker)

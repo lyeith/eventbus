@@ -16,7 +16,10 @@ func TestLoadStrictCompleteConfiguration(t *testing.T) {
 		success    bool
 	}{
 		{"valid", valid, true},
-		{"warm", "dev_warm: {max_workers: 3}\n" + valid, true},
+		{"warm", "dev_warm: {max_workers: 3, max_concurrency: 8}\n" + valid, true},
+		{"warm-defaults", "dev_warm: {}\n" + valid, true},
+		{"warm-excess-concurrency", "dev_warm: {max_concurrency: 1025}\n" + valid, false},
+		{"warm-negative-concurrency", "dev_warm: {max_concurrency: -1}\n" + valid, false},
 		{"warm-excess-cap", "dev_warm: {max_workers: 33}\n" + valid, false},
 		{"warm-negative-cap", "dev_warm: {max_workers: -1}\n" + valid, false},
 		{"warm-unknown", "dev_warm: {capacity: 3}\n" + valid, false},

@@ -32,9 +32,11 @@ type Config struct {
 }
 
 // DevWarmConfig opts registered handlers into Lambda's managed retained workers.
-// The cap is private to the trigger service; omission keeps fresh execution.
+// Idle retention and execution caps are private to the trigger service;
+// omission keeps fresh execution. The managed runtime owns the shared policy.
 type DevWarmConfig struct {
-	MaxWorkers int `yaml:"max_workers,omitempty"`
+	MaxWorkers     int `yaml:"max_workers,omitempty"`
+	MaxConcurrency int `yaml:"max_concurrency,omitempty"`
 }
 
 func (config *Config) Validate() error { return validateConfig(config) }
@@ -105,6 +107,9 @@ func validateConfig(config *Config) error {
 	}
 	if config.DevWarm != nil && (config.DevWarm.MaxWorkers < 0 || config.DevWarm.MaxWorkers > 32) {
 		return errors.New("Cognito trigger dev_warm.max_workers must be 1..32, or omitted")
+	}
+	if config.DevWarm != nil && (config.DevWarm.MaxConcurrency < 0 || config.DevWarm.MaxConcurrency > 1024) {
+		return errors.New("Cognito trigger dev_warm.max_concurrency must be 1..1024, or omitted")
 	}
 	for poolID, pool := range config.Pools {
 		if strings.TrimSpace(poolID) == "" {

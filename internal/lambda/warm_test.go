@@ -84,9 +84,13 @@ func warmTestFunction(t *testing.T, runtime string, directory string) Function {
 }
 func warmTestService(t *testing.T, runtime string, limit int) (*Service, Function, string) {
 	t.Helper()
+	return warmConfiguredTestService(t, runtime, limit, 0)
+}
+func warmConfiguredTestService(t *testing.T, runtime string, limit, concurrency int) (*Service, Function, string) {
+	t.Helper()
 	directory := t.TempDir()
 	function := warmTestFunction(t, runtime, directory)
-	service, err := NewService(&Config{Functions: map[string]Function{"warm": function}, DevWarm: &DevWarmConfig{MaxWorkers: limit}, DevAsync: &DevAsyncConfig{LogWriter: io.Discard, RetryDelays: []time.Duration{0, 0}}}, directory)
+	service, err := NewService(&Config{Functions: map[string]Function{"warm": function}, DevWarm: &DevWarmConfig{MaxWorkers: limit, MaxConcurrency: concurrency}, DevAsync: &DevAsyncConfig{LogWriter: io.Discard, RetryDelays: []time.Duration{0, 0}}}, directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +180,8 @@ func TestWarmWorkersReuseImportsIndependentContextsAndLogs(t *testing.T) {
 	}
 }
 
-func TestWarmWorkersGlobalLimitIncludesRetiredGenerationAndDrainFresh(t *testing.T) {
-	service, function, directory := warmTestService(t, "python", 1)
+func TestWarmExecutionLimitIncludesRetiredGenerationAndDrainFresh(t *testing.T) {
+	service, function, directory := warmConfiguredTestService(t, "python", 1, 1)
 	started := filepath.Join(directory, "started")
 	firstDone := make(chan error, 1)
 	go func() {
@@ -195,15 +199,11 @@ func TestWarmWorkersGlobalLimitIncludesRetiredGenerationAndDrainFresh(t *testing
 	}
 	service.DevBeginWarmDrain()
 	secondStarted := filepath.Join(directory, "second-started")
-	secondDone := make(chan error, 1)
-	go func() {
-		_, err := service.Execute(context.Background(), InvokeInput{FunctionName: "warm", Payload: []byte(fmt.Sprintf(`{"started":%q}`, secondStarted))})
-		secondDone <- err
-	}()
-	select {
-	case err := <-secondDone:
-		t.Fatalf("fallback bypassed occupied global slot: %v", err)
-	case <-time.After(30 * time.Millisecond):
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, invokePrefix+"warm"+invokeSuffix, strings.NewReader(fmt.Sprintf(`{"started":%q}`, secondStarted)))
+	service.ServeHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("X-Amzn-ErrorType") != "TooManyRequestsException" || response.Header().Get("Retry-After") != "1" || response.Header().Get("X-Amz-Function-Error") != "" {
+		t.Fatalf("saturated fresh execution: %d %v %s", response.Code, response.Header(), response.Body.String())
 	}
 	if _, err := os.Stat(secondStarted); !os.IsNotExist(err) {
 		t.Fatalf("second handler launched before old joined: %v", err)
@@ -211,9 +211,7 @@ func TestWarmWorkersGlobalLimitIncludesRetiredGenerationAndDrainFresh(t *testing
 	if err := <-firstDone; err != nil {
 		t.Fatal(err)
 	}
-	if err := <-secondDone; err != nil {
-		t.Fatal(err)
-	}
+	warmTestExecute(t, service, fmt.Sprintf(`{"started":%q}`, secondStarted))
 	warmWaitRetired(t, service)
 	if err := service.DevResumeWarm(); err != nil {
 		t.Fatal(err)

@@ -31,12 +31,13 @@ type AsyncRecord struct {
 	ErrorType     string    `json:"error_type,omitempty"`
 }
 type asyncTask struct {
-	entry        executableFunction
-	input        invocation
-	record       AsyncRecord
-	readyAt      time.Time
-	release      func(error)
-	ownershipErr error
+	entry           executableFunction
+	input           invocation
+	record          AsyncRecord
+	readyAt         time.Time
+	release         func(error)
+	ownershipErr    error
+	throttleRetries int
 }
 
 // Admit transfers a private copy into this instance's bounded in-memory queue.
@@ -329,6 +330,8 @@ func (service *Service) asyncWorker() {
 
 // The native attempt has actually joined before its terminal/retry transaction.
 func (service *Service) completeAsync(task *asyncTask, result invocationResult, err error) {
+	var invokeErr *InvokeError
+	throttled := errors.As(err, &invokeErr) && invokeErr.Status == http.StatusTooManyRequests && invokeErr.Code == "TooManyRequestsException"
 	service.asyncTransitionMu.Lock()
 	defer service.asyncTransitionMu.Unlock()
 	service.mu.Lock()
@@ -336,34 +339,59 @@ func (service *Service) completeAsync(task *asyncTask, result invocationResult, 
 	if result.ownershipErr != nil && service.asyncOwnershipErr == nil {
 		service.asyncOwnershipErr = result.ownershipErr
 	}
+	if throttled {
+		task.throttleRetries++
+	} else {
+		task.throttleRetries = 0
+	}
+	throttleRetries := task.throttleRetries
 	aborted := service.asyncAborted
 	record := task.record
 	service.mu.Unlock()
 	switch {
 	case aborted || errors.Is(err, context.Canceled):
 		service.finishAsync(task, "canceled", "ServiceShutdown")
+	case throttled:
+		// Admission already succeeded, but no handler ran. Retain the original
+		// event and function-error retry budget in the same bounded queue.
+		if record.Attempts > 0 {
+			record.Attempts--
+		}
+		delay := time.Second
+		for index := 1; index < throttleRetries && delay < time.Minute; index++ {
+			delay *= 2
+		}
+		if delay > time.Minute {
+			delay = time.Minute
+		}
+		service.retryAsync(task, record, "TooManyRequestsException", delay)
 	case err != nil:
 		service.finishAsync(task, "failed", "ServiceError")
 	case !result.functionError:
 		service.finishAsync(task, "succeeded", "")
 	case record.Attempts <= 2:
-		readyAt := time.Now().Add(service.asyncRetryDelays[record.Attempts-1])
-		record = nextAsyncRecord(record, "retrying", asyncErrorType(result))
-		record.NextAttemptAt = readyAt.UTC()
-		service.recordAsync(task, record)
-		service.mu.Lock()
-		aborted = service.asyncAborted
-		if !aborted {
-			task.readyAt = readyAt
-			service.asyncQueue = append(service.asyncQueue, task)
-			service.wakeAsyncLocked()
-		}
-		service.mu.Unlock()
-		if aborted {
-			service.finishAsync(task, "canceled", "ServiceShutdown")
-		}
+		service.retryAsync(task, record, asyncErrorType(result), service.asyncRetryDelays[record.Attempts-1])
 	default:
 		service.finishAsync(task, "failed", asyncErrorType(result))
+	}
+}
+
+// The caller owns asyncTransitionMu; capture remains outside service.mu.
+func (service *Service) retryAsync(task *asyncTask, record AsyncRecord, errorType string, delay time.Duration) {
+	readyAt := time.Now().Add(delay)
+	record = nextAsyncRecord(record, "retrying", errorType)
+	record.NextAttemptAt = readyAt.UTC()
+	service.recordAsync(task, record)
+	service.mu.Lock()
+	aborted := service.asyncAborted
+	if !aborted {
+		task.readyAt = readyAt
+		service.asyncQueue = append(service.asyncQueue, task)
+		service.wakeAsyncLocked()
+	}
+	service.mu.Unlock()
+	if aborted {
+		service.finishAsync(task, "canceled", "ServiceShutdown")
 	}
 }
 

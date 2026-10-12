@@ -123,7 +123,7 @@ func NewService(config *Config, workDir string) (*Service, error) {
 		service.executionPolicy = &copied
 	}
 	if config.DevWarm != nil {
-		service.warm = newWarmWorkers(config.DevWarm.MaxWorkers)
+		service.warm = newWarmWorkers(config.DevWarm.MaxWorkers, config.DevWarm.MaxConcurrency)
 	}
 	for name, function := range config.Functions {
 		entry, err := resolveExecutable(name, function, root)
@@ -246,6 +246,9 @@ func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	if err != nil {
 		var executionErr *InvokeError
 		if errors.As(err, &executionErr) {
+			if executionErr.Status == http.StatusTooManyRequests {
+				writer.Header().Set("Retry-After", "1")
+			}
 			invokeError(writer, executionErr.Status, executionErr.Code, executionErr.Message)
 		} else if errors.Is(err, errClosed) {
 			invokeError(writer, http.StatusServiceUnavailable, "ServiceException", "Lambda service is closing")
@@ -456,10 +459,28 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 			onReady = launchInput.pythonStacks.updateDeadline
 		}
 		var worker *warmWorker
-		if service.warm != nil && (entry.runtime == "python" || entry.runtime == "node") {
-			worker, err = service.warm.acquire(ctx, entry, launchInput.pythonStacks == nil)
+		if service.warm != nil {
+			allowReuse := (entry.runtime == "python" || entry.runtime == "node") && launchInput.pythonStacks == nil
+			worker, err = service.warm.acquire(ctx, entry, allowReuse)
 			if err != nil {
-				result = failure("Sandbox.Timedout", "Function invocation canceled while waiting for a warm worker")
+				var admissionErr *InvokeError
+				if len(records) > 0 {
+					// Capacity can change after a timed-out Init retires. Its
+					// real joined launch remains this invocation's final attempt;
+					// fallback admission failure cannot make it never launched.
+					if ctx.Err() != nil {
+						completion = snapshotDiagnosticCompletion(ctx, true)
+					} else if !errors.As(err, &admissionErr) || admissionErr.Status != http.StatusTooManyRequests {
+						result.ownershipErr = errors.Join(result.ownershipErr, err)
+					}
+					err = nil
+					break
+				}
+				if errors.As(err, &admissionErr) {
+					normalCompletion = true
+					return invocationResult{state: InvocationNotStarted}, err
+				}
+				result = failure("Sandbox.Timedout", "Function invocation canceled before warm worker reservation")
 				completion = snapshotDiagnosticCompletion(ctx, true)
 				if ctx.Err() == nil {
 					result = notStartedFailure("Runtime.InternalError", "Warm worker ownership is unavailable")
@@ -504,7 +525,14 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		records = append(records, record)
 		phase.stop()
 		result = mergeLaunchDiagnostics(result, launched)
-		if mode != "initial" || completion.cause != "initialization_timeout" || ctx.Err() != nil || result.ownershipErr != nil {
+		if mode != "initial" || completion.cause != "initialization_timeout" || result.ownershipErr != nil {
+			break
+		}
+		if ctx.Err() != nil {
+			// This failed Init selected an internal fallback, so the invocation
+			// still has pending native execution. Cancellation stops that retry;
+			// the completed initial phase remains an immutable launch fact.
+			completion = snapshotDiagnosticCompletion(ctx, true)
 			break
 		}
 		if launchInput.pythonStacks != nil {
@@ -513,7 +541,11 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 			// initial process's collector must join before launching its fallback.
 			launchInput.pythonStacks = nil
 		}
-		if ctx.Err() != nil || result.ownershipErr != nil {
+		if ctx.Err() != nil {
+			completion = snapshotDiagnosticCompletion(ctx, true)
+			break
+		}
+		if result.ownershipErr != nil {
 			break
 		}
 		mode = "fallback"

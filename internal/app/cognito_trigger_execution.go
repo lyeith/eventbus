@@ -81,7 +81,7 @@ func newCognitoTriggerExecution(config *cognitotrigger.Config, workDir string) (
 			MaxLogBytes: cognitotrigger.MaxDiagnosticBytes, PrivateErrors: true,
 			ValidateResponse: func(payload []byte) error { _, err := cognitotrigger.DecodeResponse(payload); return err }}}
 	if config.DevWarm != nil {
-		recipe.DevWarm = &lambdaservice.DevWarmConfig{MaxWorkers: config.DevWarm.MaxWorkers}
+		recipe.DevWarm = &lambdaservice.DevWarmConfig{MaxWorkers: config.DevWarm.MaxWorkers, MaxConcurrency: config.DevWarm.MaxConcurrency}
 	}
 	runtime, err := lambdaservice.NewService(recipe, workDir)
 	if err != nil {
