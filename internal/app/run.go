@@ -236,6 +236,9 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if functions != nil {
 		services.LambdaDev = lambdaservice.NewDevAsyncHandler(functions)
 	}
+	if triggers != nil {
+		services.CognitoDev = cognitotrigger.NewDevReloadHandler(triggers)
+	}
 	if retained != nil {
 		services = retainedServices(services)
 	}

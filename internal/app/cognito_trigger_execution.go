@@ -130,3 +130,17 @@ func (execution *cognitoTriggerExecution) DevResumeWarm() error {
 	return execution.runtime.DevResumeWarm()
 }
 func (execution *cognitoTriggerExecution) DevEvidence() error { return execution.runtime.DevEvidence() }
+
+func (execution *cognitoTriggerExecution) DevReloadTrigger(ctx context.Context, poolID, triggerName string) error {
+	target := execution.targets[poolID][triggerName]
+	if target == "" {
+		return &cognitotrigger.DevReloadError{Kind: cognitotrigger.DevReloadNotConfigured}
+	}
+	if err := execution.runtime.ReloadFunction(ctx, target); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &cognitotrigger.DevReloadError{Kind: cognitotrigger.DevReloadFailed}
+	}
+	return nil
+}

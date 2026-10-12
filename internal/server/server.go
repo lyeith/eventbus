@@ -43,6 +43,7 @@ type Services struct {
 	SSM            ActionHandler
 	Secrets        ActionHandler
 	Cognito        CognitoHandler
+	CognitoDev     http.Handler
 	SES            SESHandler
 	EventSources   http.Handler
 	Lambda         http.Handler
@@ -69,6 +70,14 @@ func New(services Services) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/__eventbus/dev/cognito/") {
+		if s.services.CognitoDev == nil {
+			http.NotFound(w, r)
+		} else {
+			s.services.CognitoDev.ServeHTTP(w, r)
+		}
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/__eventbus/dev/lambda/async/") {
 		if s.services.LambdaDev == nil {
 			http.NotFound(w, r)
