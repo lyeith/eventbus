@@ -36,6 +36,17 @@ preserve identity, refresh and a pending custom challenge.
 The same unchanged lifecycle/custom-auth scripts run in default fresh mode and
 a dedicated warm-trigger scenario through `app.NewCognitoTriggers`.
 
+Cognito inventory proofs use both pinned SDKs to create/list/page pools and clients,
+verify independent stores and stable tokens/metadata across restart, reject invalid
+scopes and delete resources through native APIs without exposing client secrets.
+
+The completion-loss SNS/Python proof uses actual durable handler writes and gated
+completion in fresh/warm mode, preserving native event/request IDs across replay;
+independent owners and simultaneous peer events remain unaffected. It calls the
+named dev control directly and verifies redacted/private injection evidence.
+An unchanged ungated handler also proves atomic admission/arming before fast
+completion, actual warm reuse, exact replay and normal subsequent native Events.
+
 Python SNS Lambda verifies real asynchronous alias execution, native events,
 filtering, handler failures/timeouts, pressure, owner isolation and correlated evidence.
 SQS mapping proofs cover native Create/Get/Delete, FIFO, completion acknowledgment,

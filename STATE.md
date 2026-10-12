@@ -1,52 +1,48 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. All second-round performance targets implemented.
-Current report: docs/PERFORMANCE-IMPROVEMENTS-ROUND-2.md.
-Published latest release v0.13.0; annotated tag points to clean source b97996f.
-Eight Linux/macOS amd64/arm64 EventBus/gateway binaries and SHA256SUMS are public.
+and agent development harness. Tickets #33, #34 and #35 are implemented.
+Published binaries remain v0.13.0 (source b97996f); this pass changes source,
+with no new binary release. See docs/ISSUE-TRIAGE.md for feature ownership.
 
-Owners now retain ordered SSM names, publication-local SNS filter inputs,
-prepared Firehose timezones, shared SNS/SQS dedup expiry, scanned SES MIME lines,
-single result serialization/bounded bodies, gateway joined authorizer flights,
-immutable Cognito keys, synchronous capture groups, encoded SQS batches and
-bounded async history. Duplicate Cognito Node execution code is removed.
+Source commits:
+- c7b86d4: native Cognito pool/client inventory (#34).
+- c0ef7a7: independent warm retention/execution budgets (#33).
+- f480dd9: opt-in exact-event async completion loss (#35).
+- aa46d62 / 495f419: causal gateway and retained-retry fixture checks.
 
-Cognito triggers use the app-composed private Lambda runtime.
-Fresh is default; optional trigger dev_warm has separate bounded capacity,
-per-pool imports, strict response/privacy policy and retained drain/resume.
-Private targets have no public Invoke route; diagnostics are discarded even
-under --debug. See docs/CUSTOM-TRIGGERS.md for configuration/source edits.
+Lambda warm mode now defaults to two retained idle Python/Node environments
+and 64 execution reservations. max_workers limits idle retention;
+max_concurrency limits reserved/executing/retiring execution across all runtimes.
+Saturation returns native 429; no parent/child slot wait. Joined LRU eviction
+and retirement preserve the sum-of-budgets bound, not an RSS limit.
+Accepted Events retain their original native queue, identity and retry budget
+when execution is throttled before launch. Actual failed Init attempts retain
+their charge and phase evidence if fallback cannot reserve capacity.
+Private Cognito execution receives its own separate limits through app composition.
 
-Observed local results:
-- SSM 10k traversal core 3338→29ms, unchanged SDK/HTTP 4397→1424ms.
-- SNS 100 body filters/64KiB 124→22ms, allocation 40.4→8.1MB.
-- Firehose 500 New York records 10.2→0.70ms.
-- Warm Lambda 4MiB Python/Node 44.9/66.9→28.8/37.4ms; allocation ~10→4.2MB.
-- Gateway sixteen misses: sixteen→one actual Invoke.
-- Capture sixteen producers/64KiB: 312→37ms for 64 records; Sync 64→8.
-- Cognito warm five-step median 37ms; first 890ms; paired fresh 936→930ms.
-- Async 10k terminal completion 183→3.4µs; snapshot wall time similar.
+Cognito owns ListUserPools and ListUserPoolClients, native validation/errors,
+page-sized summary queries, persisted metadata and no-secret projection.
+pagination.go owns authenticated cursors for all three Cognito lists.
+Store keys, query scope and pool incarnation bind cursors across restart.
+Upgrade: old unsigned ListUsers tokens are invalid; start a fresh scan.
 
-Final race coverage passed after correcting new fixture startup/undefined
-assumptions; private sync-undefined contract regression fixed and covered.
-Full SDK race 302.197s, retained SDK/RustFS 28.085s, real Swagger 10.527s.
-All-tag vet, five frozen Python fixture tests, formatting/architecture passed.
-Eight Linux/Darwin amd64/arm64 binaries built and hashes checked; native help
-checks passed. Release rebuild metadata records b97996f, CGO=0 and clean VCS.
-Packaged Linux amd64/macOS arm64 warm Lambda, private warm Cognito SRP/custom
-auth, SES capture and joined shutdown passed. All nine uploaded assets were
-downloaded; checksums match. CI 37955422569 is green. Temporary outputs removed.
+Completion loss defaults to disabled. Named dev adapters and a distinct HTTP
+port target one native event/attempt, preserve real handler writes, and reuse
+ordinary async retries. Atomic admission/arming also covers fast handlers.
+Redacted async and private diagnostics identify injected loss explicitly.
+Docs: docs/LAMBDA.md, docs/COGNITO.md and docs/ARCHITECTURE.md.
 
-No pending implementation target from this audit. No dependencies, application/
-default DB, live stack, branch or worktree change. Source commits are on main.
-Raw /tmp/eventbus-opt-round2-*-20261009.log uses existing 24h retention.
-Failed test receipts 3d134fe1/e5ed6c12/3c325bb6/30b9ae5a are quiescent/unpinned,
-expire Oct10 15:01/15:06/15:18/15:22 UTC.
-Wrapper finalization failures a33970dd/31f8660f/e257c705 are quiescent; owned
-scratch removed. Metadata awaits existing janitor orphan reconciliation after
-24h, then failure retention 24h. Successful archives/probes/builds auto-removed.
-Shared caches retain host bounds. Unrelated laptop Plans edits preserved.
+Verification:
+- Full Go race passed; final Lambda correction rerun passed (162.249s).
+- Full frozen SDK race passed (527.046s), including fresh/warm faults and both
+  Cognito inventory SDKs; five Python fixture contract tests passed.
+- Owned retained SDK/RustFS passed (36.845s); real Express/Swagger (18.452s).
+- All-tag vet, formatting and diff checks passed.
 
-Release: https://github.com/lyeith/eventbus/releases/tag/v0.13.0
-Release logs: /tmp/eventbus-release-v0.13.0-*-20261010.log, existing 24h expiry.
+No dependency, worktree, temporary branch, application/default DB or live-stack
+change. Fixtures own and join their listeners, children, files and RustFS data.
+Successful SSD scratch auto-removes; failed receipts are unpinned under 24h
+retention. Raw /tmp/eventbus-tickets33-35-*-20261012.log uses the existing
+24h retention policy. Shared caches retain host bounds.
+Unrelated laptop Plans edits are preserved. Next release is separate work.

@@ -99,6 +99,9 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   Cognito's `signing_keys.go` owns immutable decoded keys and coalesced first-use
   generation outside the store lock. Committed pool deletion invalidates keys and
   pending generations; exported RSA snapshots detach mutable state.
+  `pagination.go` owns authenticated cursors for all Cognito lists, persisted
+  store keys and pool incarnations; native inventory reads page-sized summaries
+  without client secrets.
   Store bootstrap owns one transaction for schema/identity/verification setup;
   the `dev_seed_store.go` adapter uses the native credential owner.
 - `gateway` consumes authorizers only through AWS Lambda Invoke HTTP. It knows no
@@ -117,6 +120,11 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   native results/retries and redacted async metadata keep their existing contracts.
   `dev_python_stacks.go` and its Python collector own bounded live wait snapshots
   in that same sink; live evidence cannot attest invocation join or business success.
+  `warm.go` separately bounds execution and retained idle environments through
+  joined LRU retirement; saturation throttles before launch. The existing async
+  queue retains throttled accepted events without spending handler retries.
+  `dev_async_completion_loss*.go` owns opt-in exact-event faults and a distinct
+  HTTP port; atomic admission and existing-event controls share native tasks.
   `async.go` owns capture transitions separately from the shared service mutex,
   bounded terminal-history ring retention and snapshot sorting outside that mutex.
   Pending admissions count capacity/activity before capture but cannot execute

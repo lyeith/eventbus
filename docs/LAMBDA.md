@@ -81,8 +81,11 @@ and native Event attempt remain unchanged. This internal Init fallback is separa
 from the [two async execution retries](#async-execution-evidence). Explicit Init
 failure ends that attempt; cancellation or uncertain ownership never starts a
 fallback. Caller/service cancellation and effective parent deadlines govern both
-phases. The `command` adapter retains its whole-process configured timeout because
-it has no runtime readiness boundary.
+phases. If capacity is exhausted before the fallback can launch, the joined
+initial Init failure remains the native attempt, including its phase evidence
+and async retry charge. Cancellation stops a pending fallback and preserves
+the already completed initial phase. The `command` adapter retains its whole-process
+configured timeout because it has no runtime readiness boundary.
 
 Gateway HTTP timeouts and SQS receipt visibility remain independent elapsed-time
 limits and may expire during Init. Phase accounting does not automatically extend
@@ -164,15 +167,31 @@ For a retained development stack, opt in through the same local recipe:
 ```yaml
 dev_warm:
   max_workers: 2
+  max_concurrency: 64
 ```
 
 Omitting `dev_warm` preserves fresh execution. An empty block defaults to two
-workers; `max_workers` accepts 1–32. This is one global Python/Node limit across
-functions, aliases and generations, including reservations, busy workers, idle
-workers and retirement. Each worker handles one invocation at a time. If all
-slots are busy, a call waits under its caller/service cancellation before its
-Init/Invoke budget starts. Idle workers for another target can be evicted.
-`provided` and `command` retain their existing fresh execution policy.
+retained idle environments and 64 concurrent executions. `max_workers` accepts
+1–32 and limits the idle Python/Node cache; `max_concurrency` accepts 1–1,024 and
+limits reserved, executing and execution-retiring environments across all runtimes,
+functions, aliases and generations. Idle retirement holds its idle slot until
+cleanup joins. Total managed environments cannot exceed the sum of both limits;
+these limits count environments, not application-controlled RSS.
+
+Each worker runs one invocation at a time. Healthy recent environments replace
+older idle entries through joined LRU retirement. Python/Node can reuse imports;
+`provided` and `command` execute fresh under the same execution budget.
+
+Synchronous saturation returns native HTTP 429 `TooManyRequestsException` with
+`Retry-After: 1` before handler launch, rather than waiting behind parents that
+may be awaiting their children. Leave execution capacity for both parents and
+nested calls. An already accepted Event remains in the existing bounded queue;
+execution throttles back off from one second to one minute, retain its six-hour
+age limit, and do not consume its two function-error retries.
+
+Upgrade note: before this change, `max_workers` conflated retained and active
+capacity. Set `max_concurrency` explicitly when preserving an old execution cap.
+A cap too small for a nested call tree now fails promptly with 429.
 
 The first call imports the application's handler and uses the existing Init /
 Invoke budgets. Later successful calls reuse that imported module and SDK clients
@@ -196,12 +215,12 @@ background work or descendants completed. When retained lifecycle observation is
 configured, a separate `lambda_warm_worker` lease stays live until actual
 retirement. Quiescence drains warm reuse, joins those workers and permits held
 cleanup only afterward. Calls accepted during that drain execute fresh, under
-the same global limit. Resume permits warm reuse again. Final `Close` joins all
+the same execution limit. Resume permits warm reuse again. Final `Close` joins all
 worker lifetimes before closing capture sinks.
 
 The optional one-shot `python_stacks` collector requires a fresh process.
 Python functions with that option execute fresh, still counting against the warm
-limit; Node functions and ordinary private diagnostics can use warm workers.
+execution limit; Node functions and ordinary private diagnostics can use warm workers.
 
 ### Measured SDK calls
 
@@ -306,6 +325,76 @@ Admission requires a successful evidence append. An initial capture failure
 returns HTTP 500 `ServiceException` before accepting the event. A later failure
 preserves accepted execution, blocks subsequent Event admission, emits redacted
 failure metadata to stderr and makes drain/close return an error.
+
+## One-shot async completion loss
+
+Opt in through the selected Lambda recipe:
+
+```yaml
+dev_async:
+  completion_loss: true
+  log_path: .eventbus/lambda.jsonl
+```
+
+The default is disabled. To fault a fast handler without changing its code, POST
+`/__eventbus/dev/lambda/async/events/completion-loss` with
+`{"function_name":"processor:live","payload":{"id":"sample"}}`
+and optional `qualifier`. This admits one native Event and arms its first attempt
+before publication to the same queue. HTTP 202 returns
+`{"request_id":"...","armed":true}`. Native payload limits, target validation,
+capacity and retry policy apply. The envelope is bounded to 1 MiB plus 4 KiB;
+it returns no payload. Ordinary AWS Invoke remains unchanged and unarmed.
+
+The existing-event control targets one already admitted
+native Event, one registered function/alias and one actual handler attempt.
+It runs the real handler, preserves its external effects and joined runtime
+result, then loses that successful attempt's completion at the async retry
+boundary. The existing queue retries the same payload and request identity under
+its normal two-retry policy. It does not alter synchronous Invoke, SNS event IDs,
+handler logs or storage-provider requests.
+
+Find the actual `request_id` in SNS `DeliveryAdmission` evidence, the async file,
+or `GET /__eventbus/dev/lambda/async/events`, which returns `{"events": [...]}`.
+The native HTTP API request ID and SNS MessageId are different identities.
+Hold the application's handler on a test-owned gate before completion, then arm
+the selected queued/upcoming or running attempt:
+
+```sh
+curl -X PUT \
+  http://localhost:4100/__eventbus/dev/lambda/async/events/<request-id>/completion-loss \
+  -H 'Content-Type: application/json' \
+  -d '{"function_name":"processor:live","attempt":1}'
+```
+
+Release the gate only after the control returns
+`{"request_id":"...","function_name":"processor:live","attempt":1,"armed":true}`.
+Repeating that exact live arm is idempotent. The completion decision is atomic
+with arm/clear: PUT for an already decided or different attempt returns 409; absent,
+foreign-function, foreign-instance or terminal event IDs return 404. Malformed
+requests return 400. Bodies are bounded to 4 KiB and accept only the two shown
+fields. The control never selects a future event by function name alone.
+
+Use DELETE on the same URL with the same JSON body to clear the one-shot before
+completion; a repeated active-event clear is idempotent. Clearing cannot undo
+an already lost completion. Handler failure/cancellation consumes the selected
+one-shot without replacing the original failure. Nonlaunch concurrency throttles
+leave it armed for the same upcoming handler attempt. No control survives its
+event's settlement or service restart.
+
+Loss records carry `error_type: Dev.CompletionLost` and
+`injected_completion_loss: true` in the ordinary redacted async transition.
+When private diagnostics are enabled, that actual successful attempt retains
+`function_error: false` and the same injection marker. Later normal attempts
+omit the marker. Loss on the final allowed attempt settles as failed; no retry
+budget is added. Effects may therefore occur more than once: assert application
+idempotency and persisted state separately.
+
+Embedded hosts enable `DevAsyncConfig.CompletionLoss`, attach
+`lambda.NewDevAsyncHandler(service)` through the separate `server.Services.LambdaDev`
+port, or call `DevAdmitAsyncCompletionLoss` (atomic new event),
+`DevArmAsyncCompletionLoss` / `DevClearAsyncCompletionLoss` (existing event) directly.
+The AWS handler remains separate; these controls belong to named
+`dev_async_completion_loss*.go` adapters.
 
 ## Private invocation diagnostics
 
@@ -497,6 +586,8 @@ The typed local seam shares the HTTP runner and registered targets:
 | `RequestPythonSnapshot(InvocationMetadata)` | Accept at most one best-effort private snapshot request for an active Python attempt |
 | `Admit(ctx, InvokeInput)` | Transfer a private payload copy; return an admission request ID |
 | `AsyncSnapshot()` | Copy active and bounded terminal execution metadata |
+| `DevAdmitAsyncCompletionLoss(ctx, InvokeInput)` | Opt-in native Event admission with atomic first-attempt completion loss |
+| `DevArmAsyncCompletionLoss(ctx, function, requestID, attempt)` / `DevClearAsyncCompletionLoss(...)` | Opt-in one-shot control for one existing native async attempt |
 | `DrainAsync(ctx)` | Stop Event admission and join accepted async work; keep synchronous execution available |
 | `RegisterFunction(ctx, name, Function)` / `ReloadFunction(ctx, name)` | Explicit local snapshot/source replacement; retire the previous warm generation |
 | `DevBeginWarmDrain()` / `DevResumeWarm()` | Reversible local worker retirement and reuse fence for lifecycle composition |

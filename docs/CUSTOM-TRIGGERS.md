@@ -78,12 +78,17 @@ Add a top-level block to reuse Node imports across authentication steps:
 ```yaml
 dev_warm:
   max_workers: 3
+  max_concurrency: 64
 ```
 
-Omission keeps fresh execution. An empty block defaults to two workers; an
-explicit cap accepts 1–32. Three workers suit separate Define/Create/Verify
-modules. The trigger cap is separate from the public Lambda recipe's cap; total
-retained capacity is their sum. Handlers with identical module, export,
+Omission keeps fresh execution. `max_workers` limits retained idle imports
+(default two, range 1–32); three suit separate Define/Create/Verify modules.
+`max_concurrency` limits reserved, executing and execution-retiring environments
+(default 64, range 1–1,024). Saturation refuses the trigger promptly; it does not
+wait behind handlers making nested calls. These private limits are separate
+from the public Lambda recipe. Each runtime owns at most its idle plus execution
+limits; the two runtime totals add. Limits count environments, not handler RSS.
+Handlers with identical module, export,
 environment and timeout share imports within a pool. Different pools are
 isolated. Module state persists in warm mode, so handlers must reset per-call
 state and await work.

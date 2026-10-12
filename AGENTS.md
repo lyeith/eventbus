@@ -54,8 +54,13 @@ before configuring endpoints or cleaning fixtures.
 - `internal/gateway` owns generic REQUEST-authorizer and HTTP proxy contracts;
   applications own authorizers and all private integration mappings. It imports
   no consuming application package or store.
-- `internal/lambda` owns Invoke, language execution and child lifetime. App
-  handlers are external fixtures; keep their logs separate from function results.
+- `internal/lambda` owns Invoke, language execution and child lifetime. Warm
+  execution and idle retention have independent bounded budgets; saturation
+  uses native throttling, with already-admitted Events kept by the async owner.
+  Opt-in completion loss belongs in named `dev_async_completion_loss*.go`
+  adapters and a separate dev HTTP port; it selects one existing event/attempt,
+  preserves real handler effects and uses native retry policy.
+  App handlers are external fixtures; keep their logs separate from function results.
 - Optional [SQS delivery evidence](docs/EVENT-SOURCES.md#correlated-delivery-evidence)
   and [private Lambda diagnostics](docs/LAMBDA.md#private-invocation-diagnostics)
   use actual native request IDs and joined lifetimes. Keep diagnostics private;
