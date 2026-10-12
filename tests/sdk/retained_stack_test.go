@@ -225,6 +225,11 @@ func newRetainedStackFixture(t *testing.T, python, node, s3Endpoint string) *ret
 		if name == "batch" {
 			timeout = 10 * time.Second
 		}
+		if name == "sns" {
+			// The first real transport failure is held through unrelated setup;
+			// its configured timeout is not the retry boundary being tested.
+			timeout = time.Minute
+		}
 		functions["stack-"+name+":live"] = lambda.Function{Runtime: "python", Command: []string{python, "-E", "-s"},
 			Handler: fixturePath("python", "retained_stack_smoke.py") + "#" + handler, Timeout: timeout, Environment: environment}
 	}
@@ -352,7 +357,7 @@ func (fixture *retainedStackFixture) close(t *testing.T) {
 	t.Helper()
 	fixture.closed.Do(func() {
 		fixture.available.Store(true)
-		for _, gate := range []string{"release-batches", "release-lost-1", "release-lost-2", "release-lost-3", "release-cognito", "release-scheduled", "release-cleanup", "release-shutdown"} {
+		for _, gate := range []string{"release-batches", "release-sns-failure", "release-lost-1", "release-lost-2", "release-lost-3", "release-cognito", "release-scheduled", "release-cleanup", "release-shutdown"} {
 			_ = os.WriteFile(filepath.Join(fixture.root, gate), nil, 0600)
 		}
 		barrierCtx, cancelBarrier := context.WithTimeout(context.Background(), 25*time.Second)
@@ -558,8 +563,20 @@ func TestRetainedStackNativeSDKRecovery(t *testing.T) {
 	require.Eventually(t, func() bool { return len(fixture.rows(t, "scheduled", "scheduled-started")) == 1 }, 3*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		failed, live := fixture.rows(t, "lost", "sns-failed"), fixture.rows(t, "lost", "persist-started")
-		return len(failed) == 1 && len(live) >= 1 && !retainedSDKAlive(failed[0].PID) && retainedSDKAlive(live[0].PID)
+		return len(failed) == 1 && len(live) == 1 && retainedSDKAlive(failed[0].PID) && retainedSDKAlive(live[0].PID)
 	}, 2*time.Second, 10*time.Millisecond)
+	firstPersist := fixture.rows(t, "lost", "persist-started")[0]
+	holdsInvocation := func(requestID string) bool {
+		for _, activity := range fixture.owner.Snapshot().Activities {
+			if activity.Kind == "lambda_invoke" && activity.RequestID == requestID {
+				return true
+			}
+		}
+		return false
+	}
+	// The nested SDK caller has caught the deliberately lost reply. Its
+	// independent native child still owns real execution and retained activity.
+	require.True(t, holdsInvocation(firstPersist.RequestID))
 	dirty := fixture.controlCall(t, "/quiesce", map[string]int{"timeout_ms": 100}, http.StatusRequestTimeout)
 	require.Equal(t, devquiescence.Draining, dirty.State)
 	require.False(t, dirty.FixtureSafe)
@@ -581,6 +598,14 @@ func TestRetainedStackNativeSDKRecovery(t *testing.T) {
 	fixture.release(t, "release-batches")
 	fixture.release(t, "release-lost-1")
 	finishGateway()
+	require.Eventually(t, func() bool {
+		return !retainedSDKAlive(firstPersist.PID) && !holdsInvocation(firstPersist.RequestID)
+	}, 3*time.Second, 10*time.Millisecond, "independent child must join before its retained activity retires")
+	require.True(t, retainedSDKAlive(fixture.rows(t, "lost", "sns-failed")[0].PID),
+		"first transport failure must still be held before starting native retry")
+	// Start the unchanged four-second native retry window immediately before
+	// inspecting it; unrelated gateway work cannot consume the observation gap.
+	fixture.release(t, "release-sns-failure")
 	require.Eventually(t, func() bool {
 		for _, row := range fixture.rows(t, "lost", "") {
 			if retainedSDKAlive(row.PID) {

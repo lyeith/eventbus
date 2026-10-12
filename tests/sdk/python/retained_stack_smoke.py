@@ -108,6 +108,10 @@ def sns_handler(event, context):
         assert invocation("stack-persist:live", {**value, "attempt": number})["persisted"]
     except (BotoCoreError, ClientError):
         record("sns-failed", value["chain"], context, attempt=number)
+        if value["chain"] == "lost" and number == 1:
+            # Keep the real transport error pending until the driver has
+            # joined its independent child and is ready to inspect native retry.
+            gate("release-sns-failure")
         raise
     record("sns-completed", value["chain"], context, attempt=number)
     return {"ok": True}
