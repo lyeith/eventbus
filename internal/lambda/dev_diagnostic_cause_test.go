@@ -295,8 +295,10 @@ func TestPrivateDiagnosticsPythonGatewayDeadlineRemainsNative504(t *testing.T) {
 	zero := 0
 	proxy, err := gateway.New(gateway.Config{
 		Region: "eu-west-1", AccountID: "123456789012", APIID: "cause", Stage: "test",
+		// Authorization remains real, but its cold Init is not the timeout
+		// under test. Use the normal gateway budget for that separate phase.
 		Authorizers: map[string]gateway.AuthorizerConfig{"native": {
-			Type: "REQUEST", InvokeURL: aws.URL + invokePrefix + "authorize" + invokeSuffix, TTL: &zero, Timeout: 2 * time.Second,
+			Type: "REQUEST", InvokeURL: aws.URL + invokePrefix + "authorize" + invokeSuffix, TTL: &zero,
 		}},
 		Routes: []gateway.RouteConfig{{
 			Path: "/work", Method: http.MethodGet, Authorizer: "native",
@@ -317,7 +319,14 @@ func TestPrivateDiagnosticsPythonGatewayDeadlineRemainsNative504(t *testing.T) {
 	proxy.ServeHTTP(response, request)
 	gatewayCompletedAt := time.Now()
 	if response.Code != http.StatusGatewayTimeout {
-		t.Fatalf("native authorized integration timeout changed: %d %s", response.Code, response.Body.String())
+		// Join the actual native owner before reporting phase evidence. A
+		// transport status alone cannot identify authorizer vs integration.
+		closeContext, cancelClose := context.WithTimeout(context.Background(), 10*time.Second)
+		closeErr := service.Close(closeContext)
+		cancelClose()
+		active, begun, completed := observer.snapshot()
+		t.Fatalf("native authorized integration timeout changed: status=%d body=%s close=%v active=%d begun=%#v completed=%#v diagnostics=%#v",
+			response.Code, response.Body.String(), closeErr, active, begun, completed, readDiagnosticRecords(t, path))
 	}
 	waitDiagnosticMarker(t, marker)
 	// The gateway's HTTP result may precede Lambda process cleanup and private
