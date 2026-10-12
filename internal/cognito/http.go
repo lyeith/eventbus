@@ -47,6 +47,10 @@ func (s *Handler) ServeAction(w http.ResponseWriter, r *http.Request, action str
 		handler = s.handleAdminGetUser
 	case "ListUsers":
 		handler = s.handleListUsers
+	case "ListUserPools":
+		handler = s.handleListUserPools
+	case "ListUserPoolClients":
+		handler = s.handleListUserPoolClients
 	case "AdminSetUserPassword":
 		handler = s.handleAdminSetUserPassword
 	case "AdminDisableUser":

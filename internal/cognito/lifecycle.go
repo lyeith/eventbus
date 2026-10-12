@@ -168,9 +168,8 @@ func parseEmailFilter(filter string) (string, string, error) {
 	return match[1], value, nil
 }
 
-type invalidUserListParameter struct{ message string }
-
-func (e *invalidUserListParameter) Error() string { return e.message }
+// Existing user-list validation uses the same native category as inventories.
+type invalidUserListParameter = invalidListParameter
 
 func (s *Handler) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	var req listUsersRequest
@@ -215,6 +214,8 @@ func (s *Handler) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		var invalid *invalidUserListParameter
 		if errors.As(err, &invalid) {
 			cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", err.Error())
+		} else if errors.Is(err, sql.ErrNoRows) {
+			cognitoJSONError(w, http.StatusBadRequest, "ResourceNotFoundException", "User pool does not exist")
 		} else {
 			cognitoJSONError(w, http.StatusInternalServerError, "InternalErrorException", err.Error())
 		}

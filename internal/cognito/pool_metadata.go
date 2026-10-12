@@ -108,7 +108,7 @@ func (s *CognitoStore) SavePool(ctx context.Context, p *CognitoPool) error {
 		}
 		policy = string(raw)
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO pools(id,region,password_policy,sign_in_config,created_at,last_modified_at,metadata)VALUES(?,?,?,?,?,?,?) ON CONFLICT(id)DO UPDATE SET password_policy=excluded.password_policy,sign_in_config=excluded.sign_in_config,last_modified_at=excluded.last_modified_at,metadata=excluded.metadata`, p.ID, p.Region, policy, string(signIn), p.CreatedAt, p.ModifiedAt, string(metadata))
+	_, err = tx.ExecContext(ctx, `INSERT INTO pools(id,region,password_policy,sign_in_config,created_at,last_modified_at,metadata,inventory_generation)VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id)DO UPDATE SET password_policy=excluded.password_policy,sign_in_config=excluded.sign_in_config,last_modified_at=excluded.last_modified_at,metadata=excluded.metadata`, p.ID, p.Region, policy, string(signIn), p.CreatedAt, p.ModifiedAt, string(metadata), randomHex(16))
 	if err != nil {
 		return err
 	}

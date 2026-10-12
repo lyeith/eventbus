@@ -55,7 +55,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 
 | Area | Local behavior |
 | --- | --- |
-| Cognito | Pools, clients and user lifecycle; password/admin/refresh/SRP auth, application-owned Node custom challenges, TOTP, native configuration/schema/client token policy, verification/recovery capture, signed JWT/JWKS and revocation. [Operation coverage](docs/COGNITO.md). |
+| Cognito | Pools/clients with native discovery and user lifecycle; password/admin/refresh/SRP auth, application-owned Node custom challenges, TOTP, native configuration/schema/client token policy, verification/recovery capture, signed JWT/JWKS and revocation. [Operation coverage](docs/COGNITO.md). |
 | SNS | All 42 operations: topics/subscriptions, filters, batch/FIFO publishing, SMS and mobile push. SQS/Firehose delivery and registered Lambda execution are local; external delivery is captured. [Contracts](docs/MESSAGING.md). |
 | SQS | All 23 operations, including direct/batch sending, attributes/checksums, visibility, FIFO, policies/tags and DLQ redrive. [Contracts](docs/MESSAGING.md). |
 | API gateway | Separate `eventbus-gateway` executable; REST/HTTP API REQUEST authorizers, IAM/simple responses, HTTP_PROXY and AWS_PROXY 1.0/2.0. [Contracts](docs/GATEWAY.md). |

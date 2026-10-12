@@ -34,6 +34,7 @@ type CognitoStore struct {
 	signingKeyGenerations map[string]*signingKeyGeneration
 	signingKeyTasks       sync.WaitGroup
 	closed                bool
+	paginationKey         [32]byte
 }
 
 // OpenCognitoStore opens (or creates) the SQLite database at path and
@@ -98,6 +99,7 @@ func (s *CognitoStore) bootstrap() error {
 			created_at INTEGER NOT NULL,
 			FOREIGN KEY (pool_id) REFERENCES pools(id) ON DELETE CASCADE
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_clients_pool_id_id ON clients(pool_id,id)`,
 		`CREATE TABLE IF NOT EXISTS users (
 			sub TEXT PRIMARY KEY,
 			pool_id TEXT NOT NULL,
@@ -166,6 +168,7 @@ func (s *CognitoStore) bootstrap() error {
 	migrations := []string{
 		`ALTER TABLE pools ADD COLUMN password_policy TEXT`,
 		`ALTER TABLE pools ADD COLUMN metadata TEXT`,
+		`ALTER TABLE pools ADD COLUMN inventory_generation TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pools ADD COLUMN last_modified_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE clients ADD COLUMN metadata TEXT`,
 		`ALTER TABLE clients ADD COLUMN last_modified_at INTEGER NOT NULL DEFAULT 0`,
@@ -208,6 +211,9 @@ func (s *CognitoStore) bootstrap() error {
 	if err := s.bootstrapVerification(ctx, tx); err != nil {
 		return err
 	}
+	if err := s.bootstrapPagination(ctx, tx); err != nil {
+		return fmt.Errorf("bootstrap cognito pagination: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit cognito schema: %w", err)
 	}
@@ -225,10 +231,10 @@ func (s *CognitoStore) UpsertPool(ctx context.Context, id, region string) error 
 		region = "us-east-1"
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO pools (id, region, created_at)
-		VALUES (?, ?, ?)
+		INSERT INTO pools (id, region, created_at, inventory_generation)
+		VALUES (?, ?, ?, ?)
 		ON CONFLICT(id) DO NOTHING
-	`, id, region, s.now().Unix())
+	`, id, region, s.now().Unix(), randomHex(16))
 	return err
 }
 

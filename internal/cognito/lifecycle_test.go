@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -330,14 +328,12 @@ func TestListUsersFiltersPaginationAndDisabledVisibility(t *testing.T) {
 	status, body = postCognito(t, server.URL, "ListUsers", map[string]interface{}{"UserPoolId": "list-pool", "Limit": 0})
 	require.Equal(t, http.StatusOK, status)
 	require.Empty(t, body["Users"])
-	data, err := base64.RawURLEncoding.DecodeString(token)
-	require.NoError(t, err)
-	var cursor userListCursor
-	require.NoError(t, json.Unmarshal(data, &cursor))
-	cursor.Expires = time.Now().Add(-time.Minute).Unix()
-	data, err = json.Marshal(cursor)
-	require.NoError(t, err)
-	_, _, err = store.ListPoolUsers(t.Context(), "list-pool", UserListOptions{Filter: `email ^= "BETA"`, Limit: 1, PaginationToken: base64.RawURLEncoding.EncodeToString(data)})
+	// Expiry is checked against the owned clock without modifying an opaque
+	// token. Tampered tokens are covered by the shared cursor contract tests.
+	store.clockMu.Lock()
+	store.clock = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	store.clockMu.Unlock()
+	_, _, err := store.ListPoolUsers(t.Context(), "list-pool", UserListOptions{Filter: `email ^= "BETA"`, Limit: 1, PaginationToken: token})
 	var invalid *invalidUserListParameter
 	require.True(t, errors.As(err, &invalid))
 }

@@ -26,6 +26,7 @@ proofs and [agent workflow](AGENT-HARNESS.md) for application-owned scenarios.
 | --- | --- |
 | CreateUserPool, DescribeUserPool, DeleteUserPool | Generated identity, schema, password/sign-in/workflow settings and persisted metadata |
 | CreateUserPoolClient, DescribeUserPoolClient, DeleteUserPoolClient | Client identity/secret, auth flows, attribute permissions and token/challenge lifetimes |
+| ListUserPools, ListUserPoolClients | Read-only scoped summaries, empty inventories and authenticated pagination; client lists omit secrets |
 | AdminCreateUser, AdminSetUserPassword | Temporary/permanent password, SUPPRESS, RESEND and captured invitations |
 | AdminGetUser, ListUsers | Attributes, enabled/status/timestamps; email `=`/`^=` filters, pagination, disabled users |
 | AdminDisableUser, AdminEnableUser, AdminDeleteUser | Account lifecycle and grant invalidation |
@@ -42,6 +43,33 @@ proofs and [agent workflow](AGENT-HARNESS.md) for application-owned scenarios.
 
 Unknown operations return `InvalidAction`; optional settings are limited to
 the supported subset below.
+
+## Pool and client inventory
+
+[ListUserPools](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_ListUserPools.html)
+requires `MaxResults` from 1 to 60.
+[ListUserPoolClients](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_ListUserPoolClients.html)
+requires `UserPoolId`; `MaxResults` is optional, defaults to 60 and accepts 1–60.
+Both return empty arrays for empty inventories. Missing client-list pools return
+`ResourceNotFoundException`; invalid requests or tokens return
+`InvalidParameterException`.
+
+Pool summaries include supported identity, name, status, configuration and stable
+creation/modification timestamps. Client summaries contain only `ClientId`,
+`ClientName` and `UserPoolId`; they never expose secrets. Use Describe for the
+supported detailed metadata.
+
+All three list APIs share Cognito's authenticated cursor owner. Inventory is
+ordered by persisted ID and uses live keysets: unchanged inventories traverse
+without duplicates or omissions; insertions behind a cursor belong to a new
+scan. Tokens bind the operation, store, page size and relevant query/pool
+incarnation. They survive restart of the same store and reject tampering,
+cross-instance/cross-pool use or delete/recreate of a selected pool. Continue
+with the same request parameters.
+
+Upgrade note: older unsigned `ListUsers` pagination tokens are rejected. Restart
+that scan after upgrading; existing identities, metadata and authentication state
+remain persisted.
 
 ## Native configuration
 

@@ -3,7 +3,6 @@ package cognito
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -365,18 +364,7 @@ func (s *CognitoStore) DeletePoolUser(ctx context.Context, poolID, identifier st
 	return count != 0, nil
 }
 
-// A cursor is bound to one query and expires after the AWS-documented hour.
-// Pool-scoped keyset pagination never repeats a returned identity.
-type userListCursor struct {
-	Version    int    `json:"v"`
-	PoolID     string `json:"pool"`
-	Filter     string `json:"filter"`
-	Attributes string `json:"attributes"`
-	Limit      int    `json:"limit"`
-	After      string `json:"after"`
-	Expires    int64  `json:"expires"`
-}
-
+// User listing shares the authenticated store/pool-scoped cursor owner.
 type UserListOptions struct {
 	Filter          string
 	Limit           int
@@ -389,15 +377,29 @@ func (s *CognitoStore) ListPoolUsers(ctx context.Context, poolID string, options
 	if limit < 0 || limit > 60 {
 		return nil, "", &invalidUserListParameter{"Limit must be between 0 and 60"}
 	}
-	cursor := userListCursor{Version: 1, PoolID: poolID, Filter: options.Filter, Attributes: strings.Join(options.AttributesToGet, "\x00"), Limit: limit, Expires: s.now().Add(time.Hour).Unix()}
-	if options.PaginationToken != "" {
-		data, err := base64.RawURLEncoding.DecodeString(options.PaginationToken)
-		if err != nil {
-			return nil, "", &invalidUserListParameter{"invalid pagination token"}
-		}
-		if err = json.Unmarshal(data, &cursor); err != nil || cursor.Version != 1 || cursor.PoolID != poolID || cursor.Filter != options.Filter || cursor.Attributes != strings.Join(options.AttributesToGet, "\x00") || cursor.Limit != limit || cursor.Expires < s.now().Unix() {
-			return nil, "", &invalidUserListParameter{"invalid pagination token"}
-		}
+	attributes := options.AttributesToGet
+	if len(attributes) == 0 {
+		attributes = nil
+	}
+	queryBinding, err := listQuery(struct {
+		Filter     string
+		Attributes []string
+	}{Filter: options.Filter, Attributes: attributes})
+	if err != nil {
+		return nil, "", err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback()
+	var generation string
+	if err = tx.QueryRowContext(ctx, `SELECT inventory_generation FROM pools WHERE id=?`, poolID).Scan(&generation); err != nil {
+		return nil, "", err
+	}
+	cursor, err := s.beginList("ListUsers", poolID, generation, queryBinding, limit, options.PaginationToken, time.Hour)
+	if err != nil {
+		return nil, "", err
 	}
 	if limit == 0 {
 		return []*CognitoUser{}, "", nil
@@ -419,7 +421,7 @@ func (s *CognitoStore) ListPoolUsers(ctx context.Context, poolID string, options
 	}
 	query += ` ORDER BY sub LIMIT ?`
 	args = append(args, limit+1)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, "", err
 	}
@@ -439,12 +441,8 @@ func (s *CognitoStore) ListPoolUsers(ctx context.Context, poolID string, options
 		return users, "", nil
 	}
 	users = users[:limit]
-	cursor.After = users[len(users)-1].Sub
-	data, err := json.Marshal(cursor)
-	if err != nil {
-		return nil, "", err
-	}
-	return users, base64.RawURLEncoding.EncodeToString(data), nil
+	next, err := s.finishList(cursor, users[len(users)-1].Sub)
+	return users, next, err
 }
 
 // ConsumeChallengeSession rejects expired, replayed, disabled or superseded
