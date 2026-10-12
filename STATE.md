@@ -1,44 +1,46 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. Tickets #33–#36 implemented.
-Release v0.14.0 is being prepared; published latest remains v0.13.0 at b97996f.
-No application/default DB or live stack is changed by release verification.
+and agent development harness. Tickets #33–#36 implemented and released.
+Published latest v0.14.0; annotated tag points to clean source
+0cd0c4867f3720de87f8d7479bd17228936a84e4.
+https://github.com/lyeith/eventbus/releases/tag/v0.14.0
+Eight Linux/macOS amd64/arm64 EventBus/gateway binaries plus SHA256SUMS are public.
 
-#36 f9fd81b provides selected private Cognito trigger source reload:
+#36 f9fd81b adds source-only private Cognito trigger reload:
 POST /__eventbus/dev/cognito/pools/{pool_id}/triggers/{trigger_name}/reload
-with no body. The named Cognito dev port tracks admission/Close and delegates
-its immutable hidden target to Lambda.ReloadFunction. Matching entries within
-a pool share replacement imports; active old warm calls finish and retire.
-Source-only reload preserves config/environment/timeouts, pools/clients/users,
-signing keys, tokens and pending challenge/session state. Peers stay unchanged.
-Canceled waits do not undo published code or cancel old handler calls.
+with no body. The named dev port tracks admission/Close and maps the selected
+immutable hidden target into Lambda's existing generation owner.
+Matching entries within a pool share replacement imports; active old warm calls
+finish and retire. Config/environment/timeouts, native identity/session state,
+tokens/signing keys and unrelated private/public functions remain intact.
+Interrupted waits do not roll back published code or cancel old handler calls.
 See docs/CUSTOM-TRIGGERS.md#development-source-reload.
 
-b367656 fixes the shared warm retirement publication gap: resume joins existing
-retirements outside the pool lock before reopening reuse. Genuine live workers
-and ownership failures still block resume. The deterministic regression holds
-actual worker activity release after process cleanup and observes real resume.
+b367656 fixes warm resume observing an activity release before pool-removal
+publication. Resume joins existing retirements outside the pool lock, then
+rechecks state before reopening. Live workers/ownership failures still refuse.
+The deterministic real-worker test holds that precise publication boundary.
 
-The release also includes previous source-only changes:
-- #33 c0ef7a7: independent idle/execution limits, joined LRU/retirement and
-  native prelaunch throttling without spending accepted Event handler retries.
-- #34 c7b86d4: native Cognito pool/client inventory, persisted metadata and
-  one authenticated cursor owner for all lists.
-- #35 f480dd9: opt-in one-shot async completion loss for an exact event/attempt,
-  preserving real writes, payload/identity and normal retry policy.
-Upgrade notes: max_workers now limits idle retention; max_concurrency defaults 64.
-Old unsigned ListUsers tokens require a fresh scan. Fresh execution and
-completion-loss disabled remain defaults. See service docs/ISSUE-TRIAGE.
+v0.14.0 also includes #33 independent idle/execution limits and native throttling,
+#34 Cognito pool/client inventory with authenticated pagination, and #35 scoped
+one-shot async completion loss with real effects/native retries.
+Upgrade: max_workers now limits idle retention; max_concurrency defaults to 64.
+Old unsigned ListUsers tokens require a fresh scan. Fresh execution and disabled
+completion-loss injection remain defaults. See the service contracts/issue triage.
 
 Verification:
 - Affected full race: app (71.539s), triggers (1.387s), server (4.875s), Lambda (151.239s).
-- New real Cognito/SES SDK reload proof (8.940s); all-tag vet passed.
-- Prior full Go/SDK/retained/Swagger gates and CI38212732667 passed for #33–#35.
-- Packaged Linux/macOS proof, release checksums and new CI are next.
+- Real reload Cognito/SES SDK (8.940s); all-tag vet, formatting and diff checks passed.
+- Release-source CI 38217102424 passed full Go race/vet and frozen SDK/Swagger.
+- Same packaged reload proof: Linux amd64 8.265s; macOS arm64 3.473s.
+  Both assert actual observed private/public workers exited after SIGTERM/join.
+- All eight binaries have clean VCS revision/CGO=0 metadata. Native help passed.
+  All nine uploads were downloaded; checksums and local binary bytes match.
 
-Owned fixtures join native processes/listeners and remove their temporary data.
-No new dependencies/environments/worktrees/branches were added.
-Successful SSD scratch auto-removes; failed test metadata is unpinned under 24h
-retention. Raw /tmp/eventbus-ticket36-*-20261012.log uses existing 24h policy.
-Unrelated laptop Plans edits are preserved; shared caches retain host bounds.
+Owned build outputs, downloaded assets, source archive, macOS test/dependency
+copy and package processes are removed/joined. No new dependencies, worktrees,
+branches, live-stack/default-state changes. Unrelated laptop Plans edits preserved.
+Failed test receipt d9c24ade* remains unpinned under 24h retention.
+Raw /tmp/eventbus-ticket36-*-20261012.log and release-v0.14.0 logs use existing 24h
+retention. Successful SSD scratch auto-removes; shared caches keep host bounds.

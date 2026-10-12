@@ -1,51 +1,52 @@
 # Handoff
 
-Canonical SSD /home/spite/Projects/eventbus, main. #33–#36 source work complete.
-Preparing v0.14.0; latest public binaries remain v0.13.0 until publication.
+Canonical SSD /home/spite/Projects/eventbus, main. #33–#36 released in v0.14.0.
+https://github.com/lyeith/eventbus/releases/tag/v0.14.0
+Release tag source 0cd0c4867f3720de87f8d7479bd17228936a84e4 is clean.
+Eight EventBus/gateway Linux/macOS amd64/arm64 binaries plus SHA256SUMS are public.
 
 #36 f9fd81b:
-- cognitotrigger/dev_reload*.go owns optional DevTriggerReloader, reload admission,
-  cancellation/Close joins and static HTTP errors. Server.CognitoDev is separate
-  from native routing; app composes the configured private runner.
-- App maps pool/trigger to its existing immutable hidden target. Lambda's existing
-  ReloadFunction publishes and retires that shared generation; no new coordinator.
-- Active old warm calls finish while subsequent invocations use replacement code.
-  Matching Define/Create/Verify entries change together. Other pool/generation/
-  public workers, recipe settings and native Cognito state remain intact.
-- HTTP 200 confirms retired warm workers joined; canceled wait 504 leaves published
-  replacement active. Bad source 503 retains previous usable generation.
-- Real regression checks actual old/new PIDs, shared counts, original env/timeout,
-  independent pool/public imports, interrupted waits and validation refusal.
-- Maintained SDK scenario proves real SRP+SES, completing an old signed challenge
-  under new handlers, old access/refresh tokens, JWKS/client/user preservation.
-  EVENTBUS_SMOKE_BINARY selects the same proof through an owned packaged CLI.
-  SIGTERM/Wait also verifies every observed private/public worker PID exited.
+- cognitotrigger/dev_reload*.go owns the optional DevTriggerReloader port,
+  reload admission/cancellation/Close joins and static HTTP errors.
+  Server.CognitoDev is separate from AWS routing; app composes its private runner.
+- App resolves its immutable pool/trigger target and calls Lambda.ReloadFunction.
+  Coalesced entries share replacement imports; active old warm calls finish.
+  Other generations/pools/public functions, recipe settings and native Cognito
+  identity/session state, tokens and signing keys remain intact.
+- A canceled wait 504 leaves published source active. Source validation failure 503
+  retains the usable prior generation. HTTP 200 confirms old warm workers joined.
+- Real worker regression covers aliases, old/new PIDs, preserved env/timeouts,
+  peers, interrupted waits and validation refusal.
+- Maintained SDK proof uses real SRP+SES, finishes a pre-reload signed challenge,
+  and validates old access/refresh tokens, stable JWKS/client/user metadata.
+  EVENTBUS_SMOKE_BINARY reuses that proof through an owned packaged CLI.
+  SIGTERM/Wait checks every observed private/public worker PID is ESRCH.
 
-Shared fix b367656:
-- A full affected run exposed Resume after Quiesce rejecting a worker whose
-  activity lease completed before its pool-removal publication.
-- DevResumeWarm joins retiring workers through the existing owner outside mu,
-  then checks closure/sticky errors/new work before reopening. Live workers
-  still refuse resume; capacity stays held through actual retirement.
-- Deterministic Activity-port gate reproduces that exact publication gap.
-  Actual child is already gone, resume waits, evidence remains readable, then
-  gate release yields healthy Open/new worker and joined cleanup.
+Shared retirement fix b367656:
+- An existing retained test failed on Resume after clean Quiesce. Worker activity
+  release preceded pool-removal publication, so resume rejected a joined worker
+  and falsely made the coordinator's evidence permanently dirty.
+- DevResumeWarm joins already-retiring workers through the same owner outside mu,
+  then checks closure/errors/new work before reopening. Live workers still refuse.
+- Deterministic Activity-port gate holds the exact publication gap after actual
+  process cleanup; resume waits, evidence remains readable, then opens cleanly.
 
 Validation:
-- Focused reload/router race passed; full affected rerun passed app (71.539s),
-  cognitotrigger (1.387s), server (4.875s) and full Lambda (151.239s).
-- Real reload SDK passed (8.940s); all-tag vet passed; gofmt/diff clean.
-- Initial old resume failure led to owner fix; twenty isolated pre-fix iterations
-  passed but did not establish causality. New gated regression does.
-- #33–#35 prior full Go/SDK/retained/Swagger and CI38212732667 passed.
-- Next: clean source commit/push, eight release builds, Linux/macOS packaged proof,
-  successful release-source CI, tag/publication and download/hash verification.
+- Full affected race passed app (71.539s), cognitotrigger (1.387s), server (4.875s),
+  full Lambda (151.239s); reload SDK (8.940s); all-tag vet and formatting/diff checks.
+- Release-source CI 38217102424 passed full Go race/vet and frozen SDK/Swagger.
+- Packaged SDK proof Linux amd64 8.265s and macOS arm64 3.473s passed, including
+  real private/public worker shutdown; native EventBus/gateway help passed.
+- All eight build metadata records show source 0cd0c48, modified=false, CGO=0.
+  All nine uploaded assets downloaded; SHA256SUMS and original binaries match.
+- Public latest release verified; #36 closed automatically on source push.
 
-Release notes must include #33 max_workers→idle/max_concurrency defaults 64 and
-#34 unsigned ListUsers cursor restart. Native fresh/completion-loss defaults stay.
-Contracts: docs/CUSTOM-TRIGGERS.md, docs/LAMBDA.md, docs/COGNITO.md, SDK README.
+Release includes prior #33–#35. Upgrade notes: max_workers now means idle
+retention; max_concurrency defaults to 64. Old unsigned ListUsers cursors restart.
+Fresh execution/completion-loss disabled remain defaults.
+Contracts: custom-trigger docs, Lambda/Cognito docs, architecture and SDK README.
 
-Cleanup uses standard task owners; no dependency or live-state change.
-Failed receipt d9c24ade* is unpinned with 24h expiry; raw ticket36 logs use 24h.
-Successful scratch auto-removes; no manual disposable fixture is retained.
-Preserve unrelated laptop Plans edits. Shared caches keep existing host bounds.
+Cleanup complete: owned dist/downloads/archive/macOS source+dependency copy and
+package processes removed/joined. No new dependency, worktree/branch or live state.
+Unrelated laptop Plans edits preserved. Failed receipt d9c24ade* is unpinned with
+24h expiry; ticket/release raw logs use existing 24h policy. Shared caches bounded.
