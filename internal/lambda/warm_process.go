@@ -79,11 +79,21 @@ func (worker *warmWorker) start(service *Service, input invocation, invocationCo
 	if err := invocationContext.Err(); err != nil {
 		return err
 	}
-	if err := command.Start(); err != nil {
+	if err := input.startRuntime(command); err != nil {
 		return err
 	}
 	worker.processDone = make(chan struct{})
-	go func() { worker.waitErr = command.Wait(); close(worker.processDone) }()
+	go func() {
+		worker.waitErr = command.Wait()
+		if service.workerCrashEnabled {
+			worker.mu.Lock()
+			if worker.current != nil {
+				worker.current.input.workerCrash.finish()
+			}
+			worker.mu.Unlock()
+		}
+		close(worker.processDone)
+	}()
 	return nil
 }
 
@@ -159,6 +169,12 @@ func (service *Service) runWarm(ctx context.Context, worker *warmWorker, input i
 	}
 	stopInvocationCancellation := linkWarmCancellation(ctx, worker.cancel)
 	defer stopInvocationCancellation()
+	select {
+	case <-worker.processDone:
+		input.workerCrash.finish()
+	default:
+	}
+	input.workerCrash.attach(input.phase)
 	worker.requests <- runtime
 	var result invocationResult
 	select {

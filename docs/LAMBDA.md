@@ -435,6 +435,81 @@ port, or call `DevAdmitAsyncCompletionLoss` (atomic new event),
 The AWS handler remains separate; these controls belong to named
 `dev_async_completion_loss*.go` adapters.
 
+## One-shot worker crash
+
+Enable this separate development control in the public Lambda recipe:
+
+```yaml
+dev_worker_crash:
+  enabled: true
+```
+
+The default is disabled. The control terminates the actual owned runtime worker
+for one existing request ID and attempt. It preserves writes already performed
+by the application. Fresh command/provided/Python/Node execution and retained
+Python/Node workers are supported. Cognito's private functions are excluded.
+
+Use a real producer first. For SNS, select the Lambda request ID from
+`DeliveryAdmission`, the async capture, or
+`GET /__eventbus/dev/lambda/invocations`. That snapshot returns
+`{"invocations":[...],"events":[...]}`: active entries contain only
+`request_id`, `function_name`, `function_arn`, `attempt` and
+`state` (`pending`, `running` or `crashing`); events use the existing redacted
+async schema. SNS MessageId and the HTTP API request ID are different identities.
+
+For an existing SNS/Lambda Event, select the current attempt or its next
+queued/upcoming attempt. For SQS, send through the normal queue and mapping,
+then select the actual active Lambda request ID from the snapshot or the
+`--sqs-delivery-log` admitted record. Each SQS delivery is a synchronous Lambda
+execution with `attempt: 1`; redelivery keeps the SQS message ID, increases
+`receive_count`, and admits a new Lambda request ID. A SQS message ID cannot arm
+a not-yet-admitted invocation. Batch selection crashes the entire invocation;
+the existing whole-batch ACK policy applies.
+
+```sh
+curl -X PUT \
+  http://localhost:4100/__eventbus/dev/lambda/invocations/<request-id>/worker-crash \
+  -H 'Content-Type: application/json' \
+  -d '{"function_name":"processor:live","attempt":1}'
+```
+
+The 200 response contains `request_id`, `function_name`, `attempt`, `armed`
+and `fired`. A pending arm returns `armed: true, fired: false`; it waits for
+that attempt's actual process launch or leased warm worker. An active kill
+returns `armed: false, fired: true`. Firing requests termination; use joined
+terminal evidence to confirm the runtime stopped. There is no synthetic event
+admission, future function-only selector, PID field or additional retry budget.
+A fast handler that has already completed is refused; use an application-owned
+test gate when an exact active selection needs to be deterministic.
+
+DELETE the same URL with the same body to remove a pending arm. A fired fault
+cannot be undone. Selection/launch/completion are synchronized: concurrent
+duplicate arms and consumed/stale attempts return 409; absent, foreign-function,
+foreign-instance or settled terminal IDs return 404. Disabled controls return 404 and
+a closing service returns 503. Malformed/unknown fields or bodies over 4 KiB
+return 400. Snapshots are observational; an attempt can finish before PUT.
+A readable terminal capture line may precede owner publication; use the snapshot
+when waiting for settled state. No arm survives settlement or restart.
+
+A fired attempt fails with native `Runtime.ExitError`. Redacted async records
+and optional private diagnostics carry `injected_worker_crash: true`;
+diagnostics use `state: failed` and
+`termination_cause: injected_worker_crash`. Clean worker/child joins keep
+`ownership_confirmed: true`; cleanup uncertainty remains an error.
+Other attempts and workers continue normally. SNS uses the original Event's
+identity, payload and two-retry policy; SQS uses its existing visibility,
+redrive and ACK owners. Prior handler-issued native receipt deletion also
+remains effective. Assert durable effects and application idempotency separately.
+
+Embedded hosts use `DevWorkerCrashConfig.Enabled`,
+`DevArmWorkerCrash` / `DevClearWorkerCrash`, or attach
+`NewDevWorkerCrashHandler(service)` through
+`server.Services.LambdaWorkerDev`. The adapter is owned by named
+`dev_worker_crash*.go` files; localexec retains process-group cleanup ownership.
+[Completion loss](#one-shot-async-completion-loss) remains a separate opt-in
+capability after successful handler execution. Storage write faults belong at
+the storage/provider seam.
+
 ## Private invocation diagnostics
 
 To retain actual native handler logs, add this separate development option to

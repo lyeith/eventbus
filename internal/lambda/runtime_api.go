@@ -48,14 +48,18 @@ func runProvided(ctx context.Context, entry executableFunction, input invocation
 	logs := newInvocationLogs(input.diagnostics, false)
 	stdoutCopy, stderrCopy := localexec.NewTrackedOutputs(logs.stdoutWriter(), logs.stderrWriter())
 	command.Stdout, command.Stderr = stdoutCopy, stderrCopy
-	if err := command.Start(); err != nil {
+	if err := input.startRuntime(command); err != nil {
 		result := notStartedFailure("Runtime.InvalidEntrypoint", "Cannot start configured function")
 		result.logs, result.diagnostics = logs.merged.Bytes(), logs.diagnostics()
 		result.diagnostics.processError = err.Error()
 		return result
 	}
 	processDone := make(chan error, 1)
-	go func() { processDone <- command.Wait() }()
+	go func() {
+		waitErr := command.Wait()
+		input.workerCrash.finish()
+		processDone <- waitErr
+	}()
 	finished := false
 	var waitErr error
 	select {
@@ -220,6 +224,11 @@ func (runtime *runtimeInvocation) ServeHTTP(writer http.ResponseWriter, request 
 	// Body I/O runs outside mu. A concurrent first /next can complete Init
 	// while an init/error body is being read; recheck at the actual claim.
 	if !runtime.resultAllowedLocked(initialization) {
+		runtime.mu.Unlock()
+		writer.WriteHeader(http.StatusConflict)
+		return
+	}
+	if !runtime.input.workerCrash.acceptResult() {
 		runtime.mu.Unlock()
 		writer.WriteHeader(http.StatusConflict)
 		return

@@ -238,3 +238,24 @@ go test -race -count=1 -timeout 5m -tags sdksmoke ./tests/sdk \
 CI enables the flag on its full SDK lane. Without the flag, only this slow test
 skips. Fake-clock component tests separately
 cover native admission and shutdown races without slowing SDK verification.
+
+## Exact native worker death
+
+`TestWorkerCrashNativeProducerPythonSDKSmoke` uses unchanged pinned boto3 SNS
+Publish and SQS SendMessage APIs. The ordinary registered Python handler commits
+an external write before waiting on a file gate. The control selects the actual
+SNS admission or SQS mapping invocation ID and attempt; it never takes a PID,
+creates a synthetic event or substitutes a handler result.
+
+Fresh and warm scenarios terminate the selected active worker, preserve its
+committed write and prove that native retry/redelivery executes the same handler.
+SNS keeps its message/event/request identity across attempts. SQS keeps the message
+ID, increments its receive count, assigns a new invocation ID and acknowledges
+only the successful redelivery. Warm scenarios first prewarm each alias through
+its real producer and prove module reuse before death and reinitialization afterward.
+Overlapping calls, native broker operations and Cognito inventory/JWKS remain
+healthy. An armed queued SNS event is cleared before launch and succeeds normally.
+Diagnostics, delivery evidence and a final retained-owner barrier prove joined
+failures, success, receipt settlement and worker cleanup. Terminal selection
+checks await the native owner snapshot after JSONL evidence becomes readable.
+This test runs in the normal `sdksmoke` lane and needs no additional dependency.

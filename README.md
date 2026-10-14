@@ -35,6 +35,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Cognito contracts](docs/COGNITO.md): lifecycle, SRP, custom triggers and persistence.
 - [API gateway](docs/GATEWAY.md): REST/HTTP REQUEST authorizers and HTTP/Lambda proxy integrations.
 - [Lambda execution](docs/LAMBDA.md): application-owned handlers, opt-in warm Python/Node workers and explicit local reload.
+- [Runtime fault controls](docs/LAMBDA.md#one-shot-worker-crash): opt-in exact-request worker crashes for real SNS/SQS flows.
 - [S3 notifications](docs/S3-NOTIFICATIONS.md): validated LocalStack uploads into registered EventBus Lambda targets.
 - [Performance improvements](docs/PERFORMANCE-IMPROVEMENTS-ROUND-2.md): all second-round targets, before/after measurements and ownership.
 - [Second performance audit](docs/PERFORMANCE-AUDIT-ROUND-2.md): baseline measurements and contracts.

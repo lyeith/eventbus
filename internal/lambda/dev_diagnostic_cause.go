@@ -38,6 +38,8 @@ func projectDiagnosticCause(contextErr, cancellationCause error) (contextError, 
 		contextError = "deadline_exceeded"
 	}
 	switch {
+	case errors.Is(cancellationCause, errDevWorkerCrash):
+		return contextError, "injected_worker_crash"
 	case errors.Is(cancellationCause, errFunctionBudget):
 		return "deadline_exceeded", "function_timeout"
 	case errors.Is(cancellationCause, errInitializationBudget):

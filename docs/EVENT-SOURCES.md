@@ -61,6 +61,9 @@ current, unexpired receipt or proven original receipt already settled by native
 deletion. A stale successful HTTP delete no-op is not that proof. See
 [receipt settlement](MESSAGING.md#native-mapping-receipt-settlement).
 Asynchronous Lambda `Event` admission is never used for SQS settlement.
+The optional [worker-crash control](LAMBDA.md#one-shot-worker-crash) selects an
+already admitted active Lambda request ID with attempt 1. Redelivery retains
+the message ID and increments its receive count, with a new Lambda request ID.
 
 `BatchSize` accepts 1–10 and defaults to the native SQS value of 10.
 `ScalingConfig.MaximumConcurrency` accepts 2–1000, is preserved in Create/Get,

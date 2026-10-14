@@ -252,6 +252,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if functions != nil {
 		services.LambdaDev = lambdaservice.NewDevAsyncHandler(functions)
 		services.LambdaWarmDev = lambdaservice.NewDevWarmHandler(functions)
+		services.LambdaWorkerDev = lambdaservice.NewDevWorkerCrashHandler(functions)
 	}
 	if triggers != nil {
 		services.CognitoDev = cognitotrigger.NewDevReloadHandler(triggers)

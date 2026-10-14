@@ -62,6 +62,7 @@ type invocationDiagnosticRecord struct {
 	CompletionScope           CompletionScope     `json:"completion_scope,omitempty"`
 	State                     InvocationState     `json:"state"`
 	FunctionError             bool                `json:"function_error"`
+	InjectedWorkerCrash       bool                `json:"injected_worker_crash,omitempty"`
 	InjectedCompletionLoss    bool                `json:"injected_completion_loss,omitempty"`
 	OwnershipConfirmed        bool                `json:"ownership_confirmed"`
 	StdoutIsResponse          bool                `json:"stdout_is_response,omitempty"`
@@ -209,6 +210,7 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		StartedAt: started.UTC(), CompletedAt: completion.at.UTC(), State: result.state,
 		FunctionError: result.functionError, OwnershipConfirmed: result.ownershipErr == nil,
 		InjectedCompletionLoss: result.devCompletionLoss,
+		InjectedWorkerCrash:    result.devWorkerCrash,
 		Stderr:                 diagnosticBytes(result.diagnostics.stderr, result.diagnostics.stderrBytes),
 		Tail:                   diagnosticBytes(logs, result.diagnostics.tailBytes), ContextError: completion.contextError,
 		TerminationCause: completion.cause, ElapsedMS: float64(completion.at.Sub(started)) / float64(time.Millisecond),
@@ -227,7 +229,7 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		stdout := diagnosticBytes(result.diagnostics.stdout, result.diagnostics.stdoutBytes)
 		record.Stdout = &stdout
 	}
-	if result.functionError && (!completion.synthesized || completion.cause == "function_timeout" || completion.cause == "initialization_timeout" || completion.cause == "runtime_protocol_error") {
+	if result.functionError && (!completion.synthesized || completion.cause == "function_timeout" || completion.cause == "initialization_timeout" || completion.cause == "runtime_protocol_error" || completion.cause == "injected_worker_crash") {
 		failure := result.payload
 		if len(failure) > maxDiagnosticFailure {
 			failure = failure[:maxDiagnosticFailure]

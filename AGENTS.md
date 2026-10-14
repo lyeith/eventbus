@@ -62,6 +62,10 @@ before configuring endpoints or cleaning fixtures.
   Opt-in completion loss belongs in named `dev_async_completion_loss*.go`
   adapters and a separate dev HTTP port; it selects one existing event/attempt,
   preserves real handler effects and uses native retry policy.
+  One-shot worker death belongs in named `dev_worker_crash*.go` adapters;
+  runner launch/result ownership synchronizes exact existing request/attempt
+  selection. Reuse localexec termination/joins and native retry/ACK owners.
+  Public controls never expose private Cognito invocations.
   App handlers are external fixtures; keep their logs separate from function results.
 - `internal/events` owns native default-bus rate rules, scheduled-event identity,
   target input transformation and recurring/admission lifetimes. It consumes a

@@ -1,48 +1,48 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. #37/#38 and shared reload correction are released.
-Published latest v0.15.0; annotated tag points to clean source
-66648bec82acdec70c50d0ebed2675002880155c.
+and agent development harness. #39 source is complete; binaries remain v0.15.0.
 https://github.com/lyeith/eventbus/releases/tag/v0.15.0
-Eight Linux/macOS amd64/arm64 service/gateway binaries plus SHA256SUMS are public.
+No new binary publication was requested for this ticket.
 
-#37 0807872: POST /__eventbus/dev/lambda/warm atomically updates the public pool.
-Both max_workers (1..32) and max_concurrency (1..1024) are explicit positive
-integers. Active calls finish, queued Events and SDK-created resources survive;
-excess oldest idle workers join retirement. Canceled waits preserve publication.
-Startup opt-in and private Cognito budgets stay unchanged. Shared dev HTTP
-decoding has one owner; synchronize recipes yourself for future restarts.
-
-#38 1f99460: nine native AWSEvents rule/target operations on the default bus.
-Real rate scheduling, registered Lambda targets, Input/InputPath/InputTransformer
-and reserved scheduled-event variables are supported. Events owns cadence,
-identity, transformation and admission retry; app reuses Lambda's async adapter.
-Scheduler resources remain separate. Mutation gates fence later first calls;
-accepted source/retry work joins. Capacity parks due work without a new scheduler.
-Expired final Close aborts unaccepted retries with sticky uncertainty and joins.
-Held cleanup permits root POST DisableRule/RemoveTargets/DeleteRule only.
-Cron/patterns/other buses/targets and unverified transform choices are documented.
-
-66648be fixes shared reload publication: after worker.retired, the existing pool
-owner removes the reservation before reload returns. The deterministic regression
-reproduced the concrete nested-worker CI failure; existing assertions remain.
-No second retirement owner or active-call cancellation was introduced.
+#39 exact worker crash:
+- Public recipe dev_worker_crash.enabled defaults false.
+- GET /__eventbus/dev/lambda/invocations exposes redacted actual active identities
+  and existing async event snapshots. PUT/DELETE /invocations/<id>/worker-crash
+  select registered function/alias, existing native request ID and exact attempt.
+- Pending selection waits for actual launch/leased worker; active selection kills
+  only its runtime through existing localexec cancellation/cleanup ownership.
+- Native response/exit and hard deadline boundaries serialize selection.
+  Completed workers cannot be reopened through diagnostic or warm reuse gaps.
+- Nonlaunch throttle retains the same upcoming task arm; pending clear works
+  even while the old diagnostic lifetime is still active. Duplicate/raced/stale/
+  foreign/terminal selections are refused. No synthetic admission or PID surface.
+- Runtime.ExitError uses existing native retry/redelivery/ACK budgets.
+  Ordinary async/private diagnostic records add injected_worker_crash;
+  successful actual joins retain clean ownership. Prior external writes survive.
+- SNS retains its async event/request identity and numbered attempts.
+  SQS selects an admitted active Lambda ID at attempt1; native message identity/
+  receive count link redelivery to its new Lambda ID. Whole-batch ACK remains.
+- Cognito private runtimes cannot opt in and are never wired to this public port.
+  Completion loss remains a separate capability. Fresh defaults unchanged.
 
 Verification:
-- Release-source CI38510551698 passed full Go race/vet and frozen SDK/Swagger;
-  CI includes genuine minute-rate recurrence. Local full SDK race passed561.502s.
-- Local Lambda full race140.603s, Events final race1.094s; affected full
-  app/server/protocol/coordinator/architecture race and all-tag vet passed.
-- Reload correction races: nested/tuning6.289s, Python/Node2.216s, private/app3.843s.
-- Actual packaged SDK proof: Linux amd64 5.467s and macOS arm64 4.972s;
-  native service/gateway help passed; all observed workers joined.
-- All eight binaries have clean source/CGO=0 metadata. All nine uploads were
-  downloaded; checksums and original bytes match. Public latest and tag verified.
+- Full affected race: Lambda135.343s, app40.849s, eventsource1.419s,
+  server2.153s, ownership1.042s. Final control-only fix has focused race4.864s.
+- Focused lifecycle covers four fresh/two retained runtimes, active/prelaunch
+  crashes, retained reuse, overlapping peers, actual process joins, delayed
+  deadline/first cause, native exit with held cleanup, and saturated-pool
+  pending clear during held throttle diagnostics followed by healthy attempt1.
+- Final real SNS/SQS frozen boto3 race16.726s (fresh8.25s/warm7.42s):
+  each mode has two selected worker deaths and real producer retries, prior
+  durable writes, healthy overlap/broker/Cognito, queued clear and clean quiescence.
+- Related completion-loss, warm messaging/tuning and warm Node Cognito SDK
+  cases ran; an initial new-proof terminal-readiness race was corrected by
+  awaiting native snapshot publication. Final new-proof rerun passed.
+- All-tag vet and diff checks pass. No dependencies or supported AWS wire changes.
 
-Cleanup complete: dist/downloads/source archive/notes and macOS source/dependency
-copy removed; owned tests/processes joined. No new worktrees/branches or live
-stack/default-state changes. Unrelated laptop Plans edits preserved.
-Raw ticket/release/CI logs use existing SSD24h policy. Failed/busy scratch remains
-unpinned with finite expiry (successful warm SDK ed0e2667 held for UV metadata
-maintenance); other successful inspected scratch removed. Shared caches bounded.
+Docs cover settings, identities, explicit SQS boundary and code ownership.
+No new worktrees/branches/environments or application-stack/default-state changes.
+Owned tests/processes joined; successful scratch removed by the existing owner.
+Failed scratch and raw /tmp/eventbus-ticket39-* evidence remain unpinned with
+the existing24h expiry. Unrelated laptop Plans changes preserved.

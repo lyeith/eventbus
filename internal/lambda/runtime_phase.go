@@ -154,7 +154,7 @@ func (phase *runtimePhase) complete(attempt int, result invocationResult) (runti
 	} else if completion.contextError != "" {
 		state = "canceled"
 	}
-	if completion.cause == "runtime_protocol_error" {
+	if completion.cause == "runtime_protocol_error" || completion.cause == "injected_worker_crash" {
 		state = "failed"
 	}
 	if phase.mode == "command" || phase.mode == "warm" && !phase.ready.IsZero() {

@@ -65,6 +65,7 @@ type Service struct {
 	asyncHistory                                       []AsyncRecord
 	asyncHistoryNext                                   int
 	asyncCompletionLossEnabled                         bool
+	workerCrashEnabled                                 bool
 	asyncOutstanding, asyncCapacity, asyncHistoryLimit int
 	asyncRetryDelays                                   [2]time.Duration
 	asyncWake                                          chan struct{}
@@ -91,6 +92,7 @@ type invocationOwner struct {
 	asynchronous bool
 	metadata     InvocationMetadata
 	pythonStacks *pythonStackSession
+	workerCrash  *devWorkerCrashTarget
 }
 
 func New(filename, workDir string) (*Service, error) {
@@ -119,6 +121,7 @@ func NewService(config *Config, workDir string) (*Service, error) {
 	}
 	service := &Service{functions: make(map[string]executableFunction), initTimeout: initialInitTimeout, devActivity: config.DevActivity, processCleanup: localexec.Cleanup, active: make(map[uint64]invocationOwner), done: make(chan struct{})}
 	service.root = root
+	service.workerCrashEnabled = config.DevWorkerCrash != nil && config.DevWorkerCrash.Enabled
 	if config.ExecutionPolicy != nil {
 		copied := *config.ExecutionPolicy
 		service.executionPolicy = &copied
@@ -320,6 +323,7 @@ type invocation struct {
 	phase                                                *runtimePhase
 	responseLimit                                        int
 	privateErrors                                        bool
+	workerCrash                                          *devWorkerCrashTarget
 }
 
 type invocationResult struct {
@@ -330,6 +334,7 @@ type invocationResult struct {
 	completionScope   CompletionScope
 	admitted          bool
 	devCompletionLoss bool
+	devWorkerCrash    bool
 	diagnostics       invocationDiagnostics
 	phases            []runtimePhaseRecord
 	// Private ownership uncertainty cannot be supplied by a handler or projected
@@ -375,7 +380,8 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 	if entry.runtime == "python" && service.pythonStacks != nil {
 		input.pythonStacks = newPythonStackSession(service, invocationMetadata(entry, input), started, input.deadline, *service.pythonStacks)
 	}
-	service.active[id] = invocationOwner{cancel: cancel, asynchronous: asynchronous, metadata: invocationMetadata(entry, input), pythonStacks: input.pythonStacks}
+	input.workerCrash = service.newWorkerCrashLocked(input)
+	service.active[id] = invocationOwner{cancel: cancel, asynchronous: asynchronous, metadata: invocationMetadata(entry, input), pythonStacks: input.pythonStacks, workerCrash: input.workerCrash}
 	service.inflight.Add(1)
 	service.mu.Unlock()
 	var completion diagnosticCompletion
@@ -388,6 +394,7 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		input.privateErrors = service.executionPolicy.PrivateErrors
 	}
 	defer func() {
+		service.finishWorkerCrash(input, err)
 		// Even an observer/runner panic or Goexit must retire this admitted
 		// lifetime with dirty evidence. Never infer success from zero values.
 		defer func() {
@@ -511,6 +518,11 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		} else {
 			launched = runCommand(phase.ctx, entry, launchInput, service.processCleanup)
 		}
+		fired, _ := launchInput.workerCrash.finish()
+		if fired {
+			launched = preserveLaunchEvidence(launched, failure("Runtime.ExitError", "Function process terminated by development worker crash"))
+			launched.devWorkerCrash = true
+		}
 		launched = service.applyExecutionPolicy(launched)
 		// Actual native cleanup decides this launch before any optional evidence
 		// join. Internal Init retry never releases the admitted invocation owner.
@@ -569,6 +581,10 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 		}
 		if completion.cause == "runtime_protocol_error" {
 			result.state = InvocationFailed
+		}
+		if completion.cause == "injected_worker_crash" {
+			result = preserveLaunchEvidence(result, failure("Runtime.ExitError", "Function process terminated by development worker crash"))
+			result.phases, result.completionScope, result.devWorkerCrash = phases, scope, true
 		}
 	}
 	normalCompletion = true

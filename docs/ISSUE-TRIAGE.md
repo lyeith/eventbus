@@ -301,3 +301,17 @@ application-owned Terraform extraction. Cron, event patterns and other
 bus/target types stay explicit native capability gaps. See
 [Lambda tuning](LAMBDA.md#live-development-budget-tuning) and
 [EventBridge Rules](EVENTBRIDGE.md) for supported contracts.
+
+## Exact native-attempt worker crash
+
+[#39](https://github.com/lyeith/eventbus/issues/39) is a Lambda development
+control. Named `dev_worker_crash*.go` adapters own explicit opt-in, existing
+request/attempt selection and HTTP validation; the native runtime owner
+synchronizes launch, response acceptance and owned worker termination.
+`localexec` remains the sole process-group cleanup owner. SNS/Lambda retries
+and SQS mapping/receipt/redrive policies remain with their existing service
+cores. No synthetic admission or application-specific handler is required.
+Public wiring excludes private Cognito execution. See
+[worker crash](LAMBDA.md#one-shot-worker-crash) for identities and the active-only
+SQS boundary. #35 post-write completion loss remains separately enabled;
+storage write failures belong to the storage/provider seam.

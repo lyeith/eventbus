@@ -129,6 +129,10 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   queue retains throttled accepted events without spending handler retries.
   `dev_async_completion_loss*.go` owns opt-in exact-event faults and a distinct
   HTTP port; atomic admission and existing-event controls share native tasks.
+  `dev_worker_crash*.go` owns opt-in existing-request/attempt selection and a
+  separate public dev port. Runner launch/result boundaries synchronize one-shot
+  termination; localexec keeps process groups/joins, native services keep retries/ACK.
+  Private Cognito runtimes cannot opt in or enter that port.
   `dev_warm_config*.go` owns explicit public budget tuning and its HTTP adapter;
   the existing `warmWorkers` pool publishes both limits and retires excess idle workers through
   its existing owner. Active work/registrations and async queues are preserved.

@@ -38,21 +38,22 @@ type CognitoURLs struct {
 
 // Services are consumer-owned HTTP ports. This package imports no service stores.
 type Services struct {
-	Messaging      MessagingHandler
-	Firehose       ActionHandler
-	SSM            ActionHandler
-	Secrets        ActionHandler
-	Cognito        CognitoHandler
-	CognitoDev     http.Handler
-	SES            SESHandler
-	EventSources   http.Handler
-	Lambda         http.Handler
-	LambdaDev      http.Handler
-	LambdaWarmDev  http.Handler
-	Scheduler      http.Handler
-	Events         ActionHandler
-	CognitoURLs    *CognitoURLs
-	QueryBodyLimit int64
+	Messaging       MessagingHandler
+	Firehose        ActionHandler
+	SSM             ActionHandler
+	Secrets         ActionHandler
+	Cognito         CognitoHandler
+	CognitoDev      http.Handler
+	SES             SESHandler
+	EventSources    http.Handler
+	Lambda          http.Handler
+	LambdaDev       http.Handler
+	LambdaWarmDev   http.Handler
+	LambdaWorkerDev http.Handler
+	Scheduler       http.Handler
+	Events          ActionHandler
+	CognitoURLs     *CognitoURLs
+	QueryBodyLimit  int64
 }
 
 type Server struct {
@@ -72,6 +73,14 @@ func New(services Services) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/__eventbus/dev/lambda/invocations" || strings.HasPrefix(r.URL.Path, "/__eventbus/dev/lambda/invocations/") {
+		if s.services.LambdaWorkerDev == nil {
+			http.NotFound(w, r)
+		} else {
+			s.services.LambdaWorkerDev.ServeHTTP(w, r)
+		}
+		return
+	}
 	if r.URL.Path == "/__eventbus/dev/lambda/warm" {
 		if s.services.LambdaWarmDev == nil {
 			http.NotFound(w, r)

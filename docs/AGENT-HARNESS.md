@@ -130,6 +130,7 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   Inspect `termination_cause` and `elapsed_ms` before attributing a timeout;
   opt into [Python wait snapshots](LAMBDA.md#python-wait-snapshots) before a known
   shorter caller budget when terminal logs cannot locate a wait.
+- To test runtime death in real SNS/SQS flows, opt into the [exact-attempt worker crash](LAMBDA.md#one-shot-worker-crash). Select the existing native request ID; inspect joined failure and retry/redelivery evidence before asserting effects.
 - Read Cognito notification JSONL from `--cognito-log`; native signup, recovery
   and invitation flows expose local codes/passwords there. Use schema and resource
   IDs to correlate requests; [Cognito](COGNITO.md) documents the evidence fields.

@@ -29,18 +29,21 @@ type AsyncRecord struct {
 	NextAttemptAt          time.Time `json:"next_attempt_at,omitempty"`
 	CompletedAt            time.Time `json:"completed_at,omitempty"`
 	ErrorType              string    `json:"error_type,omitempty"`
+	InjectedWorkerCrash    bool      `json:"injected_worker_crash,omitempty"`
 	InjectedCompletionLoss bool      `json:"injected_completion_loss,omitempty"`
 }
 type asyncTask struct {
-	entry                    executableFunction
-	input                    invocation
-	record                   AsyncRecord
-	readyAt                  time.Time
-	release                  func(error)
-	ownershipErr             error
-	completionLossAttempt    int
-	completionDecidedAttempt int
-	throttleRetries          int
+	entry                     executableFunction
+	input                     invocation
+	record                    AsyncRecord
+	readyAt                   time.Time
+	release                   func(error)
+	ownershipErr              error
+	workerCrashAttempt        int
+	workerCrashDecidedAttempt int
+	completionLossAttempt     int
+	completionDecidedAttempt  int
+	throttleRetries           int
 }
 
 // Admit transfers a private copy into this instance's bounded in-memory queue.
@@ -179,6 +182,7 @@ func nextAsyncRecord(record AsyncRecord, state, errorType string) AsyncRecord {
 	record.State = state
 	record.ErrorType = errorType
 	record.InjectedCompletionLoss = false
+	record.InjectedWorkerCrash = false
 	record.UpdatedAt = time.Now().UTC()
 	if state == "succeeded" || state == "failed" || state == "canceled" {
 		record.CompletedAt = record.UpdatedAt
@@ -209,9 +213,13 @@ func (service *Service) recordAsync(task *asyncTask, record AsyncRecord) {
 }
 
 func (service *Service) finishAsync(task *asyncTask, state, errorType string) {
+	service.finishAsyncCrash(task, state, errorType, false)
+}
+func (service *Service) finishAsyncCrash(task *asyncTask, state, errorType string, workerCrash bool) {
 	service.mu.Lock()
 	record := nextAsyncRecord(task.record, state, errorType)
 	record.InjectedCompletionLoss = errorType == devCompletionLostError
+	record.InjectedWorkerCrash = workerCrash
 	record.NextAttemptAt = time.Time{}
 	service.mu.Unlock()
 	service.captureAsyncRecord(record)
@@ -379,23 +387,24 @@ func (service *Service) completeAsync(task *asyncTask, result invocationResult, 
 		if delay > time.Minute {
 			delay = time.Minute
 		}
-		service.retryAsync(task, record, "TooManyRequestsException", delay, false)
+		service.retryAsync(task, record, "TooManyRequestsException", delay, false, false)
 	case err != nil:
 		service.finishAsync(task, "failed", "ServiceError")
 	case !result.functionError && !result.devCompletionLoss:
 		service.finishAsync(task, "succeeded", "")
 	case record.Attempts <= 2:
-		service.retryAsync(task, record, asyncErrorType(result), service.asyncRetryDelays[record.Attempts-1], result.devCompletionLoss)
+		service.retryAsync(task, record, asyncErrorType(result), service.asyncRetryDelays[record.Attempts-1], result.devCompletionLoss, result.devWorkerCrash)
 	default:
-		service.finishAsync(task, "failed", asyncErrorType(result))
+		service.finishAsyncCrash(task, "failed", asyncErrorType(result), result.devWorkerCrash)
 	}
 }
 
 // The caller owns asyncTransitionMu; capture remains outside service.mu.
-func (service *Service) retryAsync(task *asyncTask, record AsyncRecord, errorType string, delay time.Duration, completionLost bool) {
+func (service *Service) retryAsync(task *asyncTask, record AsyncRecord, errorType string, delay time.Duration, completionLost, workerCrash bool) {
 	readyAt := time.Now().Add(delay)
 	record = nextAsyncRecord(record, "retrying", errorType)
 	record.InjectedCompletionLoss = completionLost
+	record.InjectedWorkerCrash = workerCrash
 	record.NextAttemptAt = readyAt.UTC()
 	service.recordAsync(task, record)
 	service.mu.Lock()

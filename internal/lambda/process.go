@@ -328,7 +328,7 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 		}
 		defer control.close()
 	}
-	startErr := command.Start()
+	startErr := input.startRuntime(command)
 	if control != nil {
 		control.childStarted(input.phase, startErr == nil)
 	}
@@ -362,6 +362,7 @@ func runCommand(ctx context.Context, entry executableFunction, input invocation,
 		return result
 	}
 	waitErr := command.Wait()
+	input.workerCrash.finish()
 	cleanupErr := cleanup(command)
 	ownershipErr := errors.Join(cleanupErr, stdoutCopy.Err(), stderrCopy.Err())
 	if control != nil {
