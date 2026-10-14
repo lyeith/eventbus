@@ -80,6 +80,7 @@ jobs:
         run: set -o pipefail; go test -race -count=1 -timeout 15m -tags sdksmoke ./tests/sdk 2>&1 | tee sdk-smoke.log
         env:
           EVENTBUS_SMOKE_PYTHON: ${{ github.workspace }}/.venv/bin/python
+          EVENTBUS_SMOKE_RECURRING_EVENTS: '1'
       - name: Unchanged Express and Swagger handlers
         shell: bash
         run: set -o pipefail; go test -race -count=1 -timeout 5m -tags sdksmoke ./internal/gateway -run '^TestNativeGatewayUnchangedExpressSwagger$' 2>&1 | tee sdk-swagger.log

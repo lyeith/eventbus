@@ -135,7 +135,8 @@ func retainedCleanupHandler(router http.Handler) http.Handler {
 		}
 		if target := r.Header.Get("X-Amz-Target"); target != "" {
 			allowed := strings.HasPrefix(target, "AmazonSQS.") && retainedSQSDeletion(awsprotocol.TargetAction(target)) ||
-				strings.HasPrefix(target, "Firehose_") && awsprotocol.TargetAction(target) == "DeleteDeliveryStream"
+				strings.HasPrefix(target, "Firehose_") && awsprotocol.TargetAction(target) == "DeleteDeliveryStream" ||
+				r.URL.Path == "/" && strings.HasPrefix(target, "AWSEvents.") && retainedEventsCleanup(awsprotocol.TargetAction(target))
 			if (r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/queue/")) && allowed {
 				router.ServeHTTP(w, r)
 				return
@@ -212,6 +213,7 @@ func (listener *eventBusListener) abortRetainedOwners(ctx context.Context) error
 	}{
 		{"SQS mappings", listener.owned.mappings},
 		{"Scheduler", listener.owned.scheduler},
+		{"EventBridge Rules", listener.owned.events},
 		{"Cognito triggers", listener.owned.triggers},
 		{"Lambda", listener.owned.functions},
 	} {

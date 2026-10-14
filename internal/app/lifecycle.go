@@ -34,6 +34,7 @@ type eventBusLifecycle struct {
 	notifications io.Closer
 	mappings      contextCloser
 	scheduler     contextCloser
+	events        contextCloser
 	rotation      backgroundDrainer
 	triggers      contextCloser
 	functions     contextCloser
@@ -108,6 +109,11 @@ func (owned *eventBusLifecycle) quiesce(ctx context.Context) error {
 	if owned.scheduler != nil {
 		if err := owned.scheduler.Close(ctx); err != nil {
 			failures = append(failures, fmt.Errorf("join Scheduler callbacks; resources retained: %w", err))
+		}
+	}
+	if owned.events != nil {
+		if err := owned.events.Close(ctx); err != nil {
+			failures = append(failures, fmt.Errorf("join EventBridge Rules callbacks; resources retained: %w", err))
 		}
 	}
 	if owned.rotation != nil {

@@ -96,7 +96,7 @@ func TestServiceLambdaSchedulerAdapterAdmitsAndClassifiesRetries(t *testing.T) {
 	const sensitive = "private-payload-or-function-error"
 	payload := []byte(`{"owned":"` + sensitive + `"}`)
 	var admitted bool
-	invoker := schedulerLambdaInvoker{runtime: invocationBackend{admit: func(ctx context.Context, input lambdaservice.InvokeInput) (lambdaservice.Admission, error) {
+	invoker := asyncLambdaTargetInvoker{runtime: invocationBackend{admit: func(ctx context.Context, input lambdaservice.InvokeInput) (lambdaservice.Admission, error) {
 		admitted = true
 		if input.FunctionName != target || input.Qualifier != "" || string(input.Payload) != string(payload) {
 			t.Fatal("target admission changed event")
@@ -108,7 +108,7 @@ func TestServiceLambdaSchedulerAdapterAdmitsAndClassifiesRetries(t *testing.T) {
 	}
 	for _, status := range []int{400, 401, 403, 404, 413, 429, 500, 503, 599, 600} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			adapter := schedulerLambdaInvoker{runtime: invocationBackend{admit: func(context.Context, lambdaservice.InvokeInput) (lambdaservice.Admission, error) {
+			adapter := asyncLambdaTargetInvoker{runtime: invocationBackend{admit: func(context.Context, lambdaservice.InvokeInput) (lambdaservice.Admission, error) {
 				return lambdaservice.Admission{}, fmt.Errorf("%s: %w", sensitive, &lambdaservice.InvokeError{Status: status, Message: sensitive, Code: "NativeFailure"})
 			}}}
 			err := adapter.AdmitTarget(t.Context(), target, payload)
@@ -134,20 +134,20 @@ func TestServiceLambdaAdaptersCancellationMissingRuntimeAndValidation(t *testing
 		return lambdaservice.Admission{}, nil
 	}}
 	rotation := rotationLambdaInvoker{runtime: backend}
-	scheduler := schedulerLambdaInvoker{runtime: backend}
+	scheduler := asyncLambdaTargetInvoker{runtime: backend}
 	for _, err := range []error{rotation.ValidateRotationTarget(ctx, "owned"), rotation.InvokeRotation(ctx, "owned", secrets.RotationEvent{}), scheduler.ValidateTarget(ctx, "owned"), scheduler.AdmitTarget(ctx, "owned", []byte(`{}`))} {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("caller cancellation lost %v", err)
 		}
 	}
-	for _, err := range []error{(rotationLambdaInvoker{}).ValidateRotationTarget(t.Context(), "owned"), (rotationLambdaInvoker{}).InvokeRotation(t.Context(), "owned", secrets.RotationEvent{}), (schedulerLambdaInvoker{}).ValidateTarget(t.Context(), "owned"), (schedulerLambdaInvoker{}).AdmitTarget(t.Context(), "owned", []byte(`{}`))} {
+	for _, err := range []error{(rotationLambdaInvoker{}).ValidateRotationTarget(t.Context(), "owned"), (rotationLambdaInvoker{}).InvokeRotation(t.Context(), "owned", secrets.RotationEvent{}), (asyncLambdaTargetInvoker{}).ValidateTarget(t.Context(), "owned"), (asyncLambdaTargetInvoker{}).AdmitTarget(t.Context(), "owned", []byte(`{}`))} {
 		if err == nil {
 			t.Fatal("missing runtime was successful")
 		}
 	}
 	const sensitive = "secret-handler-detail"
 	failed := invocationBackend{validate: func(string, string) error { return errors.New(sensitive) }}
-	for _, err := range []error{(rotationLambdaInvoker{runtime: failed}).ValidateRotationTarget(t.Context(), "owned"), (schedulerLambdaInvoker{runtime: failed}).ValidateTarget(t.Context(), "owned")} {
+	for _, err := range []error{(rotationLambdaInvoker{runtime: failed}).ValidateRotationTarget(t.Context(), "owned"), (asyncLambdaTargetInvoker{runtime: failed}).ValidateTarget(t.Context(), "owned")} {
 		if err == nil || strings.Contains(err.Error(), sensitive) {
 			t.Fatalf("validation detail escaped: %v", err)
 		}

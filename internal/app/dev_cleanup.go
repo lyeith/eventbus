@@ -84,3 +84,14 @@ func retainedCleanupNamespace(target lambdaservice.DevInvokeTarget, region, acco
 func retainedSESDeletion(action string) bool {
 	return action == "DeleteConfigurationSet" || action == "DeleteConfigurationSetEventDestination"
 }
+
+// These native EventBridge mutations can only reduce future source intake.
+// Reads and producing mutations retain the profile's existing work admission.
+func retainedEventsCleanup(action string) bool {
+	switch action {
+	case "DisableRule", "RemoveTargets", "DeleteRule":
+		return true
+	default:
+		return false
+	}
+}

@@ -50,6 +50,7 @@ type Services struct {
 	LambdaDev      http.Handler
 	LambdaWarmDev  http.Handler
 	Scheduler      http.Handler
+	Events         ActionHandler
 	CognitoURLs    *CognitoURLs
 	QueryBodyLimit int64
 }
@@ -162,6 +163,8 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 			handler = s.services.Secrets
 		case strings.HasPrefix(target, "AWSCognitoIdentityProviderService."):
 			handler = s.services.Cognito
+		case strings.HasPrefix(target, "AWSEvents."):
+			handler = s.services.Events
 		case strings.HasPrefix(target, "AmazonSQS."):
 			handler = s.services.Messaging
 		default:

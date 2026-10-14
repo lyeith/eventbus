@@ -22,7 +22,7 @@ func TestServerNativeJSONFallbackProtocols(t *testing.T) {
 		protocol awsprotocol.JSONProtocol
 		status   int
 	}{
-		{"Firehose_20150804.NoSuchAction", awsprotocol.JSON11, 503}, {"AmazonSSM.NoSuchAction", awsprotocol.JSON11, 503}, {"secretsmanager.NoSuchAction", awsprotocol.JSON11, 503},
+		{"Firehose_20150804.NoSuchAction", awsprotocol.JSON11, 503}, {"AmazonSSM.NoSuchAction", awsprotocol.JSON11, 503}, {"secretsmanager.NoSuchAction", awsprotocol.JSON11, 503}, {"AWSEvents.NoSuchAction", awsprotocol.JSON11, 503},
 		{"AWSCognitoIdentityProviderService.NoSuchAction", awsprotocol.JSON10, 503}, {"AmazonSQS.NoSuchAction", awsprotocol.JSON10, 503}, {"OtherService.NoSuchAction", awsprotocol.JSON10, 400},
 	} {
 		for _, method := range []string{"POST", "GET"} {

@@ -19,7 +19,7 @@ var ownerClasses = map[string]string{
 	"app":     "composition",
 	"server":  "dispatcher",
 	"cognito": "service", "messaging": "service", "ses": "service",
-	"firehose": "service", "scheduler": "service", "ssm": "service",
+	"firehose": "service", "scheduler": "service", "events": "service", "ssm": "service",
 	"secrets": "service", "lambda": "service", "eventsource": "service",
 	"gateway": "gateway", "consumer": "consumer",
 	"cognitotrigger": "runner", "devquiescence": "coordinator",

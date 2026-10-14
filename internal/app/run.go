@@ -15,6 +15,7 @@ import (
 	"github.com/lyeith/eventbus/internal/consumer"
 	"github.com/lyeith/eventbus/internal/devactivity"
 	"github.com/lyeith/eventbus/internal/devquiescence"
+	"github.com/lyeith/eventbus/internal/events"
 	"github.com/lyeith/eventbus/internal/eventsource"
 	"github.com/lyeith/eventbus/internal/firehose"
 	lambdaservice "github.com/lyeith/eventbus/internal/lambda"
@@ -110,6 +111,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	var triggers *cognitotrigger.Runner
 	var functions *lambdaservice.Service
 	var mappings *eventsource.Service
+	var rules *events.Service
 	var retained *devquiescence.Coordinator
 	var retainedActivity devactivity.Activity
 	var retainedSource devactivity.Source
@@ -118,6 +120,12 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 			Checks: []func() error{snsCapture.Err, capture.Err, notifications.Err, firehoseManager.DevEvidence,
 				func() error { return devInvocationEvidence(functions, mappings) },
 				func() error { return triggers.DevEvidence() },
+				func() error {
+					if rules != nil {
+						return rules.DevEvidence()
+					}
+					return nil
+				},
 			},
 			DrainHooks: []devquiescence.DrainHook{
 				{Start: func() error { return triggers.DevBeginWarmDrain() }, Resume: func() error { return triggers.DevResumeWarm() }},
@@ -196,9 +204,11 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	}
 	var rotationInvoker secrets.RotationInvoker
 	var schedulerInvoker scheduler.TargetInvoker
+	var eventsInvoker events.TargetInvoker
 	if functions != nil {
 		rotationInvoker = rotationLambdaInvoker{runtime: functions}
-		schedulerInvoker = schedulerLambdaInvoker{runtime: functions}
+		schedulerInvoker = asyncLambdaTargetInvoker{runtime: functions}
+		eventsInvoker = asyncLambdaTargetInvoker{runtime: functions}
 	}
 	rotation := secrets.NewRotationService(secretsStore, rotationInvoker, secrets.RotationOptions{})
 	owned.rotation = rotation
@@ -219,12 +229,18 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		return fmt.Errorf("failed to configure Scheduler: %w", err)
 	}
 	owned.scheduler = schedules
+	rules, err = events.New(events.Options{Region: cfg.region, AccountID: cfg.accountID, Dev: events.DevOptions{Source: retainedSource}}, eventsInvoker)
+	if err != nil {
+		return fmt.Errorf("failed to configure EventBridge Rules: %w", err)
+	}
+	owned.events = rules
 	sesHandler := ses.NewHandler(sesManager)
 	services := server.Services{
 		Messaging:      messaging.NewHandler(broker),
 		Lambda:         functionHandler,
 		EventSources:   eventsource.NewHandler(mappings),
 		Scheduler:      scheduler.NewHandler(schedules),
+		Events:         events.NewHandler(rules),
 		Firehose:       firehose.NewHandler(firehoseManager),
 		SSM:            ssm.NewHandler(ssmStore),
 		Secrets:        secrets.NewHandler(secretsStore, rotation),

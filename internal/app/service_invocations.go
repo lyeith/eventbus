@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/lyeith/eventbus/internal/events"
 	lambdaservice "github.com/lyeith/eventbus/internal/lambda"
 	"github.com/lyeith/eventbus/internal/scheduler"
 	"github.com/lyeith/eventbus/internal/secrets"
@@ -103,11 +104,12 @@ func redactLambdaExecution(result lambdaservice.InvokeOutput, err error) error {
 	return nil
 }
 
-type schedulerLambdaInvoker struct{ runtime lambdaAdmission }
+type asyncLambdaTargetInvoker struct{ runtime lambdaAdmission }
 
-var _ scheduler.TargetInvoker = schedulerLambdaInvoker{}
+var _ scheduler.TargetInvoker = asyncLambdaTargetInvoker{}
+var _ events.TargetInvoker = asyncLambdaTargetInvoker{}
 
-func (invoker schedulerLambdaInvoker) ValidateTarget(ctx context.Context, arn string) error {
+func (invoker asyncLambdaTargetInvoker) ValidateTarget(ctx context.Context, arn string) error {
 	return validateLambdaTarget(ctx, invoker.runtime, arn)
 }
 
@@ -120,7 +122,7 @@ func (failure *lambdaAdmissionFailure) Error() string   { return "Lambda target 
 func (failure *lambdaAdmissionFailure) Retryable() bool { return failure.retryable }
 func (failure *lambdaAdmissionFailure) Unwrap() error   { return failure.contextError }
 
-func (invoker schedulerLambdaInvoker) AdmitTarget(ctx context.Context, arn string, payload []byte) error {
+func (invoker asyncLambdaTargetInvoker) AdmitTarget(ctx context.Context, arn string, payload []byte) error {
 	_, err := admitLambdaTarget(ctx, invoker.runtime, arn, payload)
 	return err
 }

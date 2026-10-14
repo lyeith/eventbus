@@ -263,6 +263,13 @@ func TestCLIStartupValidFlagsStillServeAndCloseOwnedPaths(t *testing.T) {
 	tuned := post("/__eventbus/dev/lambda/warm", "", `{"max_workers":1,"max_concurrency":2}`)
 	require.JSONEq(t, "1", string(tuned["max_workers"]))
 	require.JSONEq(t, "2", string(tuned["max_concurrency"]))
+	rule := post("/", "AWSEvents.PutRule", `{"Name":"startup-rate","ScheduleExpression":"rate(1 day)"}`)
+	require.JSONEq(t, `"arn:aws:events:us-east-1:000000000000:rule/startup-rate"`, string(rule["RuleArn"]))
+	target := post("/", "AWSEvents.PutTargets", `{"Rule":"startup-rate","Targets":[{"Id":"local","Arn":"arn:aws:lambda:us-east-1:000000000000:function:startup-owned","Input":"{}"}]}`)
+	require.JSONEq(t, "0", string(target["FailedEntryCount"]))
+	post("/", "AWSEvents.DisableRule", `{"Name":"startup-rate"}`)
+	post("/", "AWSEvents.RemoveTargets", `{"Rule":"startup-rate","Ids":["local"]}`)
+	post("/", "AWSEvents.DeleteRule", `{"Name":"startup-rate"}`)
 	require.NoError(t, command.Process.Signal(os.Interrupt))
 	select {
 	case <-done:
