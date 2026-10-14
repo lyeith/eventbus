@@ -63,6 +63,14 @@ before configuring endpoints or cleaning fixtures.
   adapters and a separate dev HTTP port; it selects one existing event/attempt,
   preserves real handler effects and uses native retry policy.
   App handlers are external fixtures; keep their logs separate from function results.
+- `internal/events` owns native default-bus rate rules, scheduled-event identity,
+  target input transformation and recurring/admission lifetimes. It consumes a
+  narrow Lambda admission port; app binds the existing async delivery adapter.
+  Scheduler resources remain separate. Dev source fencing pauses unclaimed fires
+  without rewriting native rule state; accepted retries retain their source lease.
+- Live public warm-budget tuning is a named Lambda dev port. The existing warm
+  pool alone publishes limits and joins excess idle retirement; public routing
+  never exposes or tunes private Cognito budgets.
 - Optional [SQS delivery evidence](docs/EVENT-SOURCES.md#correlated-delivery-evidence)
   and [private Lambda diagnostics](docs/LAMBDA.md#private-invocation-diagnostics)
   use actual native request IDs and joined lifetimes. Keep diagnostics private;

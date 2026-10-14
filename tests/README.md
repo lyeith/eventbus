@@ -21,8 +21,11 @@ this check and unit race/vet tests on pull requests and pushes to main.
 [SDK verification](sdk/README.md) adds lifecycle, SRP/custom authentication,
 Node trigger execution, native Cognito provisioning, SES/SNS capture, direct SQS
 sending, SNS Lambda, SQS mappings, Secrets rotation, Lambda Event, Scheduler,
+live public warm-budget tuning and EventBridge Rules,
 real Express/Swagger gateway redirects and restart evidence. It requires Node >=20
-and frozen SDK dependencies, with no running application stack.
+and frozen SDK dependencies, with no running application stack. CI enables the
+genuine minute-rate EventBridge proof with `EVENTBUS_SMOKE_RECURRING_EVENTS=1`;
+local fast SDK runs leave that approximately three-minute scenario opt-in.
 
 Retained-owner checks belong beside their owners: fence/source leases/evidence
 in `internal/devquiescence`, native custody/execution/drain in service seam tests,

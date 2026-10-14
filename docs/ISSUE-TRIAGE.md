@@ -288,3 +288,16 @@ These changes are separate from application orchestration and storage-provider
 faults. Native defaults keep fresh execution and completion-loss injection
 disabled. See [Lambda](LAMBDA.md) and [Cognito](COGNITO.md) for settings, scope
 and upgrade notes. STATE/HANDOFF record verification and release status.
+
+## Live runtime tuning and recurring EventBridge Rules
+
+| Ticket | Classification and owner | Contract |
+| --- | --- | --- |
+| [#37](https://github.com/lyeith/eventbus/issues/37) Live warm limits | Lambda dev control; existing warm-pool owner | Atomic idle/execution limit updates, joined excess idle retirement, active/queued work and public registrations preserved; private Cognito untouched |
+| [#38](https://github.com/lyeith/eventbus/issues/38) EventBridge rate rules | Native `events` service core; app composes Lambda admission | Default-bus rule/target APIs, recurring scheduled-event identity and input transformation; fenced future admissions and joined source lifetime |
+
+#37 needs no messaging persistence. #38 remains separate from Scheduler and
+application-owned Terraform extraction. Cron, event patterns and other
+bus/target types stay explicit native capability gaps. See
+[Lambda tuning](LAMBDA.md#live-development-budget-tuning) and
+[EventBridge Rules](EVENTBRIDGE.md) for supported contracts.

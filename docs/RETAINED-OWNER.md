@@ -195,6 +195,7 @@ retry policies continue to apply to retained resources.
 | HTTP and Lambda | Envelopes from before parsing/capture through handler return; whole queued/running/retrying Event tasks; independent synchronous invocations through child join |
 | Enabled SQS mappings | Accepted batches plus message custody through delay, visibility, whole-batch retry, acknowledgment and redrive; callback/cleanup sends to mapped queues transfer custody |
 | Scheduler | Accepted due target admissions and their retry waits; unclaimed schedules remain paused native resource state |
+| EventBridge Rules | Accepted scheduled events and admission retries; unclaimed recurring fires pause without changing rule state; held callback cleanup permits DisableRule/RemoveTargets/DeleteRule |
 | Cognito runners | Actual trigger execution, owned children and accepted callback chains |
 | Firehose | Buffered records, pending objects, late accepted puts and destination retries; reversible force-flush remains enabled through held cleanup until resume |
 | Retained gateway | Public root and private `http.gateway.continuation` leases granted before body read, authorization or Invoke and held through handler return; independently accepted native descendants |
@@ -238,7 +239,7 @@ Activities contain `id`, `kind`, `started_at` and optional bounded `request_id`.
 Kinds include `http.source`, `http.callback`, `http.gateway`,
 `http.gateway.continuation`, `lambda_async`,
 `lambda_invoke`, `lambda_cleanup`, `sqs_message`, `sqs_mapping`,
-`scheduler.dispatch`, `cognito_trigger` and `firehose.record`. Diagnostics omit
+`scheduler.dispatch`, `events.dispatch`, `cognito_trigger` and `firehose.record`. Diagnostics omit
 payloads, credentials, handler output and raw errors. Caller cancellation, no
 PID, missing capture, a grace period or zero counts alone are not joined proof.
 Readiness/control requests are outside business-work accounting.

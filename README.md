@@ -42,6 +42,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Runtime and launcher review](docs/PERFORMANCE-REVIEW.md): phase measurements and the separate SSD tooling fix.
 - [SQS Lambda mappings](docs/EVENT-SOURCES.md): native provisioning and completion-based acknowledgment.
 - [Scheduler](docs/SCHEDULER.md): one-time schedules targeting local Lambda events.
+- [EventBridge Rules](docs/EVENTBRIDGE.md): default-bus rate schedules, Lambda targets and input transformation.
 - [Firehose](docs/FIREHOSE.md): SNS delivery, Go jq partitioning, GZIP and S3 retries.
 - [Secrets](docs/SECRETS.md) and [SSM](docs/SSM.md): values, versions and supported configuration.
 - [Messaging](docs/MESSAGING.md): all SQS/SNS operations, queue behavior and notification capture.
@@ -61,9 +62,10 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 | API gateway | Separate `eventbus-gateway` executable; REST/HTTP API REQUEST authorizers, IAM/simple responses, HTTP_PROXY and AWS_PROXY 1.0/2.0. [Contracts](docs/GATEWAY.md). |
 | Lambda | Synchronous/async Invoke, registered-target GetFunction metadata, and opt-in bounded warm Python/Node workers. Go/custom runtimes and command handlers remain fresh. [Execution](docs/LAMBDA.md), [S3 routing](docs/S3-NOTIFICATIONS.md). |
 | Scheduler | Create/Get/Delete one-time schedules, local Lambda admission, named fixture groups and cancellation. |
+| EventBridge Rules | Default-bus recurring rate rules, rule/target CRUD and readback, Lambda admission and Input/InputPath/InputTransformer. Cron, event patterns and other target types return explicit errors. [Contracts](docs/EVENTBRIDGE.md). |
 | SQS Lambda mappings | Native Create/Get/Delete mappings, batches of 1–10 records (default 10), configured maximum concurrency, registered function/alias execution, FIFO ordering and native visibility/DLQ policy. [Contracts](docs/EVENT-SOURCES.md). |
 | Dev consumers | Recipe-driven Go/Python handlers receive SQS events with harness timeouts, partial batch retry and dead-letter policy. |
-| Retained-owner dev profile | Opt-in source/callback ownership barrier for native mappings, Scheduler, Cognito runners, Firehose and gateway roots; declared cleanup, diagnostics and generation-checked resume. [Contract](docs/RETAINED-OWNER.md). |
+| Retained-owner dev profile | Opt-in source/callback ownership barrier for native mappings, Scheduler, EventBridge Rules, Cognito runners, Firehose and gateway roots; declared cleanup, diagnostics and generation-checked resume. [Contract](docs/RETAINED-OWNER.md). |
 | SES | All six v1 and three v2 sending operations with original JSONL capture; six v1 configuration-set/destination operations, native Send events through SNS, and explicit local Open/Bounce outcomes. [Contracts](docs/SES.md). |
 | Firehose | SNS/record/batch ingestion, Go jq partitions, GZIP, error prefixes and retained S3 delivery retries. |
 | SSM | Four Standard parameter operations, versions, hierarchy pagination and local SecureString protection. |
@@ -76,8 +78,10 @@ its current scope.
 
 Cognito identities and signing keys persist in SQLite. SES, SNS and Cognito notification JSONL files append across
 restarts; templates and other prerequisites load from YAML. Topics, queues,
-messages, SES configuration sets/correlations, Firehose buffers, SSM, secrets, schedules and mappings are in memory and need reprovisioning
-after restart. Shutdown cancels and joins SQS mappings, stops scheduling and drains accepted rotation/Lambda work while the AWS
+messages, SES configuration sets/correlations, Firehose buffers, SSM, secrets, schedules, rules and mappings are in memory and need reprovisioning
+after restart. [Live warm-budget tuning](docs/LAMBDA.md#live-development-budget-tuning)
+preserves those resources while changing public Lambda limits. Shutdown cancels
+and joins SQS mappings, stops scheduling and drains accepted rotation/Lambda work while the AWS
 listener remains available, then drains HTTP, flushes Firehose and closes stores
 and captures. Deadline failures are reported rather than claimed successful.
 The opt-in `--retained-owner-callback-port` profile fences suite sources and joins

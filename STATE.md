@@ -1,46 +1,40 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. Tickets #33–#36 implemented and released.
-Published latest v0.14.0; annotated tag points to clean source
-0cd0c4867f3720de87f8d7479bd17228936a84e4.
-https://github.com/lyeith/eventbus/releases/tag/v0.14.0
-Eight Linux/macOS amd64/arm64 EventBus/gateway binaries plus SHA256SUMS are public.
+and agent development harness. Source implements #37 and #38.
+Latest published binaries remain v0.14.0; v0.15.0 publication is authorized
+and is the next step after clean-source build and artifact verification.
 
-#36 f9fd81b adds source-only private Cognito trigger reload:
-POST /__eventbus/dev/cognito/pools/{pool_id}/triggers/{trigger_name}/reload
-with no body. The named dev port tracks admission/Close and maps the selected
-immutable hidden target into Lambda's existing generation owner.
-Matching entries within a pool share replacement imports; active old warm calls
-finish and retire. Config/environment/timeouts, native identity/session state,
-tokens/signing keys and unrelated private/public functions remain intact.
-Interrupted waits do not roll back published code or cancel old handler calls.
-See docs/CUSTOM-TRIGGERS.md#development-source-reload.
+#37 0807872: POST /__eventbus/dev/lambda/warm updates the existing public pool.
+Both max_workers (1..32) and max_concurrency (1..1024) are explicit positive
+integers. Limits publish together; active calls finish, queued Events and
+SDK-provisioned resources survive, excess oldest idle workers join retirement.
+Canceled waits preserve published limits. Startup opt-in/private Cognito budgets
+stay unchanged. Shared dev HTTP decoding has one owner.
 
-b367656 fixes warm resume observing an activity release before pool-removal
-publication. Resume joins existing retirements outside the pool lock, then
-rechecks state before reopening. Live workers/ownership failures still refuse.
-The deterministic real-worker test holds that precise publication boundary.
+#38 1f99460: native AWSEvents default-bus rate Rules and registered Lambda targets.
+Nine operations cover rule/target CRUD/readback, enable/disable and pagination.
+Input, InputPath, InputTransformer and reserved scheduled-event variables work.
+Events owns cadence, occurrence identity, transformation and API admission retry;
+app reuses Lambda's existing async adapter. Scheduler remains separate.
+Native mutation gates stop later first admissions; accepted retry/source work joins.
+Capacity parks due work, and expired final Close aborts unaccepted retries with
+sticky uncertainty and actual callback joins. Retained cleanup permits only
+root POST DisableRule/RemoveTargets/DeleteRule. Producing controls stay fenced.
+Cron/patterns/other buses/targets and unverified transform choices are documented.
 
-v0.14.0 also includes #33 independent idle/execution limits and native throttling,
-#34 Cognito pool/client inventory with authenticated pagination, and #35 scoped
-one-shot async completion loss with real effects/native retries.
-Upgrade: max_workers now limits idle retention; max_concurrency defaults to 64.
-Old unsigned ListUsers tokens require a fresh scan. Fresh execution and disabled
-completion-loss injection remain defaults. See the service contracts/issue triage.
+Final local verification:
+- Full Lambda race 140.603s; final Events race 1.094s; scoped owner vet passed.
+- Affected full race: app52.397s, server3.421s, protocol1.027s,
+  coordinator1.070s, architecture1.086s; production CLI wiring included.
+- Full pinned SDK race with genuine recurrence enabled passed561.502s.
+  Earlier isolated recurrence proved2 firings,12 native calls,60000ms cadence;
+  final SDK lane reran it against final production source.
+- All-tag vet (sdksmoke,performance,integration), formatting/diff and independent
+  ownership review passed. Added only pinned test Events SDK3.1146.0.
 
-Verification:
-- Affected full race: app (71.539s), triggers (1.387s), server (4.875s), Lambda (151.239s).
-- Real reload Cognito/SES SDK (8.940s); all-tag vet, formatting and diff checks passed.
-- Release-source CI 38217102424 passed full Go race/vet and frozen SDK/Swagger.
-- Same packaged reload proof: Linux amd64 8.265s; macOS arm64 3.473s.
-  Both assert actual observed private/public workers exited after SIGTERM/join.
-- All eight binaries have clean VCS revision/CGO=0 metadata. Native help passed.
-  All nine uploads were downloaded; checksums and local binary bytes match.
-
-Owned build outputs, downloaded assets, source archive, macOS test/dependency
-copy and package processes are removed/joined. No new dependencies, worktrees,
-branches, live-stack/default-state changes. Unrelated laptop Plans edits preserved.
-Failed test receipt d9c24ade* remains unpinned under 24h retention.
-Raw /tmp/eventbus-ticket36-*-20261012.log and release-v0.14.0 logs use existing 24h
-retention. Successful SSD scratch auto-removes; shared caches keep host bounds.
+No application-stack/default-state changes, new worktrees/branches or runtime
+dependencies. Temporary documentation copy removed. Owned tests/processes joined.
+Raw /tmp/eventbus-ticket37-*, ticket38-* and tickets37-38-* logs use SSD24h policy.
+Successful scratch auto-removes; busy UV metadata retains unpinned finite-lifetime
+scratch for existing maintenance. Shared caches/dependency environments stay bounded.

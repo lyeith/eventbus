@@ -32,7 +32,8 @@ For retained-suite interruption/recovery, opt into [Retained owner](RETAINED-OWN
 Its source URL is for suite roots; registered handlers/owned native peers use the
 separate trusted callback URL. Fence and join before exact fixture cleanup, then
 explicitly join declared cleanup/descendants before fixture assertions and resume.
-The profile joins native mappings, Scheduler, Cognito runners and Firehose without
+The profile joins native mappings, Scheduler, EventBridge Rules, Cognito runners
+and Firehose without
 recreating resources; a retained gateway uses shared root leases. A stopped client
 or absent PID is insufficient. Legacy consumers, rotation and message-move tasks
 remain outside the profile; see the guide for exact refusals and endpoint settings.
@@ -139,6 +140,8 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   accepted ID and configured destinations. See [SES events](SES.md).
 - For repeated Python/Node calls, opt into [warm workers](LAMBDA.md#warm-workers).
   Reload a selected function explicitly after recipe/source/environment edits.
+  [Tune public warm budgets](LAMBDA.md#live-development-budget-tuning) in place
+  when changing capacity; SDK-provisioned in-memory resources survive.
   Successful warm invocation evidence covers the handler response/log boundary;
   quiesce the retained owner before treating worker/child cleanup as complete.
 - After editing private Cognito handlers, use [selected trigger source reload](CUSTOM-TRIGGERS.md#development-source-reload).
@@ -158,7 +161,9 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
 
 Keep Cognito's SQLite path, pool/client IDs and issuer stable when continuing
 the same app environment. Use fresh owned paths for independent tests.
-Reprovision in-memory resources after restart. Follow Lambda JSONL terminal
+Provision [native EventBridge rate rules](EVENTBRIDGE.md) through the application's
+Events SDK endpoint for recurring Lambda producers; the harness owns Terraform
+extraction and resource provisioning. Reprovision in-memory resources after restart. Follow Lambda JSONL terminal
 records for asynchronous completion, and Scheduler/rotation redacted operational
 logs for target admission/workflow outcomes. HTTP acceptance alone is insufficient. Supply `--s3-endpoint` for
 Firehose tests; its local S3 credentials are `test`/`testtest123`.

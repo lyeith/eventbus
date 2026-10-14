@@ -25,6 +25,7 @@ internal/
   ses/                   Fixtures, sending, MIME, capture and v1/v2 adapters
   firehose/              Processing, partition buffers, GZIP and retained S3 delivery
   scheduler/             One-time schedule state, idempotency and Lambda admission
+  events/                Default-bus rate rules, target transformation and recurring Lambda admission
   ssm/                   Parameter state and HTTP adapter
   secrets/               Secret/version/stage state and asynchronous rotation workflow
   testperf/              Performance-tag observation summaries; no runtime policy or timing assertions
@@ -128,13 +129,18 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   queue retains throttled accepted events without spending handler retries.
   `dev_async_completion_loss*.go` owns opt-in exact-event faults and a distinct
   HTTP port; atomic admission and existing-event controls share native tasks.
+  `dev_warm_config*.go` owns explicit public budget tuning and its HTTP adapter;
+  the existing `warmWorkers` pool publishes both limits and retires excess idle workers through
+  its existing owner. Active work/registrations and async queues are preserved.
   `async.go` owns capture transitions separately from the shared service mutex,
   bounded terminal-history ring retention and snapshot sorting outside that mutex.
   Pending admissions count capacity/activity before capture but cannot execute
   or publish queued state until durable acceptance. Drain joins workers, pending
   admissions and terminal capture; fencing/cancellation never waits on capture I/O.
 - `secrets` owns a narrow RotationInvoker port and its step/state policy;
-  `scheduler` owns a narrow TargetInvoker port and admission retry/time policy.
+  `scheduler` and `events` each own a narrow TargetInvoker port and native admission
+  retry/time policy. Events owns recurring rules and InputTransformer compilation;
+  Scheduler owns separate one-time resources. Both share app's async Lambda adapter.
   `app/service_invocations.go` shares redacted Execute/Admit mechanics with SNS
   and SQS mapping adapters. Service-specific delivery/retry policies stay in core;
   services do not import Lambda.

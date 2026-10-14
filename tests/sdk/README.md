@@ -11,7 +11,7 @@ go test -race -count=1 -tags sdksmoke ./internal/gateway -run '^TestNativeGatewa
 ```
 
 Python dependencies come from `uv.lock`. JavaScript uses the exact Cognito IDP,
-SESv2 and Scheduler SDK v3 version `3.1146.0`, including the transitive npm lockfile. The tagged gateway framework proof also
+SESv2, Scheduler and EventBridge SDK v3 version `3.1146.0`, including the transitive npm lockfile. The tagged gateway framework proof also
 pins test-only Express `5.2.1` and swagger-ui-express `5.0.1`.
 `EVENTBUS_SMOKE_NODE` optionally selects an absolute Node executable; otherwise
 the lane finds `node` on PATH. CI uses Node 22.
@@ -206,3 +206,35 @@ go test -race -count=1 -timeout 5m -tags sdksmoke ./tests/sdk \
 
 Select `eventbus-darwin-arm64` for the corresponding macOS packaged proof.
 The ordinary SDK lane keeps its embedded composition mode.
+
+## Public warm budget tuning and EventBridge Rules
+
+`TestLambdaWarmTuningPythonSDKSmoke` uses the frozen boto3 Lambda/SNS/SQS
+clients to provision a topic, two subscriptions and a queue before tuning the
+public pool. Held native calls and already-accepted Events survive raising and
+lowering limits. It checks typed throttling, invalid controls, queue contents,
+resource readback, retained reuse and joined retirement without a broker restart.
+It runs in the ordinary `sdksmoke` lane.
+
+`TestEventBridgeJavascriptSDKSmoke` uses the pinned, unchanged Events client
+(`@aws-sdk/client-eventbridge` `3.1146.0`) for rule/target CRUD, pagination,
+readback, native errors and target/transformer validation. It never accelerates
+AWS rate expressions and runs in the ordinary SDK lane.
+
+`TestEventBridgeRecurringJavascriptSDKSmoke` is an optional, real-time proof
+that takes approximately three minutes. It creates valid `rate(1 minute)` rules,
+observes two genuine firings, compares original/constant/path/transformed Lambda
+inputs and all supported reserved variables, then holds an active transformed
+call across disabling. Disabled rules, removed targets and deleted rules must
+admit no further work over another full minute. Every fixture owns and joins its
+listener, rule delivery, async Lambda work and actual child processes.
+
+```sh
+EVENTBUS_SMOKE_RECURRING_EVENTS=1 \
+go test -race -count=1 -timeout 5m -tags sdksmoke ./tests/sdk \
+  -run '^TestEventBridgeRecurringJavascriptSDKSmoke$'
+```
+
+CI enables the flag on its full SDK lane. Without the flag, only this slow test
+skips. Fake-clock component tests separately
+cover native admission and shutdown races without slowing SDK verification.
