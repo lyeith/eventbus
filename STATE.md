@@ -1,49 +1,48 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. Source implements #37 and #38.
-Latest published binaries remain v0.14.0; v0.15.0 publication is authorized
-and is the next step after clean-source build and artifact verification.
+and agent development harness. #37/#38 and shared reload correction are released.
+Published latest v0.15.0; annotated tag points to clean source
+66648bec82acdec70c50d0ebed2675002880155c.
+https://github.com/lyeith/eventbus/releases/tag/v0.15.0
+Eight Linux/macOS amd64/arm64 service/gateway binaries plus SHA256SUMS are public.
 
-#37 0807872: POST /__eventbus/dev/lambda/warm updates the existing public pool.
+#37 0807872: POST /__eventbus/dev/lambda/warm atomically updates the public pool.
 Both max_workers (1..32) and max_concurrency (1..1024) are explicit positive
-integers. Limits publish together; active calls finish, queued Events and
-SDK-provisioned resources survive, excess oldest idle workers join retirement.
-Canceled waits preserve published limits. Startup opt-in/private Cognito budgets
-stay unchanged. Shared dev HTTP decoding has one owner.
+integers. Active calls finish, queued Events and SDK-created resources survive;
+excess oldest idle workers join retirement. Canceled waits preserve publication.
+Startup opt-in and private Cognito budgets stay unchanged. Shared dev HTTP
+decoding has one owner; synchronize recipes yourself for future restarts.
 
-#38 1f99460: native AWSEvents default-bus rate Rules and registered Lambda targets.
-Nine operations cover rule/target CRUD/readback, enable/disable and pagination.
-Input, InputPath, InputTransformer and reserved scheduled-event variables work.
-Events owns cadence, occurrence identity, transformation and API admission retry;
-app reuses Lambda's existing async adapter. Scheduler remains separate.
-Native mutation gates stop later first admissions; accepted retry/source work joins.
-Capacity parks due work, and expired final Close aborts unaccepted retries with
-sticky uncertainty and actual callback joins. Retained cleanup permits only
-root POST DisableRule/RemoveTargets/DeleteRule. Producing controls stay fenced.
+#38 1f99460: nine native AWSEvents rule/target operations on the default bus.
+Real rate scheduling, registered Lambda targets, Input/InputPath/InputTransformer
+and reserved scheduled-event variables are supported. Events owns cadence,
+identity, transformation and admission retry; app reuses Lambda's async adapter.
+Scheduler resources remain separate. Mutation gates fence later first calls;
+accepted source/retry work joins. Capacity parks due work without a new scheduler.
+Expired final Close aborts unaccepted retries with sticky uncertainty and joins.
+Held cleanup permits root POST DisableRule/RemoveTargets/DeleteRule only.
 Cron/patterns/other buses/targets and unverified transform choices are documented.
 
-Shared reload correction: joinRetiredWorkers now uses the existing pool owner
-after worker.retired, so reload releases counted retirement reservations before
-returning. Deterministic regression reproduced the earlier CI failure in both
-healthy/uncertain cases; existing native nested/Node/Python/private reload checks
-passed. The first source CI failed only this previously existing publication
-gap; new clean-source CI is required before v0.15.0 publication.
+66648be fixes shared reload publication: after worker.retired, the existing pool
+owner removes the reservation before reload returns. The deterministic regression
+reproduced the concrete nested-worker CI failure; existing assertions remain.
+No second retirement owner or active-call cancellation was introduced.
 
-Final local verification:
-- Full Lambda race 140.603s; final Events race 1.094s; scoped owner vet passed.
-- Affected full race: app52.397s, server3.421s, protocol1.027s,
-  coordinator1.070s, architecture1.086s; production CLI wiring included.
-- Full pinned SDK race with genuine recurrence enabled passed561.502s.
-  Earlier isolated recurrence proved2 firings,12 native calls,60000ms cadence;
-  final SDK lane reran it against final production source.
-- Reload correction race: nested/tuning6.289s, Python/Node2.216s, private/app3.843s;
-  scoped vet passed.
-- All-tag vet (sdksmoke,performance,integration), formatting/diff and independent
-  ownership review passed. Added only pinned test Events SDK3.1146.0.
+Verification:
+- Release-source CI38510551698 passed full Go race/vet and frozen SDK/Swagger;
+  CI includes genuine minute-rate recurrence. Local full SDK race passed561.502s.
+- Local Lambda full race140.603s, Events final race1.094s; affected full
+  app/server/protocol/coordinator/architecture race and all-tag vet passed.
+- Reload correction races: nested/tuning6.289s, Python/Node2.216s, private/app3.843s.
+- Actual packaged SDK proof: Linux amd64 5.467s and macOS arm64 4.972s;
+  native service/gateway help passed; all observed workers joined.
+- All eight binaries have clean source/CGO=0 metadata. All nine uploads were
+  downloaded; checksums and original bytes match. Public latest and tag verified.
 
-No application-stack/default-state changes, new worktrees/branches or runtime
-dependencies. Temporary documentation copy removed. Owned tests/processes joined.
-Raw /tmp/eventbus-ticket37-*, ticket38-* and tickets37-38-* logs use SSD24h policy.
-Successful scratch auto-removes; busy UV metadata retains unpinned finite-lifetime
-scratch for existing maintenance. Shared caches/dependency environments stay bounded.
+Cleanup complete: dist/downloads/source archive/notes and macOS source/dependency
+copy removed; owned tests/processes joined. No new worktrees/branches or live
+stack/default-state changes. Unrelated laptop Plans edits preserved.
+Raw ticket/release/CI logs use existing SSD24h policy. Failed/busy scratch remains
+unpinned with finite expiry (successful warm SDK ed0e2667 held for UV metadata
+maintenance); other successful inspected scratch removed. Shared caches bounded.
