@@ -48,6 +48,7 @@ type Services struct {
 	EventSources   http.Handler
 	Lambda         http.Handler
 	LambdaDev      http.Handler
+	LambdaWarmDev  http.Handler
 	Scheduler      http.Handler
 	CognitoURLs    *CognitoURLs
 	QueryBodyLimit int64
@@ -70,6 +71,14 @@ func New(services Services) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/__eventbus/dev/lambda/warm" {
+		if s.services.LambdaWarmDev == nil {
+			http.NotFound(w, r)
+		} else {
+			s.services.LambdaWarmDev.ServeHTTP(w, r)
+		}
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/__eventbus/dev/cognito/") {
 		if s.services.CognitoDev == nil {
 			http.NotFound(w, r)

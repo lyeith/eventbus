@@ -175,8 +175,9 @@ retained idle environments and 64 concurrent executions. `max_workers` accepts
 1–32 and limits the idle Python/Node cache; `max_concurrency` accepts 1–1,024 and
 limits reserved, executing and execution-retiring environments across all runtimes,
 functions, aliases and generations. Idle retirement holds its idle slot until
-cleanup joins. Total managed environments cannot exceed the sum of both limits;
-these limits count environments, not application-controlled RSS.
+cleanup joins. With stable limits, managed environments are bounded by their sum;
+lowering limits preserves existing active/retiring ownership until it joins. These
+limits count environments, not application-controlled RSS.
 
 Each worker runs one invocation at a time. Healthy recent environments replace
 older idle entries through joined LRU retirement. Python/Node can reuse imports;
@@ -221,6 +222,44 @@ worker lifetimes before closing capture sinks.
 The optional one-shot `python_stacks` collector requires a fresh process.
 Python functions with that option execute fresh, still counting against the warm
 execution limit; Node functions and ordinary private diagnostics can use warm workers.
+
+### Live development budget tuning
+
+Change the already-enabled public warm pool without restarting EventBus:
+
+```sh
+curl -fsS -X POST http://localhost:4100/__eventbus/dev/lambda/warm \
+  -H 'Content-Type: application/json' \
+  -d '{"max_workers":2,"max_concurrency":32}'
+```
+
+Both integer fields are required: `max_workers` accepts 1–32 and
+`max_concurrency` accepts 1–1,024. Invalid input leaves both limits unchanged.
+This named development control requires startup `dev_warm`; it does not enable
+warm execution or change private Cognito trigger budgets.
+
+Limits publish together through the existing pool. Raising concurrency admits
+additional work. Lowering concurrency lets active calls finish and throttles new
+execution until below the new ceiling; accepted Events remain in the existing
+queue with normal age/retry policy. Lowering idle retention retires the oldest
+excess idle environments through the normal joined worker owner. The successful
+response echoes the published limits after selected idle retirements join.
+Registrations, queued events and SDK-provisioned topics/queues remain in the same
+process; active calls and retained idle workers keep their imports.
+
+A canceled wait does not undo published limits or interrupt active calls; the
+worker owner still joins retirement. The response codes are:
+
+| Status | Static error | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_warm_limits` | Missing/out-of-range fields, malformed JSON or unsupported fields; no update |
+| 404 | `warm_disabled` | This runtime has no startup warm pool |
+| 503 | `warm_unavailable` / `warm_update_failed` | Closed/fenced runtime or retirement ownership failure |
+| 504 | `warm_update_wait_interrupted` | Waiting was canceled; already-published limits remain |
+
+Keep the recipe in sync yourself if those
+values should also apply after a future restart. Retained-owner source controls
+fence this endpoint like other development work.
 
 ### Measured SDK calls
 

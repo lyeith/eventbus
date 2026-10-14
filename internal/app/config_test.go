@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -194,9 +195,14 @@ func TestCLIStartupValidFlagsStillServeAndCloseOwnedPaths(t *testing.T) {
 	directory := t.TempDir()
 	port := cliStartupPort(t)
 	args, paths := cliStartupArguments(directory, port)
-	args = append(args, "--")
 	executable, err := os.Executable()
 	require.NoError(t, err)
+	// Registration validation and live dev controls use the actual CLI
+	// composition. The command fixture is registered but never launched.
+	functionsFile := filepath.Join(directory, "functions.yaml")
+	recipe := "dev_warm:\n  max_workers: 2\n  max_concurrency: 1\nfunctions:\n  startup-owned:\n    runtime: command\n    command: [" + strconv.Quote(executable) + "]\n"
+	require.NoError(t, os.WriteFile(functionsFile, []byte(recipe), 0600))
+	args = append(args, "--lambda-functions", functionsFile, "--")
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, append([]string{"-test.run=^TestCLIStartupProcess$", "--"}, args...)...)
@@ -236,6 +242,27 @@ func TestCLIStartupValidFlagsStillServeAndCloseOwnedPaths(t *testing.T) {
 		_, err := os.Stat(path)
 		require.NoError(t, err, "valid CLI omitted its configured path %s", path)
 	}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
+	post := func(path, target, payload string) map[string]json.RawMessage {
+		request, err := http.NewRequest(http.MethodPost, endpoint+path, strings.NewReader(payload))
+		require.NoError(t, err)
+		request.Header.Set("Content-Type", "application/json")
+		if target != "" {
+			request.Header.Set("X-Amz-Target", target)
+		}
+		response, err := client.Do(request)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		data, err := io.ReadAll(response.Body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, response.StatusCode, "%s: %s", target, data)
+		var body map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(data, &body))
+		return body
+	}
+	tuned := post("/__eventbus/dev/lambda/warm", "", `{"max_workers":1,"max_concurrency":2}`)
+	require.JSONEq(t, "1", string(tuned["max_workers"]))
+	require.JSONEq(t, "2", string(tuned["max_concurrency"]))
 	require.NoError(t, command.Process.Signal(os.Interrupt))
 	select {
 	case <-done:

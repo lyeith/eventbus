@@ -8,8 +8,8 @@ import "errors"
 // Idle retirement retains its idle budget until joined, so total environments are
 // bounded by the sum. Saturated synchronous execution returns native HTTP 429.
 type DevWarmConfig struct {
-	MaxWorkers     int `yaml:"max_workers,omitempty"`
-	MaxConcurrency int `yaml:"max_concurrency,omitempty"`
+	MaxWorkers     int `yaml:"max_workers,omitempty" json:"max_workers"`
+	MaxConcurrency int `yaml:"max_concurrency,omitempty" json:"max_concurrency"`
 }
 
 func validateDevWarm(config *DevWarmConfig) error {

@@ -3,14 +3,9 @@
 package lambda
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strings"
-
-	"github.com/lyeith/eventbus/internal/awsprotocol"
 )
 
 const devAsyncPrefix = "/__eventbus/dev/lambda/async/"
@@ -39,7 +34,7 @@ func NewDevAsyncHandler(service *Service) http.Handler {
 				Qualifier    string          `json:"qualifier,omitempty"`
 				Payload      json.RawMessage `json:"payload"`
 			}
-			if err := decodeDevAsyncControlBody(request, maxEventPayload+4096, &target); err != nil {
+			if err := decodeDevControlBody(request, maxEventPayload+4096, &target); err != nil {
 				writeError(http.StatusBadRequest, "invalid_completion_loss_request")
 				return
 			}
@@ -87,7 +82,7 @@ func NewDevAsyncHandler(service *Service) http.Handler {
 			FunctionName string `json:"function_name"`
 			Attempt      int    `json:"attempt"`
 		}
-		if err := decodeDevAsyncControlBody(request, 4096, &target); err != nil {
+		if err := decodeDevControlBody(request, 4096, &target); err != nil {
 			writeError(http.StatusBadRequest, "invalid_completion_loss_request")
 			return
 		}
@@ -105,24 +100,4 @@ func NewDevAsyncHandler(service *Service) http.Handler {
 		}
 		_ = json.NewEncoder(writer).Encode(result)
 	})
-}
-
-func decodeDevAsyncControlBody(request *http.Request, limit int64, target any) error {
-	body, err := awsprotocol.ReadBoundedBody(request.Body, request.ContentLength, limit)
-	if err != nil {
-		return err
-	}
-	if int64(len(body)) > limit {
-		return errors.New("development control body exceeds its limit")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return errors.New("development control body must contain one JSON object")
-	}
-	return nil
 }
