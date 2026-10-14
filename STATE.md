@@ -1,9 +1,10 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. #39 source is complete; binaries remain v0.15.0.
-https://github.com/lyeith/eventbus/releases/tag/v0.15.0
-No new binary publication was requested for this ticket.
+and agent development harness. #39 is released in v0.16.0.
+https://github.com/lyeith/eventbus/releases/tag/v0.16.0
+Eight Linux/macOS amd64/arm64 service/gateway binaries plus SHA256SUMS are public.
+Annotated tag points to clean source92dd784506b99af24189c0db88b7e87628981f35.
 
 #39 exact worker crash:
 - Public recipe dev_worker_crash.enabled defaults false.
@@ -27,6 +28,13 @@ No new binary publication was requested for this ticket.
   Completion loss remains a separate capability. Fresh defaults unchanged.
 
 Verification:
+- Release-source CI38532431406 passed full Go race/vet, frozen fixture contracts,
+  complete real SDK suite and unchanged Express/Swagger handlers.
+- Actual packaged Linux amd64/macOS arm64 fresh/prewarmed SNS/SQS proofs passed:
+  selected worker deaths/retries, broker/Cognito availability, held quiescence0
+  work, joined shutdown and native service/gateway help.
+- All eight binaries have CGO=0/clean source metadata. All nine uploads were
+  downloaded; every original byte/checksum matches. Public latest/tag verified.
 - Full affected race: Lambda135.343s, app40.849s, eventsource1.419s,
   server2.153s, ownership1.042s. Final control-only fix has focused race4.864s.
 - Focused lifecycle covers four fresh/two retained runtimes, active/prelaunch
@@ -44,5 +52,6 @@ Verification:
 Docs cover settings, identities, explicit SQS boundary and code ownership.
 No new worktrees/branches/environments or application-stack/default-state changes.
 Owned tests/processes joined; successful scratch removed by the existing owner.
+Release dist/download/archive/notes and Mac source/binaries/test environment removed.
 Failed scratch and raw /tmp/eventbus-ticket39-* evidence remain unpinned with
 the existing24h expiry. Unrelated laptop Plans changes preserved.
