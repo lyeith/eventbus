@@ -27,6 +27,15 @@ verification, then public latest release and final state update.
 - Held callback cleanup allows only root AWSEvents Disable/Remove/Delete.
   Native payload/mode stay intact; work-producing operations stay fenced.
 
+Shared reload publication correction:
+- Existing joinRetiredWorkers waited only worker.retired, signaled before map
+  removal. Both old/new CI caught a conservative retired reservation in counts.
+- After the channel joins, use existing warm.retire outside locks to publish
+  removal and fold cleanup errors. No new lifetime owner or weakened assertion.
+- Deterministic healthy/uncertain regression fails before fix; native consumers,
+  live tuning, public/private reload and retained resume checks pass.
+- The old clean-source build is obsolete; rebuild after this corrected commit.
+
 Verification:
 - Lambda full race140.603s; Events final race1.094s; owner vets passed.
 - Full affected app/server/protocol/coordinator/architecture race passed:
@@ -35,6 +44,8 @@ Verification:
   Two real firings and12 transformed/original/constant/path native invocations;
   disabled/removed/deleted producers stop, active handler completes and PIDs join.
 - Latest warm SDK proof3.867s also checks actual runtime request-ID correlation.
+- Reload correction race: nested/tuning6.289s, Python/Node2.216s, private/app3.843s;
+  scoped vet and independent correction review passed.
 - All-tag vet, formatting/diff checks and independent frozen review passed.
 - Logs: /tmp/eventbus-tickets37-38-final-{composition-race,sdk,vet}-20261014.log
   and /tmp/eventbus-ticket38-events-final-review-{race,vet}-20261014.log.

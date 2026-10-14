@@ -154,7 +154,10 @@ func (service *Service) joinRetiredWorkers(ctx context.Context, workers []*warmW
 	for _, worker := range workers {
 		select {
 		case <-worker.retired:
-			result = errors.Join(result, worker.closeErr)
+			// close() signals the joined lifetime before retire() publishes
+			// pool removal. Join that publication through the existing owner
+			// so a successful reload has also released its reservation.
+			result = errors.Join(result, service.warm.retire(worker))
 		case <-ctx.Done():
 			return errors.Join(result, ctx.Err())
 		}

@@ -23,6 +23,13 @@ sticky uncertainty and actual callback joins. Retained cleanup permits only
 root POST DisableRule/RemoveTargets/DeleteRule. Producing controls stay fenced.
 Cron/patterns/other buses/targets and unverified transform choices are documented.
 
+Shared reload correction: joinRetiredWorkers now uses the existing pool owner
+after worker.retired, so reload releases counted retirement reservations before
+returning. Deterministic regression reproduced the earlier CI failure in both
+healthy/uncertain cases; existing native nested/Node/Python/private reload checks
+passed. The first source CI failed only this previously existing publication
+gap; new clean-source CI is required before v0.15.0 publication.
+
 Final local verification:
 - Full Lambda race 140.603s; final Events race 1.094s; scoped owner vet passed.
 - Affected full race: app52.397s, server3.421s, protocol1.027s,
@@ -30,6 +37,8 @@ Final local verification:
 - Full pinned SDK race with genuine recurrence enabled passed561.502s.
   Earlier isolated recurrence proved2 firings,12 native calls,60000ms cadence;
   final SDK lane reran it against final production source.
+- Reload correction race: nested/tuning6.289s, Python/Node2.216s, private/app3.843s;
+  scoped vet passed.
 - All-tag vet (sdksmoke,performance,integration), formatting/diff and independent
   ownership review passed. Added only pinned test Events SDK3.1146.0.
 
