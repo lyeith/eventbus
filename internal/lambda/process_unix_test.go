@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -95,6 +96,10 @@ func processAlive(pid int) bool {
 		if position := strings.LastIndex(string(state), ") "); position >= 0 && len(state) > position+2 && state[position+2] == 'Z' {
 			return false
 		}
+	} else if runtime.GOOS == "linux" && errors.Is(readErr, os.ErrNotExist) {
+		// The descendant can exit between kill(pid, 0) and reading /proc.
+		// Absence is definitive on Linux; macOS has no /proc filesystem.
+		return false
 	}
 	return err == nil
 }
