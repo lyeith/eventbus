@@ -85,6 +85,10 @@ preserves those resources while changing public Lambda limits. Shutdown cancels
 and joins SQS mappings, stops scheduling and drains accepted rotation/Lambda work while the AWS
 listener remains available, then drains HTTP, flushes Firehose and closes stores
 and captures. Deadline failures are reported rather than claimed successful.
+For disposable stacks, opt into [`--shutdown-policy discard-pending`](docs/LAMBDA.md#disposable-shutdown):
+cancel pending Lambda Events and unaccepted Scheduler/EventBridge admissions,
+then join active handlers. Cancellations are explicit in evidence and the final
+summary; `graceful` remains the default.
 The opt-in `--retained-owner-callback-port` profile fences suite sources and joins
 accepted native work while callback peers remain live. Declared cleanup functions
 require another barrier before fixture assertions/resume. Its [endpoint contract](docs/RETAINED-OWNER.md)

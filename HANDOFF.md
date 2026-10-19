@@ -1,43 +1,47 @@
 # Handoff
 
-Canonical SSD /home/spite/Projects/eventbus, main. #40 source is complete.
-Latest published binaries remain v0.16.0; no new publication requested this pass.
+Canonical SSD /home/spite/Projects/eventbus, main. #41 source is complete.
+Latest published binaries remain v0.16.0; publication is a separate user step.
 https://github.com/lyeith/eventbus/releases/tag/v0.16.0
 
-#40 fixes missing native rejection facts in opt-in private Lambda diagnostics:
-- service.go retains the actual initial warm.acquire InvokeError in the joined
-  invocation result and freezes context/native completion at that decision.
-- dev_diagnostics.go alone projects admission_error with allowlisted native
-  code/http_status. Current captured pair is TooManyRequestsException/429 for
-  exhausted execution concurrency, including constrained fresh execution.
-- Native Invoke/gateway responses, public errors, concurrency budgets and
-  asynchronous retry behavior remain unchanged. No error Message/text or
-  event/environment/auth values are added to diagnostics.
-- Caller/observer/ownership and launch errors remain separately classified.
-  A callback-supplied InvokeError cannot create a native admission fact.
-  Already-launched Init fallback does not become not_started. No prevalidation
-  diagnostic row is added, and successful/later accepted attempts omit the field.
-- Existing optional Python-stack evidence can hold the lifetime after rejection;
-  late caller cancellation no longer changes its already-decided diagnostic cause.
-- LAMBDA/GATEWAY/agent workflow/architecture and issue triage document this scope.
+#41 fixes pointless native retry waits during disposable stack teardown:
+- Add --shutdown-policy discard-pending to the existing launch command.
+  graceful is the default; the final budget remains30s.
+- app/dev_shutdown.go composes explicit Lambda and producer dev ports after
+  the permanent retained source fence, before waiting for retained leases.
+- Lambda dev_async_shutdown.go only fences admission and activates cancellation.
+  Existing async.go owns claims/retries/terminal capture, queue removal and
+  lease release. One consolidated terminal owner publishes/counts cancellation.
+- Pending and prospective retry Events become canceled/Dev.ShutdownDiscarded.
+  Claimed attempts join; real success and exhausted final failure remain native.
+  Throttles preserve native attempt refunds. Count is read after final joins.
+- Events/Scheduler dev_shutdown.go cancel existing contexts to stop unaccepted
+  target admission retries. Their original Close/finalizers still join callbacks
+  and preserve successful transfer to Lambda. Native resource state is untouched.
+- App logs final producer outcomes and the Lambda canceled_events summary.
+  Active SDK/JWKS peers/stores remain usable. Intentional cancellation can exit0;
+  evidence/cleanup/deadline failure still withholds release/reports failure.
+- Resumable quiesce/resume and default graceful semantics are unchanged.
+  No dependencies, application prerequisite logic, replay or new coordinator.
 
 Verification:
-- app/lambda_admission_diagnostics_test.go reproduced missing field on baseline.
-  Real provided Runtime API handler holds cap1; native Invoke429/Retry-After,
-  AWS_PROXY and REQUEST-authorizer500 retain their exact response contracts.
-  Actual native IDs correlate three sanitized not_started records, absent
-  handler starts, and subsequent successful real handler/authorizer execution.
-- Focused consumer race1.258s; focused Lambda owner/privacy race1.054s.
-- Owner tests cover bounded allowlisted fields with large arbitrary message and
-  unknown code, successful omission, observer errors/spoofing, cancellation,
-  launch failure and real native pool rejection before a gated optional append.
-- Full affected race: Lambda140.885s, app45.990s, gateway18.347s,
-  server2.209s, ownership1.044s. All-tag vet and diff checks passed.
-- Independent source/consumer/documentation review found no remaining correction.
+- /tmp/eventbus-ticket41-disposable-cli.log: real CLI race4.275s, ordinary and
+  retained modes. Native1m retry exceeds30s budget; three canceled Events,
+  real active success/failure, SNS SDK/JWKS callbacks, joined children and
+  listener/store release. Diagnostics preserve actual failed handler attempts.
+- /tmp/eventbus-ticket41-affected-race.log: app45.286s (includes composed actual
+  native429 capacity rejection plus Scheduler source lease/hour retry),
+  Events1.102s, Scheduler1.591s, devquiescence1.043s, architecture1.047s pass.
+- /tmp/eventbus-ticket41-lambda-final-race.log: full Lambda race149.652s pass.
+  Focused owner/capture/race tests also passed3.052s; all-tag vet passed.
+- Initial full run hit a pre-existing test-helper liveness race. Baseline async
+  overlay probe reproduced2/100 with PID already absent before fallback kill.
+  process_unix_test.go now handles Linux /proc disappearance between syscalls;
+  100 race repetitions pass22.552s. Production process cleanup is unchanged.
+- Docs and independent source/composition/ownership review are clean.
 
-Evidence: /tmp/eventbus-ticket40-affected-race.log, admission-owner.log,
-admission-integration-red-contract.log, admission-integration-green.log and vet.log
-(all names share eventbus-ticket40-). Logs and failed scratch retain existing24h
-expiry with no pins; inspected successful owners are quiescent, scratch removed.
-No task processes/worktrees/branches/extra environments or live-stack changes.
-Unrelated laptop Plans changes preserved. No dependencies added.
+Inspected successful test receipts quiescent; scratch auto-removed.
+Raw logs/failed probe evidence have existing24h expiry and no pins. A quiescent
+UV tool scratch may await metadata maintenance under the same bounded policy.
+No task worktrees/branches/new environments/live-stack changes or dependencies.
+Unrelated laptop Plans changes preserved; no binaries published this pass.

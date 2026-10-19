@@ -222,9 +222,17 @@ func (service *Service) finishAsyncCrash(task *asyncTask, state, errorType strin
 	record.InjectedWorkerCrash = workerCrash
 	record.NextAttemptAt = time.Time{}
 	service.mu.Unlock()
+	service.settleAsyncRecord(task, record)
+}
+
+// settleAsyncRecord is the sole terminal capture/publication owner. Callers
+// hold asyncTransitionMu and supply an immutable terminal proposal, allowing
+// native throttle bookkeeping to settle without publishing uncaptured state.
+func (service *Service) settleAsyncRecord(task *asyncTask, record AsyncRecord) {
 	service.captureAsyncRecord(record)
 	service.mu.Lock()
 	defer service.mu.Unlock()
+	service.recordDevAsyncDiscardLocked(task, record)
 	task.record = record
 	delete(service.asyncTasks, task.record.RequestID)
 	service.asyncOutstanding--
@@ -270,11 +278,16 @@ func (service *Service) pollAsync() (*asyncTask, <-chan struct{}, time.Time, boo
 			selected = index
 		}
 	}
-	if selected >= 0 && !now.Before(earliest) {
+	if selected >= 0 && (service.devAsyncShutdown.discardPending || !now.Before(earliest)) {
 		task := service.asyncQueue[selected]
 		copy(service.asyncQueue[selected:], service.asyncQueue[selected+1:])
 		service.asyncQueue[len(service.asyncQueue)-1] = nil
 		service.asyncQueue = service.asyncQueue[:len(service.asyncQueue)-1]
+		if service.devAsyncShutdown.discardPending {
+			service.mu.Unlock()
+			service.finishAsync(task, "canceled", devAsyncShutdownDiscarded)
+			return nil, nil, time.Time{}, false
+		}
 		if now.Sub(task.record.QueuedAt) >= maxEventAge {
 			service.mu.Unlock()
 			service.finishAsync(task, "failed", "EventAgeExceeded")
@@ -401,6 +414,19 @@ func (service *Service) completeAsync(task *asyncTask, result invocationResult, 
 
 // The caller owns asyncTransitionMu; capture remains outside service.mu.
 func (service *Service) retryAsync(task *asyncTask, record AsyncRecord, errorType string, delay time.Duration, completionLost, workerCrash bool) {
+	service.mu.Lock()
+	aborted, discard := service.asyncAborted, service.devAsyncShutdown.discardPending
+	service.mu.Unlock()
+	if aborted || discard {
+		reason := devAsyncShutdownDiscarded
+		if aborted {
+			reason = "ServiceShutdown"
+		}
+		record = nextAsyncRecord(record, "canceled", reason)
+		record.NextAttemptAt = time.Time{}
+		service.settleAsyncRecord(task, record)
+		return
+	}
 	readyAt := time.Now().Add(delay)
 	record = nextAsyncRecord(record, "retrying", errorType)
 	record.InjectedCompletionLoss = completionLost
@@ -408,8 +434,8 @@ func (service *Service) retryAsync(task *asyncTask, record AsyncRecord, errorTyp
 	record.NextAttemptAt = readyAt.UTC()
 	service.recordAsync(task, record)
 	service.mu.Lock()
-	aborted := service.asyncAborted
-	if !aborted {
+	aborted, discard = service.asyncAborted, service.devAsyncShutdown.discardPending
+	if !aborted && !discard {
 		task.readyAt = readyAt
 		service.asyncQueue = append(service.asyncQueue, task)
 		service.wakeAsyncLocked()
@@ -417,6 +443,8 @@ func (service *Service) retryAsync(task *asyncTask, record AsyncRecord, errorTyp
 	service.mu.Unlock()
 	if aborted {
 		service.finishAsync(task, "canceled", "ServiceShutdown")
+	} else if discard {
+		service.finishAsync(task, "canceled", devAsyncShutdownDiscarded)
 	}
 }
 

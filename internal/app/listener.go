@@ -20,15 +20,16 @@ var errHTTPNotDrained = errors.New("HTTP listener did not drain; resource cleanu
 // their existing resource owner.
 // Concurrent shutdown callers share one result; a canceled waiter cannot stop it.
 type eventBusListener struct {
-	server      *http.Server
-	devRetained *devRetainedHTTP
-	owned       *eventBusLifecycle
-	timeout     time.Duration
-	mu          sync.Mutex
-	begun       bool
-	running     bool
-	done        chan struct{}
-	err         error
+	server         *http.Server
+	devRetained    *devRetainedHTTP
+	owned          *eventBusLifecycle
+	timeout        time.Duration
+	shutdownPolicy devShutdownPolicy
+	mu             sync.Mutex
+	begun          bool
+	running        bool
+	done           chan struct{}
+	err            error
 }
 
 func newEventBusListener(server *http.Server, owned *eventBusLifecycle, timeout time.Duration) *eventBusListener {
@@ -76,8 +77,13 @@ func (listener *eventBusListener) close(ctx context.Context) (resultErr error) {
 	}
 	deadline, cancel := context.WithTimeout(ctx, listener.timeout)
 	defer cancel()
+	if listener.devRetained != nil {
+		listener.devRetained.owner.Shutdown()
+	}
+	policyErr := listener.beginShutdownPolicy()
+	defer listener.reportShutdownPolicy()
 	retainedErr := listener.joinRetained(deadline)
-	quiesceErr := errors.Join(retainedErr, listener.owned.Quiesce(deadline))
+	quiesceErr := errors.Join(policyErr, retainedErr, listener.owned.Quiesce(deadline))
 	var httpErrs []error
 	for _, server := range listener.httpServers() {
 		if err := server.Shutdown(deadline); err != nil {

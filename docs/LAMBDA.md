@@ -365,6 +365,43 @@ returns HTTP 500 `ServiceException` before accepting the event. A later failure
 preserves accepted execution, blocks subsequent Event admission, emits redacted
 failure metadata to stderr and makes drain/close return an error.
 
+## Disposable shutdown
+
+The default `--shutdown-policy graceful` drains accepted Lambda Events,
+including their native one- and two-minute retry waits, within the existing
+30-second final shutdown budget. A retry beyond that budget causes a failed
+shutdown; it does not mean the event was delivered.
+
+For an owned disposable stack, add `--shutdown-policy discard-pending` to
+the existing launch command.
+
+On Ctrl-C/SIGTERM this permanently fences Event admission and cancels queued
+Events and retry-waiting Events, including immediately eligible pending work.
+An attempt already claimed by a worker is active: it may still launch, and its
+real handler/process cleanup must join. Active success remains `succeeded`;
+an active failure that would retry becomes `canceled`. An exhausted final
+failure remains `failed`. Synchronous calls, SQS settlement and Secrets
+rotation retain their existing lifecycle.
+
+Canceled Events append ordinary `eventbus.lambda.async.v1` records with
+`state:"canceled"` and `error_type:"Dev.ShutdownDiscarded"`. Attempts retain
+native accounting: unstarted queued work has zero, and not-started throttles
+do not consume an attempt. The queue fence
+is immediate; cancellation records publish as existing workers advance.
+The final `Lambda async shutdown policy applied` log includes
+`shutdown_policy=discard-pending` and `canceled_events`, including prospective
+retries canceled after active handlers finish. The count covers Lambda Events,
+not producer admission attempts; Scheduler/EventBridge log their own outcomes.
+Clean intentional cancellation permits exit 0, but never attests delivery.
+Capture, ownership, child cleanup and deadline failures still fail shutdown.
+
+Scheduler/EventBridge stop unaccepted target-admission retries through their
+existing owners. In retained-owner mode, source fencing and this policy happen
+before waiting for accepted leases; callback peers and stores remain available
+until joins finish. The same 30-second budget applies to active work.
+Resumable `/quiesce` and `/resume` never apply the discard policy.
+Events remain in memory; discarded payloads cannot be replayed from metadata.
+
 ## One-shot async completion loss
 
 Opt in through the selected Lambda recipe:
@@ -728,6 +765,7 @@ The typed local seam shares the HTTP runner and registered targets:
 | `DevAdmitAsyncCompletionLoss(ctx, InvokeInput)` | Opt-in native Event admission with atomic first-attempt completion loss |
 | `DevArmAsyncCompletionLoss(ctx, function, requestID, attempt)` / `DevClearAsyncCompletionLoss(...)` | Opt-in one-shot control for one existing native async attempt |
 | `DrainAsync(ctx)` | Stop Event admission and join accepted async work; keep synchronous execution available |
+| `DevDiscardPendingAsync()` / `DevDiscardedAsyncCount()` | Permanently select disposable cancellation through the existing async owner; read final count after drain/close joins |
 | `RegisterFunction(ctx, name, Function)` / `ReloadFunction(ctx, name)` | Explicit local snapshot/source replacement; retire the previous warm generation |
 | `DevBeginWarmDrain()` / `DevResumeWarm()` | Reversible local worker retirement and reuse fence for lifecycle composition |
 | `Close(ctx)` | Stop all admission, cancel synchronous work, join runtime resources and close the evidence sink |

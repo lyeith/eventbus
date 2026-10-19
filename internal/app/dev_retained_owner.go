@@ -177,7 +177,6 @@ func (listener *eventBusListener) joinRetained(ctx context.Context) error {
 	if listener.devRetained == nil {
 		return nil
 	}
-	listener.devRetained.owner.Shutdown()
 	_, err := listener.devRetained.owner.Quiesce(ctx)
 	if err == nil {
 		return nil

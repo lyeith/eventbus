@@ -59,7 +59,10 @@ and [ticket ownership](ISSUE-TRIAGE.md).
 
 - `app` constructs services and injects handlers into `server`. It owns startup,
   signals and shutdown: quiesce background SDK callers with HTTP available, then
-  drain HTTP and release resources.
+  drain HTTP and release resources. `dev_shutdown.go` composes the explicit
+  final-process discard policy before retained joins; named Lambda/Scheduler/
+  Events dev ports activate cancellation, while existing native owners publish
+  outcomes and join work. Resumable quiescence never uses this policy.
 - `server` declares the HTTP interfaces it consumes. It selects a protocol and
   delegates operations; it imports no service package and accesses no store.
 - Each service owns its state and operation adapter. Services do not import

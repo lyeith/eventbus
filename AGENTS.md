@@ -79,6 +79,10 @@ before configuring endpoints or cleaning fixtures.
   and [private Lambda diagnostics](docs/LAMBDA.md#private-invocation-diagnostics)
   use actual native request IDs and joined lifetimes. Keep diagnostics private;
   runtime success is not business success and uncertainty never attests completion.
+- Final-process disposable shutdown belongs in named `dev_shutdown.go` /
+  `dev_async_shutdown.go` adapters. App applies the policy before retained joins;
+  existing Lambda, Scheduler and Events owners settle and join their own work.
+  Keep default graceful drain and resumable retained controls unchanged.
 - Shared mechanics have one owner: `devcapture` for bounded synchronous JSONL
   group commit (every successful owned-file append awaits its covering Sync),
   `localexec` for process groups/descendants and capped output, `awsprotocol`

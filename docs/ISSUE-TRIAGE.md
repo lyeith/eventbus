@@ -327,3 +327,15 @@ Caller cancellation, ownership and launch failures remain separately classified;
 native Invoke429 and gateway500 behavior and configured budgets stay unchanged.
 Real held handlers verify direct Invoke and both gateway paths, then recovery.
 See [private diagnostics](LAMBDA.md#private-invocation-diagnostics).
+
+## Disposable final shutdown
+
+[#41](https://github.com/lyeith/eventbus/issues/41) is a development lifecycle
+policy. `app/dev_shutdown.go` composes opt-in `--shutdown-policy discard-pending`
+after the final source fence, before retained joins. Named Lambda/Events/
+Scheduler adapters activate cancellation; native queue/retry/terminal/join
+owners remain authoritative. Pending Events and unaccepted target admissions
+cancel explicitly; claimed attempts join and report their actual outcomes.
+The default graceful policy and resumable retained controls are unchanged.
+Missing application prerequisites remain owned by the consuming harness.
+See [disposable shutdown](LAMBDA.md#disposable-shutdown).

@@ -8,6 +8,7 @@ import (
 
 type config struct {
 	port                     int
+	shutdownPolicy           devShutdownPolicy
 	retainedCallbackPort     int
 	retainedCleanupFunctions string
 	region                   string
@@ -38,6 +39,7 @@ type config struct {
 // process-global flags. The CLI uses ExitOnError to preserve exit behavior.
 func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	port := flags.Int("port", 4100, "Port to listen on")
+	shutdownPolicy := flags.String("shutdown-policy", string(devShutdownGraceful), "Final shutdown: graceful or discard-pending (cancel pending Lambda Events and target admissions; join active handlers)")
 	retainedCallbackPort := flags.Int("retained-owner-callback-port", 0, "Opt-in exclusive retained-owner mode: trusted callback loopback port (0 disables)")
 	retainedCleanupFunctions := flags.String("retained-owner-cleanup-functions", "", "Comma-separated exact registered Lambda cleanup targets (RequestResponse while retained sources remain fenced)")
 	region := flags.String("region", "us-east-1", "AWS region")
@@ -75,6 +77,9 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	if flags.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments: %q", flags.Args())
 	}
+	if err := validateDevShutdownPolicy(devShutdownPolicy(*shutdownPolicy)); err != nil {
+		return config{}, err
+	}
 	if *cognitoProfile != "" && *cognitoProfile != "legacy-fixtures" {
 		return config{}, fmt.Errorf("unknown Cognito fixture profile %q", *cognitoProfile)
 	}
@@ -82,6 +87,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		retainedCallbackPort:     *retainedCallbackPort,
 		retainedCleanupFunctions: *retainedCleanupFunctions,
 		port:                     *port,
+		shutdownPolicy:           devShutdownPolicy(*shutdownPolicy),
 		region:                   *region,
 		accountID:                *accountID,
 		s3Endpoint:               *s3Endpoint,

@@ -83,6 +83,7 @@ type Service struct {
 	diagnosticCloseErr                                 error
 	invocationEvidenceErr                              error
 	pythonStacks                                       *DevPythonStacksConfig
+	devAsyncShutdown                                   devAsyncShutdownState
 	asyncClosed, asyncAborted                          bool
 	asyncAbortErr                                      error
 	asyncDrainDone                                     chan struct{}

@@ -229,7 +229,12 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		return fmt.Errorf("failed to configure Scheduler: %w", err)
 	}
 	owned.scheduler = schedules
-	rules, err = events.New(events.Options{Region: cfg.region, AccountID: cfg.accountID, Dev: events.DevOptions{Source: retainedSource}}, eventsInvoker)
+	rules, err = events.New(events.Options{Region: cfg.region, AccountID: cfg.accountID, Dev: events.DevOptions{
+		Source: retainedSource,
+		Observe: func(outcome events.Outcome) {
+			log.Info().Str("rule_arn", outcome.RuleARN).Str("event_id", outcome.EventID).Str("target_id", outcome.TargetID).Str("status", outcome.Status).Str("code", outcome.Code).Int("attempts", outcome.Attempts).Msg("EventBridge target admission completed")
+		},
+	}}, eventsInvoker)
 	if err != nil {
 		return fmt.Errorf("failed to configure EventBridge Rules: %w", err)
 	}
@@ -316,6 +321,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	}
 	shutdown := newEventBusListener(httpServer, owned, 30*time.Second)
 	shutdown.devRetained = devHTTP
+	shutdown.shutdownPolicy = cfg.shutdownPolicy
 	listenerOwns = true
 	return shutdown.Run(ctx)
 }

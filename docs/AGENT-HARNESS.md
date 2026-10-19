@@ -161,6 +161,11 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   In retained-owner mode, shutdown first joins accepted callback chains with
   peers available and irreversibly disables resume. Use the resumable barrier
   while retaining the process between suites.
+  For a disposable stack, select [`--shutdown-policy discard-pending`](LAMBDA.md#disposable-shutdown)
+  at startup. Pending Lambda Events and unaccepted Scheduler/EventBridge
+  admissions cancel; active attempts still join. Assert `Dev.ShutdownDiscarded`
+  cancellation records and the final `canceled_events` count separately from
+  handler success. Capture/ownership/deadline failures still fail shutdown.
 
 Keep Cognito's SQLite path, pool/client IDs and issuer stable when continuing
 the same app environment. Use fresh owned paths for independent tests.

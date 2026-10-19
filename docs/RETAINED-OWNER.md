@@ -273,6 +273,15 @@ sticky dirt only after irreversible shutdown and transport closure, never
 cleanup-safe completion. Resumable `/quiesce` never applies that abort policy.
 Shutdown never grants cleanup or resume permission.
 
+For disposable process teardown, [`--shutdown-policy discard-pending`](LAMBDA.md#disposable-shutdown)
+applies after the irreversible source fence and before the retained join.
+Existing Lambda ownership cancels pending Events and prospective retries;
+Scheduler/EventBridge stop unaccepted admissions and release their source
+leases through existing finalizers. Already-claimed handlers still finish and
+join with callbacks/stores live. Explicit cancellations do not grant delivery
+or fixture-safe proof. This option never changes resumable `/quiesce` or
+`/resume`, and failed capture/ownership/deadline joins remain failures.
+
 Implementation owners: [shared activity/source ports](../internal/devactivity/),
 [coordinator/control and source leases](../internal/devquiescence/),
 [app listeners/profile](../internal/app/dev_retained_owner.go),
