@@ -77,6 +77,7 @@ type Service struct {
 	asyncOwnershipErr                                  error
 	diagnosticCapture                                  *devcapture.Sink
 	diagnosticPath                                     string
+	diagnosticMode                                     DevDiagnosticsMode
 	diagnosticEvidenceErr                              error
 	diagnosticMu                                       sync.Mutex
 	diagnosticClosed                                   bool

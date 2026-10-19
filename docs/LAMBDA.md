@@ -555,6 +555,7 @@ the function recipe passed through `--lambda-functions`:
 ```yaml
 dev_diagnostics:
   log_path: .local/lambda-private.jsonl
+  mode: failures  # Optional: omit or use all to retain every invocation.
 ```
 
 The path resolves against `--work-dir`. There is no default diagnostic sink;
@@ -564,7 +565,7 @@ current user; missing parents are created with `0700`. Use trusted parent paths.
 Handler logs can contain credentials: keep this file private, separate from
 redacted captures, broker logs and public manifests.
 
-Each admitted execution attempt emits `eventbus.lambda.invocation-diagnostic.v1`
+In `all` mode, each admitted execution attempt emits `eventbus.lambda.invocation-diagnostic.v1`
 after the invocation response/output boundary joins and any required runner,
 child, pipe and Runtime API retirement. Successful warm workers remain live
 under their separate worker lifetime. Records identify `request_id`,
@@ -573,6 +574,22 @@ under their separate worker lifetime. Records identify `request_id`,
 Synchronous attempts use `RequestResponse` and attempt 1; an async event keeps
 one request ID across its numbered retry attempts. States are `succeeded`,
 `failed`, `timed_out`, `canceled` and `not_started`.
+
+Use `mode: failures` to retain failed, timed-out, canceled and not-started
+owned attempts, including failed Init/launch and native execution-capacity
+rejections. Each failed async attempt is retained even if a later retry succeeds;
+the successful retry has no private row. Clean successes are omitted, including
+caught/logged business errors and a successful internal Init fallback.
+Ownership uncertainty and injected completion-loss/worker-crash evidence remain
+retained. Process-exit text alone does not select an otherwise successful result.
+Use `all` when successful calls or caught errors are needed for investigation.
+
+Selection happens after native execution and collector joins, using frozen
+outcome facts. Output remains bounded and private; collection still runs until
+the outcome is known. This controls retained rows, not handler execution, native
+Tail responses, retries, async/SQS records or a promised latency improvement.
+Both modes use the same v1 schemas, output limits and sticky capture errors.
+Unknown modes fail startup; no configuration still means no diagnostic sink.
 
 A native execution-concurrency rejection adds this optional field to its
 `not_started` record:
@@ -714,17 +731,23 @@ propagated as a Lambda context deadline: for a known 30s gateway budget and 60s
 Lambda budget, the example requests evidence at 25s. Arbitrary cancellation
 cannot wait for a snapshot.
 
+With `mode: failures`, the existing bounded snapshot stays in memory until
+the final attempt outcome is selected. A retained failure appends its snapshot
+before its invocation row; clean success writes neither schema. The collector
+still joins normally. Use `all` for live snapshot visibility while a handler
+is active; `captured_at` remains the collection time, before deferred append.
+
 Embedded callers can use `Service.RequestPythonSnapshot(InvocationMetadata)`
 with the exact identity from `ExecuteObserved` admission. `true` means request
-accepted, not captured. Let admission return so the process can start; observe
-the live record before explicitly canceling when a snapshot is required. Fast or
+accepted, not captured. Let admission return so the process can start; in `all`
+mode, observe the live record before explicitly canceling when a snapshot is required. Fast or
 not-yet-started processes can still yield unavailable evidence. There is no native
 or HTTP management endpoint and no handler change is required.
 
 Live `eventbus.lambda.python-stack.v1` records retain the original `request_id`,
 `function_name`, `function_arn` and `attempt`, plus `threads`, `loops`, `truncated`,
 `status` and optional fixed `reason`. Go owns `requested_at` (omitted without a
-request) and `captured_at` (receipt/evidence publication time); thread/task views
+request) and `captured_at` (receipt time); thread/task views
 come from nearby times rather than one atomic process snapshot.
 Triggers are `explicit`, `deadline`, `snapshot_after` or `not_requested`; statuses
 are `captured`, `capture_unavailable` or `capture_failed`. A fast completion before

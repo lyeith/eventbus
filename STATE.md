@@ -1,57 +1,40 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. #41 source is complete and published in v0.17.0.
+and agent development harness. #42 source is complete. User requested publication
+when verified; v0.18.0 preparation is next. Published binaries remain v0.17.0:
 https://github.com/lyeith/eventbus/releases/tag/v0.17.0
 
-Release v0.17.0 (2026-10-19):
-- Annotated tag/source8d6a8bd8d4466cd23979767b15bfa7646cc46c49.
-  Includes #40 native admission diagnostics and #41 disposable shutdown.
-- Latest public release: eight Linux/macOS amd64/arm64 service/gateway binaries
-  plus SHA256SUMS. Downloaded uploaded assets and verified every checksum.
-- Full source CI39214678215 passed Go race/vet and complete SDK/Swagger lanes.
-- All binaries CGO-free with matching clean VCS metadata and target formats.
-- Actual Linux amd64/macOS arm64 packages passed help and native failed-handler
-  retry cancellation in ordinary/retained modes; handlers/listeners joined.
-- Release build, downloads, platform copies and temporary probes removed.
-  Inspected build/test owners quiescent; their scratch auto-removed.
-
-#41 disposable final shutdown:
-- New --shutdown-policy graceful|discard-pending; graceful remains default.
-- Named app/dev_shutdown adapter selects the permanent policy after retained
-  source fencing, before the retained join. Resumable controls are unchanged.
-- Lambda dev_async_shutdown activates the existing async queue/terminal owner:
-  pending Events and prospective retries cancel as Dev.ShutdownDiscarded.
-  Claimed attempts may launch and must finish/join; actual successes and
-  exhausted final failures keep their outcomes. Native throttle accounting stays.
-- Cancellation capture advances on existing workers. Final operational summary
-  counts published cancellations, including retries from finishing attempts.
-- Scheduler/Events dev adapters cancel unaccepted admission retries through
-  existing contexts/finalizers, so their source leases cannot strand shutdown.
-  App logs their final outcomes separately from accepted Lambda cancellations.
-- Active callbacks/stores stay available through joins; capture/ownership/
-  cleanup/deadline failures remain failures. No new coordinator/dependency.
-- Agent/Lambda/retained/ownership docs describe policy, evidence and limits.
+#42 failure-only private diagnostics:
+- Optional dev_diagnostics.mode: failures; omitted or all preserves every
+  existing owned-attempt record. No diagnostic configuration means no sink.
+- Diagnostics alone selects final joined attempts using native state, frozen
+  cancellation, ownership uncertainty and injected native retry/crash facts.
+  It does not classify free-form process errors or recovered Init phases.
+- Clean success emits no private row; caught/logged business errors need all.
+  Failed async attempts remain retained independently of later successful retry.
+  Owned launch/Init, timeout/cancellation and native429 failures retain detail.
+- Python uses its existing bounded session record. In failures mode it defers
+  append until terminal selection, then stack precedes invocation; clean success
+  writes neither schema. All mode retains existing live snapshot visibility.
+- Native responses/Tail, warm reuse, retry/ACK owners, async/SQS metadata, private
+  file protection, output limits and sticky capture failures stay authoritative.
+  This changes retained storage, with no latency improvement claim/dependency.
+- Lambda/agent/architecture/triage docs cover configuration and boundaries.
 
 Verification:
-- Real CLI race4.275s: ordinary/retained modes, native minute retry beyond
-  shutdown budget, queued Event, overlapping success/failure, real SNS SDK and
-  Cognito JWKS callbacks, cancellation count3, joined PIDs/listeners/store.
-- Composed app regression saturates actual Lambda pending capacity, then
-  cancels a Scheduler hour-retry/source lease before the retained join.
-- Full affected race: app45.286s, Events1.102s, Scheduler1.591s,
-  devquiescence1.043s, architecture1.047s. Final full Lambda race149.652s.
-- Focused Lambda race3.052s covers admission/claim/retry/capture races, native
-  throttle attempts, default deadlines and sticky capture/cleanup errors.
-- First full run found an existing PID-test observation race. Original async
-  implementation reproduced2/100: /proc was absent before fallback kill.
-  Linux test helper now treats disappeared PIDs as exited; 100 race runs pass
-  in22.552s. Production process cleanup was unchanged.
-- All-tag vet and diff checks pass. Independent ownership/docs review is clean.
+- Focused real runtime race3.640s; real Python collection/fault race4.000s.
+- Native SNS CLI race4.740s: failure then successful retry, same native event/
+  request/message identity, private failure detail retained, later success
+  omitted only in failures mode. Default all retains both; children/owners join.
+  Maintained proof supports an actual package through EVENTBUS_SMOKE_BINARY.
+- Config/final-selection table race1.053s; invalid modes fail before file effects.
+- Full affected race passed: Lambda161.595s, app64.742s, gateway25.374s,
+  eventsource1.604s, architecture1.051s. All-tag vet and diff checks passed.
+- Independent production, Python ownership and documentation review is clean.
 
-Owned tests/processes joined; successful inspected test scratch removed.
-Raw /tmp/eventbus-ticket41-* logs and unpinned failed/probe scratch use existing
-24h retention; a quiescent UV tool scratch may await metadata maintenance.
-No worktrees, branches, new environments or application/default-state changes.
-Unrelated laptop Plans changes preserved. Release smoke/build logs use existing
-24h retention under /tmp/eventbus-v0.17.0-*.
+Owned source tests joined; successful managed test scratch removed.
+Raw /tmp/eventbus-ticket42-* logs and one corrected test-expectation failure
+use existing24h unpinned retention. No task worktrees/branches/new environments,
+application/default-state changes or dependencies. Laptop Plans untouched.
+Publish after source CI and packaged artifact verification; do not stop at source.

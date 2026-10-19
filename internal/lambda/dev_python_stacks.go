@@ -277,11 +277,27 @@ func (session *pythonStackSession) collect() {
 
 func (session *pythonStackSession) publish(trigger string, snapshot pythonStackSnapshot, requested time.Time) {
 	record := pythonStackRecord{SchemaVersion: "eventbus.lambda.python-stack.v1", RequestID: session.identity.RequestID, FunctionName: session.identity.FunctionName, FunctionARN: session.identity.FunctionARN, Attempt: session.identity.Attempt, Trigger: trigger, RequestedAt: requested.UTC(), CapturedAt: time.Now().UTC(), pythonStackSnapshot: snapshot}
-	err := session.service.appendDiagnostic(record)
+	var err error
+	if session.service.diagnosticMode != DevDiagnosticsFailures {
+		err = session.service.appendDiagnostic(record)
+	}
 	session.mu.Lock()
 	session.record = record
 	session.ownershipErr = errors.Join(session.ownershipErr, err)
 	session.mu.Unlock()
+}
+
+// appendDeferredDiagnostic is called only by the terminal diagnostics owner,
+// after collector joins and failure-only retention selection. The existing
+// session record is the only buffer; all mode keeps live publication unchanged.
+func (session *pythonStackSession) appendDeferredDiagnostic() error {
+	session.mu.Lock()
+	record := session.record
+	session.mu.Unlock()
+	if record.SchemaVersion == "" {
+		return errors.New("Lambda Python snapshot completion unavailable")
+	}
+	return session.service.appendDiagnostic(record)
 }
 
 // finish is called only after actual process-group cleanup, or before a process

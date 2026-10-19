@@ -77,7 +77,9 @@ before configuring endpoints or cleaning fixtures.
   never exposes or tunes private Cognito budgets.
 - Optional [SQS delivery evidence](docs/EVENT-SOURCES.md#correlated-delivery-evidence)
   and [private Lambda diagnostics](docs/LAMBDA.md#private-invocation-diagnostics)
-  use actual native request IDs and joined lifetimes. Keep diagnostics private;
+  use actual native request IDs and joined lifetimes. Diagnostics owns all/failures
+  retention after joins; snapshot buffering stays with the existing Python session.
+  Keep diagnostics private;
   runtime success is not business success and uncertainty never attests completion.
 - Final-process disposable shutdown belongs in named `dev_shutdown.go` /
   `dev_async_shutdown.go` adapters. App applies the policy before retained joins;

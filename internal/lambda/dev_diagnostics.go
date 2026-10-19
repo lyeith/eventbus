@@ -18,7 +18,16 @@ import (
 const maxDiagnosticFailure = 64 << 10
 const maxDiagnosticDetail = 8 << 10
 
+// DevDiagnosticsMode selects terminal evidence retention, never execution policy.
+type DevDiagnosticsMode string
+
+const (
+	DevDiagnosticsAll      DevDiagnosticsMode = "all"
+	DevDiagnosticsFailures DevDiagnosticsMode = "failures"
+)
+
 type DevDiagnosticsConfig struct {
+	Mode         DevDiagnosticsMode     `yaml:"mode,omitempty"`
 	LogPath      string                 `yaml:"log_path"`
 	PythonStacks *DevPythonStacksConfig `yaml:"python_stacks,omitempty"`
 }
@@ -26,6 +35,13 @@ type DevDiagnosticsConfig struct {
 func validateDevDiagnostics(config *DevDiagnosticsConfig) error {
 	if config != nil && (config.LogPath == "" || config.LogPath == "-") {
 		return errors.New("dev_diagnostics.log_path requires a private owned file")
+	}
+	if config != nil {
+		switch config.Mode {
+		case "", DevDiagnosticsAll, DevDiagnosticsFailures:
+		default:
+			return fmt.Errorf("unknown dev_diagnostics.mode %q (want all or failures)", config.Mode)
+		}
 	}
 	if config != nil && config.PythonStacks != nil {
 		return validatePythonStacks(config.PythonStacks)
@@ -151,6 +167,10 @@ func (service *Service) configureDiagnostics(config *DevDiagnosticsConfig, async
 		return errors.Join(err, sink.Close())
 	}
 	service.diagnosticCapture, service.diagnosticPath = sink, path
+	service.diagnosticMode = config.Mode
+	if service.diagnosticMode == "" {
+		service.diagnosticMode = DevDiagnosticsAll
+	}
 	if config.PythonStacks != nil {
 		copy := *config.PythonStacks
 		if copy.DeadlineLead == 0 {
@@ -215,9 +235,28 @@ func boundedDiagnosticDetail(value string) (string, bool) {
 	return value[:end], true
 }
 
+// Retention uses the final joined native attempt, including ownership and
+// frozen cancellation facts. Process-exit text and recovered launch phases do
+// not turn a successful native result into a failure.
+func (service *Service) retainsDiagnostics(result invocationResult, completion diagnosticCompletion) bool {
+	if service.diagnosticMode != DevDiagnosticsFailures {
+		return true
+	}
+	return result.state != InvocationSucceeded || result.functionError ||
+		result.ownershipErr != nil || completion.contextError != "" ||
+		result.devCompletionLoss || result.devWorkerCrash
+}
+
 func (service *Service) captureDiagnostics(entry executableFunction, input invocation, result invocationResult, asynchronous bool, started time.Time, completion diagnosticCompletion) error {
-	if service.diagnosticCapture == nil {
+	if service.diagnosticCapture == nil || !service.retainsDiagnostics(result, completion) {
 		return nil
+	}
+	var stackErr error
+	if service.diagnosticMode == DevDiagnosticsFailures && input.pythonStacks != nil {
+		// The collector is already joined. Its existing bounded snapshot is
+		// retained only with a selected attempt, before terminal projection.
+		stackErr = input.pythonStacks.appendDeferredDiagnostic()
+		result.ownershipErr = errors.Join(result.ownershipErr, stackErr)
 	}
 	identity := invocationMetadata(entry, input)
 	logs := result.logs
@@ -269,7 +308,7 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 	for _, phase := range record.ExecutionPhases {
 		record.DetailTruncated = record.DetailTruncated || phase.DetailTruncated
 	}
-	return service.appendDiagnostic(record)
+	return errors.Join(stackErr, service.appendDiagnostic(record))
 }
 
 func (service *Service) appendDiagnostic(record any) error {

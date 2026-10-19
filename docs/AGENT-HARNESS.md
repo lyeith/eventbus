@@ -125,6 +125,10 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   and joined receipt evidence](EVENT-SOURCES.md#correlated-delivery-evidence).
   Match exact producer message IDs and the mapping before asserting completion.
 - Select recipe `dev_diagnostics.log_path` for [private native handler diagnostics](LAMBDA.md#private-invocation-diagnostics).
+  Set `dev_diagnostics.mode: failures` to retain non-success attempts while
+  omitting clean successes; omit `mode` or use `all` to retain every attempt.
+  Failed attempts remain available after successful retries. Caught/logged errors
+  that return success need `all`, which also retains live Python snapshots.
   Correlate actual request IDs/attempts; runtime success and logs never replace
   application business assertions. Keep these potentially sensitive files private.
   For `not_started`, inspect `admission_error` for a native code/status before

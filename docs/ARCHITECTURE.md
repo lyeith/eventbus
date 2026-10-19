@@ -123,12 +123,14 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   `runtime_phase.go` owns Init/readiness/Invoke deadlines and bounded Init fallback;
   all phases share caller cancellation and actual process/resource joins.
   `app` injects it into the service dispatcher and closes it after background Event drain and HTTP drain.
-  `dev_diagnostics.go` owns opt-in private attempt logs after actual cleanup;
+  `dev_diagnostics.go` owns opt-in private attempt logs and all/failures retention
+  after actual cleanup. The final joined native attempt selects retention;
   native results/retries and redacted async metadata keep their existing contracts.
   The native runtime retains prelaunch rejection facts; diagnostics projects
   only allowlisted admission code/status, separate from context/ownership/launch failures.
   `dev_python_stacks.go` and its Python collector own bounded live wait snapshots
-  in that same sink; live evidence cannot attest invocation join or business success.
+  in that same sink; failure-only mode defers the existing bounded snapshot to
+  terminal retention selection. Live evidence cannot attest invocation join or business success.
   `warm.go` separately bounds execution and retained idle environments through
   joined LRU retirement; saturation throttles before launch. The existing async
   queue retains throttled accepted events without spending handler retries.

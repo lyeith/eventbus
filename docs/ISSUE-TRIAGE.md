@@ -339,3 +339,15 @@ cancel explicitly; claimed attempts join and report their actual outcomes.
 The default graceful policy and resumable retained controls are unchanged.
 Missing application prerequisites remain owned by the consuming harness.
 See [disposable shutdown](LAMBDA.md#disposable-shutdown).
+
+## Failure-only private diagnostics
+
+[#42](https://github.com/lyeith/eventbus/issues/42) is a development retention
+policy in `lambda/dev_diagnostics.go`. Optional `mode: failures` selects
+final joined non-success/uncertain attempts; omitted mode and `all` retain
+existing behavior. Failed async attempts remain independent of eventual retry
+success. Python snapshots use their existing bounded session record until
+selection, then append before the retained invocation; no extra queue/coordinator.
+Native responses, retry/ACK owners, redacted evidence, output bounds and privacy
+remain unchanged. This addresses retained storage, without a latency claim.
+See [private diagnostics](LAMBDA.md#private-invocation-diagnostics).
