@@ -1,9 +1,22 @@
 # Handoff
 
 Canonical SSD /home/spite/Projects/eventbus, main. #42 source is complete.
-User explicitly requested publication once done. Prepare v0.18.0 after source CI
-and actual package proofs; current latest public release remains v0.17.0.
-https://github.com/lyeith/eventbus/releases/tag/v0.17.0
+Published v0.18.0 as latest on 2026-10-19:
+https://github.com/lyeith/eventbus/releases/tag/v0.18.0
+
+Release:
+- Annotated tag targets 0d3f46f9cb0aad4a48f8feb9cd88366ec922ece9.
+- Source CI39229148267 passed full Go race/vet and frozen SDK/Swagger lanes.
+- All eight CGO-free Linux/macOS amd64/arm64 service/gateway binaries have
+  matching clean source metadata and correct target formats. Uploaded downloads
+  passed SHA256SUMS; GitHub confirms latest, public, non-prerelease, nine assets.
+- Actual packaged Linux amd64/macOS arm64 binaries passed the maintained native
+  SNS SDK/Runtime API proof below: default all retains both attempts; failures
+  retains the failed attempt before successful native retry. Identities,
+  diagnostics, redacted records, real child joins and CLI cleanup verified.
+- Build/test owners inspected quiescent; successful managed scratch removed.
+  Deleted dist, asset downloads, platform copies and temporary Mac test drivers.
+  Raw /tmp/eventbus-v0.18.0-* logs use existing24h retention without pins.
 
 #42:
 - DevDiagnosticsConfig.Mode accepts all/failures; omitted defaults all.
@@ -47,5 +60,5 @@ and no external stack. Test binary itself provides the real child handler.
 Raw /tmp/eventbus-ticket42-* logs/failed expectation evidence retain existing24h
 expiry, no pins. Successful inspected source tests quiescent/scratch removed.
 No temporary worktrees/branches/new environments/live-stack changes/dependencies.
-Laptop Plans unchanged. Remaining work: CI, build/checksum/package proofs,
-publication and release-only STATE/HANDOFF update/cleanup.
+Laptop Plans unchanged. Source, publication and cleanup complete; no pending
+release work or retained task resources beyond expiring test evidence.

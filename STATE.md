@@ -1,9 +1,19 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. #42 source is complete. User requested publication
-when verified; v0.18.0 preparation is next. Published binaries remain v0.17.0:
-https://github.com/lyeith/eventbus/releases/tag/v0.17.0
+and agent development harness. #42 is complete and published in v0.18.0:
+https://github.com/lyeith/eventbus/releases/tag/v0.18.0
+
+Release v0.18.0 (2026-10-19):
+- Annotated tag/source: 0d3f46f9cb0aad4a48f8feb9cd88366ec922ece9.
+- Full source CI39229148267 passed Go race/vet, complete frozen SDK suite,
+  fixture contracts and unchanged Express/Swagger handlers.
+- Eight CGO-free Linux/macOS amd64/arm64 service/gateway binaries + SHA256SUMS.
+  Target formats and clean VCS metadata verified; uploaded downloads all hashed.
+- Actual Linux amd64 and macOS arm64 packages passed service/gateway help and
+  the maintained native SNS/Runtime API all-versus-failures retry proof.
+- Release build, downloads, platform copies and temporary Mac test driver removed.
+  Inspected source/build/package owners quiescent; managed scratch auto-removed.
 
 #42 failure-only private diagnostics:
 - Optional dev_diagnostics.mode: failures; omitted or all preserves every
@@ -37,4 +47,5 @@ Owned source tests joined; successful managed test scratch removed.
 Raw /tmp/eventbus-ticket42-* logs and one corrected test-expectation failure
 use existing24h unpinned retention. No task worktrees/branches/new environments,
 application/default-state changes or dependencies. Laptop Plans untouched.
-Publish after source CI and packaged artifact verification; do not stop at source.
+Publication and cleanup complete. Release logs under /tmp/eventbus-v0.18.0-*
+follow existing24h retention; no pins or remaining release resources.
