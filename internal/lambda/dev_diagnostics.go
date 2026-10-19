@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -49,37 +50,57 @@ func diagnosticBytes(data []byte, total int64) diagnosticOutput {
 	return output
 }
 
+// Admission evidence contains only known native protocol values. Messages may
+// contain request/configuration data and never enter this projection.
+type diagnosticAdmissionError struct {
+	Code       string `json:"code"`
+	HTTPStatus int    `json:"http_status"`
+}
+
+func diagnosticAdmissionRejection(result invocationResult) *diagnosticAdmissionError {
+	if result.state != InvocationNotStarted || result.admissionError == nil {
+		return nil
+	}
+	// The warm execution owner currently has one native rejection. Keep this
+	// allowlist explicit rather than copying arbitrary error strings or codes.
+	if result.admissionError.Code == "TooManyRequestsException" && result.admissionError.Status == http.StatusTooManyRequests {
+		return &diagnosticAdmissionError{Code: "TooManyRequestsException", HTTPStatus: http.StatusTooManyRequests}
+	}
+	return nil
+}
+
 type invocationDiagnosticRecord struct {
-	SchemaVersion             string              `json:"schema_version"`
-	RequestID                 string              `json:"request_id"`
-	FunctionName              string              `json:"function_name"`
-	FunctionARN               string              `json:"function_arn"`
-	Runtime                   string              `json:"runtime"`
-	InvocationType            string              `json:"invocation_type"`
-	Attempt                   int                 `json:"attempt"`
-	StartedAt                 time.Time           `json:"started_at"`
-	CompletedAt               time.Time           `json:"completed_at"`
-	CompletionScope           CompletionScope     `json:"completion_scope,omitempty"`
-	State                     InvocationState     `json:"state"`
-	FunctionError             bool                `json:"function_error"`
-	InjectedWorkerCrash       bool                `json:"injected_worker_crash,omitempty"`
-	InjectedCompletionLoss    bool                `json:"injected_completion_loss,omitempty"`
-	OwnershipConfirmed        bool                `json:"ownership_confirmed"`
-	StdoutIsResponse          bool                `json:"stdout_is_response,omitempty"`
-	Stdout                    *diagnosticOutput   `json:"stdout,omitempty"`
-	Stderr                    diagnosticOutput    `json:"stderr"`
-	Tail                      diagnosticOutput    `json:"tail"`
-	FunctionDiagnostic        *diagnosticOutput   `json:"function_diagnostic,omitempty"`
-	ProcessError              string              `json:"process_error,omitempty"`
-	ContextError              string              `json:"context_error,omitempty"`
-	TerminationCause          string              `json:"termination_cause,omitempty"`
-	ElapsedMS                 float64             `json:"elapsed_ms"`
-	ConfiguredTimeoutMS       int64               `json:"configured_timeout_ms"`
-	ExecutionPhases           []diagnosticPhase   `json:"execution_phases,omitempty"`
-	NativeResponseSynthesized bool                `json:"native_response_synthesized,omitempty"`
-	PythonStack               *pythonStackSummary `json:"python_stack,omitempty"`
-	OwnershipError            string              `json:"ownership_error,omitempty"`
-	DetailTruncated           bool                `json:"detail_truncated,omitempty"`
+	SchemaVersion             string                    `json:"schema_version"`
+	RequestID                 string                    `json:"request_id"`
+	FunctionName              string                    `json:"function_name"`
+	FunctionARN               string                    `json:"function_arn"`
+	Runtime                   string                    `json:"runtime"`
+	InvocationType            string                    `json:"invocation_type"`
+	Attempt                   int                       `json:"attempt"`
+	StartedAt                 time.Time                 `json:"started_at"`
+	CompletedAt               time.Time                 `json:"completed_at"`
+	CompletionScope           CompletionScope           `json:"completion_scope,omitempty"`
+	State                     InvocationState           `json:"state"`
+	AdmissionError            *diagnosticAdmissionError `json:"admission_error,omitempty"`
+	FunctionError             bool                      `json:"function_error"`
+	InjectedWorkerCrash       bool                      `json:"injected_worker_crash,omitempty"`
+	InjectedCompletionLoss    bool                      `json:"injected_completion_loss,omitempty"`
+	OwnershipConfirmed        bool                      `json:"ownership_confirmed"`
+	StdoutIsResponse          bool                      `json:"stdout_is_response,omitempty"`
+	Stdout                    *diagnosticOutput         `json:"stdout,omitempty"`
+	Stderr                    diagnosticOutput          `json:"stderr"`
+	Tail                      diagnosticOutput          `json:"tail"`
+	FunctionDiagnostic        *diagnosticOutput         `json:"function_diagnostic,omitempty"`
+	ProcessError              string                    `json:"process_error,omitempty"`
+	ContextError              string                    `json:"context_error,omitempty"`
+	TerminationCause          string                    `json:"termination_cause,omitempty"`
+	ElapsedMS                 float64                   `json:"elapsed_ms"`
+	ConfiguredTimeoutMS       int64                     `json:"configured_timeout_ms"`
+	ExecutionPhases           []diagnosticPhase         `json:"execution_phases,omitempty"`
+	NativeResponseSynthesized bool                      `json:"native_response_synthesized,omitempty"`
+	PythonStack               *pythonStackSummary       `json:"python_stack,omitempty"`
+	OwnershipError            string                    `json:"ownership_error,omitempty"`
+	DetailTruncated           bool                      `json:"detail_truncated,omitempty"`
 }
 
 type invocationDiagnostics struct {
@@ -209,6 +230,7 @@ func (service *Service) captureDiagnostics(entry executableFunction, input invoc
 		CompletionScope: result.completionScope, Runtime: entry.runtime, InvocationType: "RequestResponse", Attempt: identity.Attempt,
 		StartedAt: started.UTC(), CompletedAt: completion.at.UTC(), State: result.state,
 		FunctionError: result.functionError, OwnershipConfirmed: result.ownershipErr == nil,
+		AdmissionError:         diagnosticAdmissionRejection(result),
 		InjectedCompletionLoss: result.devCompletionLoss,
 		InjectedWorkerCrash:    result.devWorkerCrash,
 		Stderr:                 diagnosticBytes(result.diagnostics.stderr, result.diagnostics.stderrBytes),

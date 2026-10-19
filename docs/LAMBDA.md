@@ -537,6 +537,31 @@ Synchronous attempts use `RequestResponse` and attempt 1; an async event keeps
 one request ID across its numbered retry attempts. States are `succeeded`,
 `failed`, `timed_out`, `canceled` and `not_started`.
 
+A native execution-concurrency rejection adds this optional field to its
+`not_started` record:
+
+```json
+"admission_error": {"code": "TooManyRequestsException", "http_status": 429}
+```
+
+Only the native runtime admission owner supplies this fact; code/status are
+allowlisted and no admission message or arbitrary error text is copied.
+It identifies exhausted `dev_warm.max_concurrency`, including fresh executions
+sharing that budget. No handler ran, so execution phases and function logs
+remain empty; clean rejection retains `ownership_confirmed: true`.
+Successful attempts, launch failures, caller cancellations and ownership errors
+do not acquire this field from their errors. Existing context, process,
+function and ownership diagnostics retain their separate meanings.
+A rejected internal Init fallback retains its prior launched failure rather
+than becoming a new `not_started` admission. Failures before an owned invocation
+exists (such as invalid Invoke payloads/targets) do not create diagnostic rows.
+
+Native Invoke still returns 429 and gateways still apply their existing 500
+response for an Invoke API rejection. Correlate the private request/function
+identity to diagnose that gateway response. Once capacity is released, later
+accepted attempts omit `admission_error`. Optional evidence joining and later
+caller cancellation cannot change the already-decided native rejection.
+
 `stdout` and `stderr` retain separate 64 KiB tails; `tail` retains the merged
 4 KiB native log tail. On function failure, `function_diagnostic` retains up to
 64 KiB. Each output object has `data`, `encoding` (`utf8` or `base64`), total

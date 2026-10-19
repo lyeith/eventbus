@@ -190,6 +190,12 @@ binary bytes. Only 2.0 applies response inference. FunctionError, malformed or
 oversized results produce 502, Invoke failure 500, timeout 504 and oversized
 input 413; they never produce a fabricated successful application response.
 
+For local execution-capacity failures, optional
+[private Lambda diagnostics](LAMBDA.md#private-invocation-diagnostics) identify
+the native 429 as `admission_error` on the exact `not_started` request.
+Both integration and REQUEST-authorizer rejection keep their existing gateway
+500 response; that response does not imply the handler ran.
+
 HTTP_PROXY retains streaming and upgrades. `request_parameters` maps
 `integration.request.path/header/querystring.NAME` from
 `method.request.path/header/querystring.NAME`, `context.authorizer.NAME`,

@@ -127,6 +127,8 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
 - Select recipe `dev_diagnostics.log_path` for [private native handler diagnostics](LAMBDA.md#private-invocation-diagnostics).
   Correlate actual request IDs/attempts; runtime success and logs never replace
   application business assertions. Keep these potentially sensitive files private.
+  For `not_started`, inspect `admission_error` for a native code/status before
+  attributing a gateway 500 to handler execution.
   Inspect `termination_cause` and `elapsed_ms` before attributing a timeout;
   opt into [Python wait snapshots](LAMBDA.md#python-wait-snapshots) before a known
   shorter caller budget when terminal logs cannot locate a wait.

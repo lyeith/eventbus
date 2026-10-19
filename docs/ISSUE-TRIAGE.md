@@ -315,3 +315,15 @@ Public wiring excludes private Cognito execution. See
 [worker crash](LAMBDA.md#one-shot-worker-crash) for identities and the active-only
 SQS boundary. #35 post-write completion loss remains separately enabled;
 storage write failures belong to the storage/provider seam.
+
+## Native admission rejection diagnostics
+
+[#40](https://github.com/lyeith/eventbus/issues/40) is a private Lambda diagnostic
+gap. Core execution retains the native prelaunch error and freezes its decision
+before optional evidence joins. `dev_diagnostics.go` projects an allowlisted
+`admission_error` code/status for `not_started` execution-concurrency rejections.
+It copies no admission message, event, environment or authorization value.
+Caller cancellation, ownership and launch failures remain separately classified;
+native Invoke429 and gateway500 behavior and configured budgets stay unchanged.
+Real held handlers verify direct Invoke and both gateway paths, then recovery.
+See [private diagnostics](LAMBDA.md#private-invocation-diagnostics).

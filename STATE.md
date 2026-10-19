@@ -1,57 +1,40 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. #39 is released in v0.16.0.
+and agent development harness. #40 source is complete; binaries remain v0.16.0.
 https://github.com/lyeith/eventbus/releases/tag/v0.16.0
-Eight Linux/macOS amd64/arm64 service/gateway binaries plus SHA256SUMS are public.
-Annotated tag points to clean source92dd784506b99af24189c0db88b7e87628981f35.
+No new binary publication was requested in this ticket pass.
 
-#39 exact worker crash:
-- Public recipe dev_worker_crash.enabled defaults false.
-- GET /__eventbus/dev/lambda/invocations exposes redacted actual active identities
-  and existing async event snapshots. PUT/DELETE /invocations/<id>/worker-crash
-  select registered function/alias, existing native request ID and exact attempt.
-- Pending selection waits for actual launch/leased worker; active selection kills
-  only its runtime through existing localexec cancellation/cleanup ownership.
-- Native response/exit and hard deadline boundaries serialize selection.
-  Completed workers cannot be reopened through diagnostic or warm reuse gaps.
-- Nonlaunch throttle retains the same upcoming task arm; pending clear works
-  even while the old diagnostic lifetime is still active. Duplicate/raced/stale/
-  foreign/terminal selections are refused. No synthetic admission or PID surface.
-- Runtime.ExitError uses existing native retry/redelivery/ACK budgets.
-  Ordinary async/private diagnostic records add injected_worker_crash;
-  successful actual joins retain clean ownership. Prior external writes survive.
-- SNS retains its async event/request identity and numbered attempts.
-  SQS selects an admitted active Lambda ID at attempt1; native message identity/
-  receive count link redelivery to its new Lambda ID. Whole-batch ACK remains.
-- Cognito private runtimes cannot opt in and are never wired to this public port.
-  Completion loss remains a separate capability. Fresh defaults unchanged.
+#40 private native admission diagnostics:
+- The existing native execution owner retains its initial prelaunch rejection
+  and freezes that decision before optional stack/evidence joins.
+- Opt-in eventbus.lambda.invocation-diagnostic.v1 adds admission_error:
+  {"code":"TooManyRequestsException","http_status":429} on native not_started
+  execution-capacity rejections. Dev diagnostics owns the allowlisted projection.
+- No admission Message, arbitrary code/text, payload, environment or authorization
+  data is copied. No private sink remains the default; no new config/dependency.
+- Caller cancellation, ownership/observer and launch errors do not become native
+  admission facts. Already-launched Init fallback failures keep their original
+  classification. Later optional evidence/caller cancellation cannot relabel429.
+- Native Invoke429/Retry-After and existing gateway integration/REQUEST-authorizer
+  500 responses remain unchanged; configured concurrency limits stay enforced.
+- Later accepted requests omit admission_error. Existing logs, evidence ownership,
+  async retry policy and private Cognito boundaries remain unchanged.
+- LAMBDA/GATEWAY/agent guides document correlation, field scope and limitations.
 
 Verification:
-- Release-source CI38532431406 passed full Go race/vet, frozen fixture contracts,
-  complete real SDK suite and unchanged Express/Swagger handlers.
-- Actual packaged Linux amd64/macOS arm64 fresh/prewarmed SNS/SQS proofs passed:
-  selected worker deaths/retries, broker/Cognito availability, held quiescence0
-  work, joined shutdown and native service/gateway help.
-- All eight binaries have CGO=0/clean source metadata. All nine uploads were
-  downloaded; every original byte/checksum matches. Public latest/tag verified.
-- Full affected race: Lambda135.343s, app40.849s, eventsource1.419s,
-  server2.153s, ownership1.042s. Final control-only fix has focused race4.864s.
-- Focused lifecycle covers four fresh/two retained runtimes, active/prelaunch
-  crashes, retained reuse, overlapping peers, actual process joins, delayed
-  deadline/first cause, native exit with held cleanup, and saturated-pool
-  pending clear during held throttle diagnostics followed by healthy attempt1.
-- Final real SNS/SQS frozen boto3 race16.726s (fresh8.25s/warm7.42s):
-  each mode has two selected worker deaths and real producer retries, prior
-  durable writes, healthy overlap/broker/Cognito, queued clear and clean quiescence.
-- Related completion-loss, warm messaging/tuning and warm Node Cognito SDK
-  cases ran; an initial new-proof terminal-readiness race was corrected by
-  awaiting native snapshot publication. Final new-proof rerun passed.
-- All-tag vet and diff checks pass. No dependencies or supported AWS wire changes.
+- Real held Go provided handler cap1 reproduces baseline missing admission field.
+  Focused app race1.258s verifies native429, both gateway500 paths, exact native
+  IDs, no rejected handler start, sanitized records, recovery and omitted field.
+- Focused Lambda race1.054s covers allowlist/privacy bounds, cancellation/
+  observer spoofed InvokeError/ownership/launch negatives, and a deterministic
+  optional Python-stack append hold followed by late cancellation after429.
+- Full affected race passed: Lambda140.885s, app45.990s, gateway18.347s,
+  server2.209s, architecture1.044s. All-tag vet and diff checks passed.
+- Independent cause/ownership/privacy and final documentation review is clean.
+  No new dependencies, supported AWS fields or gateway policies changed.
 
-Docs cover settings, identities, explicit SQS boundary and code ownership.
-No new worktrees/branches/environments or application-stack/default-state changes.
-Owned tests/processes joined; successful scratch removed by the existing owner.
-Release dist/download/archive/notes and Mac source/binaries/test environment removed.
-Failed scratch and raw /tmp/eventbus-ticket39-* evidence remain unpinned with
-the existing24h expiry. Unrelated laptop Plans changes preserved.
+Owned tests/processes joined; successful inspected scratch removed automatically.
+No worktrees, branches, extra environments or application/default-state changes.
+Raw /tmp/eventbus-ticket40-* logs and unpinned failed scratch use existing24h
+retention. Unrelated laptop Plans changes preserved.

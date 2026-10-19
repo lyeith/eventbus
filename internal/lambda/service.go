@@ -327,12 +327,14 @@ type invocation struct {
 }
 
 type invocationResult struct {
-	payload           []byte
-	functionError     bool
-	logs              []byte
-	state             InvocationState
-	completionScope   CompletionScope
-	admitted          bool
+	payload         []byte
+	functionError   bool
+	logs            []byte
+	state           InvocationState
+	completionScope CompletionScope
+	admitted        bool
+	// Native prelaunch rejection, separate from function and ownership failures.
+	admissionError    *InvokeError
 	devCompletionLoss bool
 	devWorkerCrash    bool
 	diagnostics       invocationDiagnostics
@@ -489,8 +491,10 @@ func (service *Service) invokeOwned(parent context.Context, entry executableFunc
 					break
 				}
 				if errors.As(err, &admissionErr) {
+					// Freeze this native decision before optional evidence joins.
+					completion = snapshotDiagnosticCompletion(ctx, false)
 					normalCompletion = true
-					return invocationResult{state: InvocationNotStarted}, err
+					return invocationResult{state: InvocationNotStarted, admissionError: admissionErr}, err
 				}
 				result = failure("Sandbox.Timedout", "Function invocation canceled before warm worker reservation")
 				completion = snapshotDiagnosticCompletion(ctx, true)
