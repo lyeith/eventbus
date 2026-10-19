@@ -1,8 +1,21 @@
 # Handoff
 
 Canonical SSD /home/spite/Projects/eventbus, main. #41 source is complete.
-Latest published binaries remain v0.16.0; publication is a separate user step.
-https://github.com/lyeith/eventbus/releases/tag/v0.16.0
+Published v0.17.0 as latest on2026-10-19:
+https://github.com/lyeith/eventbus/releases/tag/v0.17.0
+
+Release:
+- Annotated tag points to8d6a8bd8d4466cd23979767b15bfa7646cc46c49.
+  Includes #40 admission diagnostics and #41 shutdown policy.
+- Eight CGO-free Linux/macOS amd64/arm64 service/gateway binaries + SHA256SUMS.
+  All match clean source metadata; all uploaded downloads passed checksums.
+- Source CI39214678215 passed full Go race/vet and SDK/Swagger checks.
+- Packaged Linux amd64 and macOS arm64 passed help and actual native Python
+  failure/minute-retry cancellation in normal and retained-owner modes.
+  Explicit cancellation, exit0, handler joins and listener release verified.
+- Inspected successful build/test receipts quiescent; scratch auto-removed.
+  Removed release dist, downloaded assets, platform copies and probe directories.
+  Raw /tmp/eventbus-v0.17.0-* build/metadata/smoke logs use existing24h retention.
 
 #41 fixes pointless native retry waits during disposable stack teardown:
 - Add --shutdown-policy discard-pending to the existing launch command.
@@ -44,4 +57,4 @@ Inspected successful test receipts quiescent; scratch auto-removed.
 Raw logs/failed probe evidence have existing24h expiry and no pins. A quiescent
 UV tool scratch may await metadata maintenance under the same bounded policy.
 No task worktrees/branches/new environments/live-stack changes or dependencies.
-Unrelated laptop Plans changes preserved; no binaries published this pass.
+Unrelated laptop Plans changes preserved. No remaining release work.

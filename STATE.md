@@ -1,8 +1,20 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. #41 source is complete; binaries remain v0.16.0.
-https://github.com/lyeith/eventbus/releases/tag/v0.16.0
+and agent development harness. #41 source is complete and published in v0.17.0.
+https://github.com/lyeith/eventbus/releases/tag/v0.17.0
+
+Release v0.17.0 (2026-10-19):
+- Annotated tag/source8d6a8bd8d4466cd23979767b15bfa7646cc46c49.
+  Includes #40 native admission diagnostics and #41 disposable shutdown.
+- Latest public release: eight Linux/macOS amd64/arm64 service/gateway binaries
+  plus SHA256SUMS. Downloaded uploaded assets and verified every checksum.
+- Full source CI39214678215 passed Go race/vet and complete SDK/Swagger lanes.
+- All binaries CGO-free with matching clean VCS metadata and target formats.
+- Actual Linux amd64/macOS arm64 packages passed help and native failed-handler
+  retry cancellation in ordinary/retained modes; handlers/listeners joined.
+- Release build, downloads, platform copies and temporary probes removed.
+  Inspected build/test owners quiescent; their scratch auto-removed.
 
 #41 disposable final shutdown:
 - New --shutdown-policy graceful|discard-pending; graceful remains default.
@@ -41,4 +53,5 @@ Owned tests/processes joined; successful inspected test scratch removed.
 Raw /tmp/eventbus-ticket41-* logs and unpinned failed/probe scratch use existing
 24h retention; a quiescent UV tool scratch may await metadata maintenance.
 No worktrees, branches, new environments or application/default-state changes.
-Unrelated laptop Plans changes preserved. No binary publication this pass.
+Unrelated laptop Plans changes preserved. Release smoke/build logs use existing
+24h retention under /tmp/eventbus-v0.17.0-*.
