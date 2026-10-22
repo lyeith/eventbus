@@ -30,7 +30,10 @@ import socket
 
 
 def ready(context):
-    pathlib.Path(os.environ['PYTHON_STACK_READY']).write_text(json.dumps({'request_id': context.aws_request_id, 'pid': os.getpid()}))
+    marker = pathlib.Path(os.environ['PYTHON_STACK_READY'])
+    pending = marker.with_suffix('.pending')
+    pending.write_text(json.dumps({'request_id': context.aws_request_id, 'pid': os.getpid()}))
+    pending.replace(marker)
 
 
 async def app(scope, receive, send):
@@ -256,6 +259,9 @@ func assertPythonStackTerminal(t *testing.T, path string, metadata InvocationMet
 	require.False(t, terminal.CompletedAt.Before(snapshot.CapturedAt))
 }
 
+// The marker names uv's actual Python descendant, while command.Wait reaps
+// the launcher. Cancellation tests bound observation of descendant kernel exit
+// after joined result/log/collector pipes and successful group termination.
 func pythonStackProcessPID(t *testing.T, marker string, metadata InvocationMetadata) int {
 	t.Helper()
 	data, err := os.ReadFile(marker)
@@ -294,7 +300,8 @@ func TestPythonStackExplicitASGIReceiveCapturesSafeAwaitChainBeforeCancellation(
 	require.ErrorIs(t, result.err, context.Canceled)
 	require.Equal(t, InvocationCanceled, result.outcome.State)
 	require.Nil(t, result.outcome.OwnershipErr)
-	require.False(t, processAlive(pid), "cancellation must join the actual captured Python child")
+	require.Eventually(t, func() bool { return !processAlive(pid) }, 2*time.Second, 5*time.Millisecond,
+		"actual captured Python descendant %d must stop after cancellation joins", pid)
 	assertPythonStackTerminal(t, path, metadata, InvocationCanceled, record)
 	require.False(t, service.RequestPythonSnapshot(metadata), "completed identity cannot admit another snapshot")
 }
@@ -452,7 +459,8 @@ func TestPythonStackBlockingSocketExposesThreadAndUnavailableLoop(t *testing.T) 
 			result := finishPythonStackExecution(t, finished)
 			require.ErrorIs(t, result.err, context.Canceled)
 			require.Nil(t, result.outcome.OwnershipErr)
-			require.False(t, processAlive(pid), "blocked socket/loop child must join before returning")
+			require.Eventually(t, func() bool { return !processAlive(pid) }, 2*time.Second, 5*time.Millisecond,
+				"actual captured Python descendant %d must stop after cancellation joins", pid)
 			assertPythonStackTerminal(t, path, metadata, InvocationCanceled, record)
 		})
 	}
@@ -583,7 +591,8 @@ func TestPythonStackEarlyScheduleRetainsExplicitAvailability(t *testing.T) {
 	result := finishPythonStackExecution(t, finished)
 	require.ErrorIs(t, result.err, context.Canceled)
 	require.Nil(t, result.outcome.OwnershipErr)
-	require.False(t, processAlive(pid))
+	require.Eventually(t, func() bool { return !processAlive(pid) }, 2*time.Second, 5*time.Millisecond,
+		"actual captured Python descendant %d must stop after cancellation joins", pid)
 	assertPythonStackTerminal(t, path, metadata, InvocationCanceled, record)
 }
 
@@ -646,7 +655,8 @@ func TestPythonStackInheritedCallerDeadlineSchedulesBeforeActualEarlierStop(t *t
 	require.ErrorIs(t, result.err, context.DeadlineExceeded)
 	require.Equal(t, InvocationTimedOut, result.outcome.State)
 	require.Nil(t, result.outcome.OwnershipErr)
-	require.False(t, processAlive(pid), "earlier caller deadline cannot leave collector or Python work behind")
+	require.Eventually(t, func() bool { return !processAlive(pid) }, 2*time.Second, 5*time.Millisecond,
+		"actual captured Python descendant %d must stop after cancellation joins", pid)
 	assertPythonStackTerminal(t, path, metadata, InvocationTimedOut, record)
 	_, terminals := readPythonStackEvidence(t, path)
 	require.Equal(t, "caller_deadline", terminals[0].TerminationCause)
