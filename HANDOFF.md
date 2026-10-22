@@ -1,55 +1,58 @@
 # Handoff
 
-Canonical SSD /home/spite/Projects/eventbus, main. #45/#46/#47 implemented,
-reviewed and locally verified on 2026-10-23; source push is the session finish.
-Latest published binaries are still v0.19.0. No release requested this pass.
+Canonical SSD /home/spite/Projects/eventbus, main. #45/#46/#47 published
+as latest v0.20.0 on 2026-10-23:
+https://github.com/lyeith/eventbus/releases/tag/v0.20.0
+
+Release:
+- Annotated tag/source 552e827b36c3dcac351363d7790e4758dcdff97f.
+- Source CI39837337269 success: full Go race/vet, frozen SDK/fixture contracts
+  and unchanged Express/Swagger handlers.
+- Eight CGO-free service/gateway binaries for Linux/macOS amd64/arm64 plus
+  SHA256SUMS. All formats, clean source metadata and public-download SHA verified.
+  GitHub confirms latest/public/non-prerelease and nine assets.
 
 Ownership:
-- Firehose s3_path.go owns strict wire-path construction; the existing SigV4
-  signer remains. Native VersityGW qualifies actual compatibility independently
-  of the test receiver, without changing bucket keys or Terraform prefixes.
-- delivery_retry.go owns per-object 1..60s cooldown and coalesced diagnostics in
-  the existing flush. Background/retained force-readiness honors retryAt; final
-  delete/shutdown bypasses cooldown once, preserving failure and original bytes.
-  Dynamic retry-window expiry preempts cooldown and retains the error object.
-- SES native core owns per-message tracking overrides, configuration generations
-  and current destination selection. Explicit outcomes and pixels reuse it.
-- ses/dev_tracking*.go owns optional HTML/MIME/template rendering and opaque
-  pixel/discovery HTTP resources. App composes narrow dev ports; server stays AWS.
-  No second retention cache, worker or expiry loop. Eviction retires token/body
-  references even when a bulk Send still holds native metadata.
-- template.go owns the existing UseNumber template-data decoder shared by both
-  optional renderers. V1/v2 retain exact 9007199254740993 and original capture.
-- Default tracking off; flags, routes, status codes, retention and limitations:
-  docs/SES.md#local-email-views-and-tracking-pixels. Native duplicate-marker
-  rejection remains in BACKLOG as a core validation gap.
+- Firehose s3_path.go owns strict wire encoding; existing SigV4 stays.
+  delivery_retry.go keeps per-object1..60s cooldown and coalesced diagnostics
+  in the existing flush owner. Buffer/window/cooldown remain independent.
+  Retained force-readiness honors retries; final delete/shutdown bypasses once.
+- SES core owns current destination/generation and per-message override policy.
+  Explicit outcomes and dev pixels reuse its retainedEventLocked selector.
+- ses/dev_tracking*.go owns optional rendering/MIME/discovery/pixels; app composes
+  narrow dev ports. Server stays AWS. Existing24h/10k/64MiB correlation owner
+  retires HTML/token references, including prepared bulk Send references.
+- template.go owns shared UseNumber parsing; v1/v2 preserve9007199254740993.
+- docs/SES.md documents opt-in/default-off resources/status/retention/limits.
+  Native duplicate-marker rejection remains a core BACKLOG gap.
 
-Verification evidence on SSD:
-- /tmp/eventbus-tickets45-47-affected-race-20261023.log
-  SES26.203s, Firehose12.675s, app107.210s, server3.327s,
-  messaging5.707s, devquiescence1.047s and tests1.049s, all race PASS.
-- /tmp/eventbus-tickets45-47-vet-20261023.log: all-tag vet PASS.
-- /tmp/eventbus-ticket47-ses-template-number-race-20261023.log:
-  final template/tracking/bulk race1.090s; companion SES vet PASS.
-- /tmp/eventbus-ticket45-versity-final-race.log: real provider race13.877s;
-  SDK control + actual Firehose for six key cases, exact native list/get bytes.
-  The baseline log reproduces old Firehose =/+403 while unchanged SDK succeeds.
-- /tmp/eventbus-47-ses-tracking-sdk-race-final.log: production CLI race9.298s,
-  actual SESv1/v2 sends/raw MIME -> HTTP pixel -> SNS/native Python subscriber;
-  enabled7 Opens/24 observations, default-off0 Opens/5 observations. Includes
-  repeats, older message after resend, current disabled/filter/deleted/generation
-  behavior, v2 override and unchanged capture. No synthetic outcomes/SNS Publish.
-- /tmp/eventbus-ticket47-browser-csp.log: existing Chromium loads actual GIF under
-  actual CSP after trailing HTML comment; script blocked. This is a focused
-  browser/parser proof, not a browser-native SES consumer completion claim.
-- Low-level tests cover TTL/eviction, byte bounds, native selector, admission
-  errors, template numbers, retry cap/diagnostics and final failure semantics.
-  App proves held pixel GET retains work and later held/callback GET is refused.
-- Independent source/ownership/docs review clean. No new dependencies.
-  Packaged binaries not built/tested for this source-only pass.
+Verification:
+- Local affected SES/Firehose/app/server/messaging/devquiescence/tests race and
+  all-tag vet passed; final template-only race/vet passed; independent review clean.
+- Native VersityGW1.9.0 source race13.877s covers six SDK controls and six actual
+  Firehose key/body cases; independent receiver covers encoded endpoint bases.
+- /tmp/eventbus-v0.20.0-linux-package.log: real packaged service, race driver,
+  SES SDK/native SNS/Python flow8.344s; on7 Opens/24 observations, off0/5.
+  Includes original IDs/capture, repeats, older message after resend, disabled/
+  filtered/deleted/generation destinations, v2 override and negative HTTP reads.
+  Native Firehose SDK credential/session-token/held-write shutdown proof1.356s.
+- /tmp/eventbus-v0.20.0-mac-ses-tracking-race.log: same native SES proof against
+  Mac arm64 package with locally compiled race driver,7.71s; on7/24, off0/5.
+  Mac package hashes/metadata/help and exact source archive identity verified.
+  Both packaged CLI processes joined exit0; gateway coverage here is help only.
+- /tmp/eventbus-v0.20.0-artifact-audit.log: all eight targets clean/CGO-free.
+  /tmp/eventbus-v0.20.0-download-verification.log: every public asset verified.
+- Prior focused Chromium proof loaded the sandboxed trailing GIF once and
+  blocked mail script. Consumer completion remains an application assertion.
 
-Cleanup: managed owners quiescent with scratch removed; isolated provider,
-listeners and temporary storage stopped/removed. Failed empty scratch inspected
-and removed. Raw evidence follows existing24h retention, unpinned.
-No task worktrees/branches/environments, live/default-stack changes or cache
-deletions. Laptop Plans untouched. Observe source CI; release only on request.
+Cleanup:
+- Build041816af3d04449aa7b11a285dddfdf1, Linux package test
+  16caf428f57f437e8f2148800bad0085 and public-download verification
+  c9b7123d52134153aa9e48db4e31bc89 inspected quiescent; scratch auto-removed.
+- Owned release outputs/notes/downloads removed after public verification.
+  Mac source export, private UV environment/interpreter/cache, binaries and
+  race driver removed after process/lsof inspection and evidence copy-back.
+- Raw /tmp/eventbus-v0.20.0-* evidence follows existing24h expiry, unpinned.
+  No task worktrees/branches/environments, live/default-stack or cache-policy
+  changes. No dependencies added. Laptop Plans untouched.
+Publication and cleanup complete.
