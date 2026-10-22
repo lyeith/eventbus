@@ -97,8 +97,8 @@ native Lambda admission, failure/retry policy and joined shutdown. SES owns nati
 configuration and the event JSON; SNS owns envelopes, subscriptions and delivery.
 `Enabled` defaults to `false`. Matching types use AWS's case-sensitive v1 values:
 `send`, `reject`, `bounce`, `complaint`, `delivery`, `open`, `click`,
-`renderingFailure`. This increment emits `Send`, explicit local `Open` and explicit
-local `Bounce`; accepting other destination enums does not synthesize those events.
+`renderingFailure`. This increment emits `Send`, local tracking-pixel or explicit `Open`, and
+explicit local `Bounce`; accepting other destination enums does not synthesize those events.
 CloudWatch/Firehose event destinations and remaining management APIs are backlogged.
 [Native destination contract](https://docs.aws.amazon.com/ses/latest/APIReference/API_EventDestination.html).
 
@@ -117,6 +117,72 @@ send's event. Downstream SNS admission failure leaves the accepted send intact a
 logs a private failure with the SES MessageId, event type, topic and request ID.
 That failure is notification evidence, not a claim about SMTP delivery.
 [Native event payloads](https://docs.aws.amazon.com/ses/latest/dg/event-publishing-retrieving-sns-contents.html).
+
+## Local email views and tracking pixels
+
+Start EventBus with `--ses-tracking` to enable this local provider feature
+(default off). Send HTML through the normal SES SDK, selecting a configuration
+set with an enabled SNS destination matching `open`. Then use the actual
+returned MessageId to discover its local representation:
+
+```text
+GET /__eventbus/dev/ses/messages/{MessageId}
+{"local":true,"message_id":"...","view_url":"/__eventbus/dev/ses/messages/.../html","tracking_url":"/__eventbus/dev/ses/tracking/opaque-token.gif","expires_at":"..."}
+```
+
+Resolve these leading-slash URLs against the EventBus endpoint. GET `view_url`
+returns rendered HTML with a transparent pixel at `{{ses:openTracker}}`, or at
+the end when no marker is present. It preserves submitted MIME/content and the
+native SES response/capture; raw attachment HTML is never used as the body.
+The view is sandboxed, without scripts/forms/external resources. Discovery and
+reading view bytes do not emit Open; a browser rendering the view requests its
+image. Agents can fetch the same image directly through ordinary HTTP:
+
+```python
+import json
+import urllib.request
+
+# message_id is the MessageId returned by your normal SES SDK send.
+with urllib.request.urlopen(endpoint + "/__eventbus/dev/ses/messages/" + message_id) as response:
+    resource = json.load(response)
+request = urllib.request.Request(
+    endpoint + resource["tracking_url"], headers={"User-Agent": "email-open-scenario"}
+)
+with urllib.request.urlopen(request) as response:
+    assert response.headers.get_content_type() == "image/gif"
+```
+
+Each valid pixel GET publishes an AWS-shaped `eventType: "Open"` through the
+message's current enabled/matching SNS destinations and their native subscribers.
+It uses the original `mail.messageId` and the actual request time, socket IP
+and user agent; forwarded headers cannot replace the socket identity. Repeated
+GETs produce separate opens. A resent email gets a separate resource; fetching
+the older pixel continues to identify the older message.
+
+Disabled/deleted/nonmatching destinations publish nothing. Deleting/recreating a
+same-name configuration set cannot inherit older messages. Native v2
+`ConfigurationOverrides.Tracking.OpenTrackingEnabled: "DISABLED"` suppresses
+Open for that message, including explicit outcomes. No manual outcome POST or
+SNS Publish is needed. Successful sends/capture reads never imply an open.
+Unknown/expired/evicted/untracked resources return 404 without events; unsupported
+methods, including HEAD, return 405 without events. Failed SNS admission returns
+502; partial publication is not rolled back. No-cache headers permit repeated
+real fetches; client image caching can still prevent a request from reaching us.
+
+Views share the correlation owner's 24-hour, newest-10,000 and 64-MiB budget,
+including retained HTML/token bytes. This is a local bound; AWS tracks metrics
+for 60 days. Restart loses these in-memory resources, while original capture
+remains durable. Raw HTML supports bounded nested MIME (depth32/500parts),
+base64/quoted-printable and ASCII-compatible UTF-8/ASCII/ISO-8859/Windows charsets.
+Other encodings, missing/rich template substitutions or unavailable HTML remain
+captured without an invented view. Existing simple template rendering is reused
+with the provider's reserved marker bound separately. Multiple markers produce
+one local pixel; native duplicate-marker rejection remains a capability gap.
+
+See [AWS open tracking](https://docs.aws.amazon.com/ses/latest/dg/faqs-metrics.html).
+Applications own invitation/status assertions and still need to distinguish
+event admission from native consumer completion. Retained-owner routing counts
+pixel GETs as work and refuses them while held; it grants no fixture-safe bypass.
 
 ## Explicit local Open/Bounce outcomes
 
@@ -149,10 +215,11 @@ recipients return HTTP 400. Deleting a destination affects later outcomes. Delet
 and recreating a same-name configuration set cannot route an old message.
 
 Correlation retains event metadata for 24 hours after durable acceptance, bounded
-by the newest 10,000 configuration-selected messages and 64 MiB of serialized metadata. Expiry
-is checked on the next send/outcome; idle expired metadata remains bounded until
-then or shutdown. Bodies/attachments are not retained there, and eviction never
-removes durable SES capture. Event header views follow AWS's 10 KiB truncation rule.
+by the newest 10,000 configuration-selected messages and 64 MiB of metadata.
+Opt-in tracking views/token bytes share that budget and expiry; attachments are
+never retained. Expiry is checked on sends/outcomes/tracking requests; idle
+expired data stays bounded until then or shutdown. Eviction removes view/pixel
+resources without removing durable SES capture. Event header views follow AWS's 10 KiB truncation rule.
 Application fixtures and assertions on application records belong in the consuming
 repository; this endpoint only supplies a correlated local outcome.
 

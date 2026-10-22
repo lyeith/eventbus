@@ -363,3 +363,17 @@ These controls do not alter native retry timings, claim delivery or add durable
 replay. See [final shutdown](LAMBDA.md#graceful-final-shutdown) and
 [S3 credentials](FIREHOSE.md#s3-delivery-credentials). STATE/HANDOFF record
 verification and release status.
+
+## S3 delivery and local upstream email opens
+
+| Ticket | Classification and owner | Contract |
+| --- | --- | --- |
+| [#45](https://github.com/lyeith/eventbus/issues/45) S3 canonical path | Firehose native request construction | Strict encoded wire URI with unchanged decoded keys/endpoint escapes; independent receiver and actual VersityGW SDK/readback proof |
+| [#46](https://github.com/lyeith/eventbus/issues/46) Retry/log amplification | Firehose pending-object/flush owner | Per-object exponential backoff, coalesced redacted diagnostics, retained leases/key/body, independent buffer/window clocks and explicit final retry |
+| [#47](https://github.com/lyeith/eventbus/issues/47) HTTP email opens | Named SES dev rendering/tracking adapters; shared core event selection | Opt-in local view/pixel, actual HTTP metadata and original MessageId, unchanged durable capture/native response, native SNS delivery and bounded shared retention |
+
+Tracking override/destination decisions remain native SES core policy.
+Application status assertions belong to consumers; a capture, GIF or event
+admission alone does not attest application completion. See
+[Firehose](FIREHOSE.md#acceptance-retries-and-shutdown) and
+[local SES views](SES.md#local-email-views-and-tracking-pixels).

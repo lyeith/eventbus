@@ -105,7 +105,10 @@ before configuring endpoints or cleaning fixtures.
   native auth intact and callback JWKS available through accepted-work joins.
   Headers cannot turn public requests into descendants.
 - `internal/ses` owns native configuration sets/destinations, event selection,
-  mail correlation, capture, MIME and both sending adapters. App connects its
+  mail correlation, capture, MIME and both sending adapters. Native tracking
+  overrides/current destination selection stay in core; optional
+  `dev_tracking*.go` owns local views/pixels, sharing the existing bounded
+  correlation lifetime. App connects its
   EventPublisher port to SNS; explicit local outcomes stay in `dev_outcomes.go`.
 - Preserve SES JSONL schema/version and exact request/binary capture. A send
   succeeds only after capture; closure follows HTTP drain.
@@ -117,8 +120,8 @@ before configuring endpoints or cleaning fixtures.
 Run scoped Go tests, then race/vet checks appropriate to the change.
 [README](README.md#verify-and-build-releases) lists commands;
 [SDK verification](tests/sdk/README.md) explains the frozen Python/JavaScript lanes.
-The opt-in Firehose integration suite requires an explicitly owned loopback
-RustFS endpoint.
+Opt-in Firehose integration tests require an explicitly owned loopback RustFS
+endpoint or an explicitly selected VersityGW executable; see docs/FIREHOSE.md.
 
 On SSD, wrap builds with `ssd-dev run --purpose build -- <command>` and tests
 with `ssd-dev operation --purpose test -- <command>`. Save complete output

@@ -163,7 +163,10 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   App selects explicit static S3 credentials at startup; Firehose's existing
   SigV4 signer consumes the immutable access/secret/optional-token value.
   Its owned HTTP client refuses redirects; no provider chain or second delivery
-  owner is introduced.
+  owner is introduced. `s3_path.go` owns strict wire-path construction without
+  changing decoded key identity. `delivery_retry.go` keeps per-object backoff
+  and coalesced redacted diagnostics in the existing flush owner. Retained
+  force-readiness honors retries; final cleanup explicitly bypasses cooldown.
 - `awsprotocol` holds reusable wire helpers, without service state. Callers own
   protocol admission and body budgets; over-budget bodies must fail, never truncate.
   SES/Cognito/SQS retain distinct serializers, size limits and error envelopes.
@@ -246,7 +249,7 @@ owners. Do not merge these policies into a generic runner or wire decoder.
 | Worker joins, HTTP drain or independent resource closure | `internal/app` tests |
 | Retained fence/leases/generation, service custody/drain and cleanup recovery | `internal/devquiescence`, owner service seam and gateway/app composition tests; opt-in retained-owner SDK lanes |
 | Python/JavaScript SDK, SRP/JWT and trigger/SES interoperability, complete dispatcher and child runner | `tests/sdk`, opt-in `sdksmoke` tag |
-| Firehose behavior against an owned RustFS endpoint | `internal/firehose`, opt-in `integration` tag |
+| Firehose behavior against owned RustFS / isolated VersityGW | `internal/firehose`, opt-in `integration` tag |
 
 Unit tests stay beside their owner so private details need no test-only exports.
 Service HTTP tests run just that service; dispatcher tests verify composition.
@@ -273,6 +276,11 @@ See [test commands](../tests/README.md) and [SDK fixtures](../tests/sdk/README.m
   `app/ses_events.go` to the existing SNS broker; SNS keeps envelopes, filtering
   and asynchronous Lambda retry/lifetime. Capture precedes Send-event admission.
 - `ses/dev_outcomes.go` and `app/dev_ses.go` expose explicitly local Open/Bounce
-  controls. They reuse current native destinations and never infer SMTP delivery.
+  controls. `dev_tracking*.go` owns opt-in discovery/rendered HTML/opaque pixels;
+  a pixel GET uses the same native current-destination/override selector and
+  EventPublisher. Original capture/responses are unchanged. Optional views are
+  byte-counted and retire through the sole accepted-message owner, without a
+  second cache or expiry loop. App's existing outer retained envelope counts
+  these GETs as work. They never infer SMTP delivery.
   Held cleanup admits only the two native SES deletions; local controls remain
   work-producing roots.

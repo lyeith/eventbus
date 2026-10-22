@@ -57,10 +57,10 @@ func (probe *devSESOutcomeProbe) ServeDevOutcome(w http.ResponseWriter, r *http.
 func TestDevSESOutcomeRouteIsExactAndSeparate(t *testing.T) {
 	outcomes := &devSESOutcomeProbe{}
 	native := 0
-	router := withDevSESOutcomes(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	router := withDevSES(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		native++
 		w.WriteHeader(http.StatusNoContent)
-	}), outcomes)
+	}), outcomes, nil)
 	for _, path := range []string{ses.DevOutcomePath, "/v2/email/outbound-emails", ses.DevOutcomePath + "/extra"} {
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
 		router.ServeHTTP(httptest.NewRecorder(), request)

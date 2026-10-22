@@ -15,7 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Correlation retains only event metadata, never MIME bodies or attachments.
+// Correlation retains native event metadata. Opt-in dev tracking also retains a
+// separately named HTML view in the same bounded lifetime; never attachments.
 // These are local harness limits, not SES send quotas; the original capture is
 // durable regardless of correlation eviction.
 const acceptedMessageTTL = 24 * time.Hour
@@ -23,19 +24,22 @@ const acceptedMessageLimit = 10_000
 const acceptedMessageByteLimit = 64 << 20
 
 type acceptedMessage struct {
-	id            string
-	sentAt        time.Time
-	retainedAt    time.Time
-	configuration *configurationSet
-	mail          json.RawMessage
-	recipients    []string
-	size          int
-	order         *list.Element
+	id                   string
+	sentAt               time.Time
+	retainedAt           time.Time
+	configuration        *configurationSet
+	mail                 json.RawMessage
+	recipients           []string
+	size                 int
+	order                *list.Element
+	openTrackingDisabled bool
+	devTracking          *devTrackingMessage
 }
 
 type preparedMessage struct {
-	accepted   *acceptedMessage
-	sendTopics []string
+	accepted    *acceptedMessage
+	sendTopics  []string
+	devTracking *devTrackingSource
 }
 
 type eventAdmission struct {
@@ -70,7 +74,8 @@ func (manager *SESManager) prepareEvents(api string, input map[string]any, email
 		for _, recipient := range recipients {
 			size += len(recipient)
 		}
-		accepted := &acceptedMessage{id: id, sentAt: now, mail: encoded, recipients: recipients, size: size}
+		accepted := &acceptedMessage{id: id, sentAt: now, mail: encoded, recipients: recipients, size: size,
+			openTrackingDisabled: api == "v2" && sesString(sesObject(sesObject(input["ConfigurationOverrides"])["Tracking"])["OpenTrackingEnabled"]) == "DISABLED"}
 		manager.mu.Lock()
 		if configurationName != "" {
 			accepted.configuration = manager.configurationSets[configurationName]
@@ -83,8 +88,13 @@ func (manager *SESManager) prepareEvents(api string, input map[string]any, email
 			}
 		}
 		topics := eventTopics(accepted.configuration, "send")
+		track := manager.devTracking != nil && !accepted.openTrackingDisabled && len(eventTopics(accepted.configuration, "open")) != 0
 		manager.mu.Unlock()
-		prepared = append(prepared, preparedMessage{accepted: accepted, sendTopics: topics})
+		message := preparedMessage{accepted: accepted, sendTopics: topics}
+		if track {
+			message.devTracking = &devTrackingSource{api: api, input: input, email: email}
+		}
+		prepared = append(prepared, message)
 	}
 	return prepared, nil
 }
@@ -220,23 +230,35 @@ func eventTopics(configuration *configurationSet, eventType string) []string {
 }
 
 func (manager *SESManager) acceptEvents(ctx context.Context, requestID string, prepared []preparedMessage) {
-	manager.mu.Lock()
-	now := time.Now().UTC()
-	manager.pruneAccepted(now)
 	for _, message := range prepared {
 		accepted := message.accepted
-		if accepted.size > acceptedMessageByteLimit {
-			continue
+		// Capture has committed. Render only one new view at a time, outside
+		// the registry lock, then let the existing owner retain/evict it.
+		if source := message.devTracking; source != nil {
+			accepted.devTracking = manager.prepareDevTracking(source.api, source.input, source.email)
+			if view := accepted.devTracking; view != nil {
+				accepted.size += len(view.html) + len(view.charset) + len(view.token)
+			}
 		}
-		accepted.retainedAt = now
-		accepted.order = manager.acceptedOrder.PushBack(accepted)
-		manager.accepted[accepted.id] = accepted
-		manager.acceptedBytes += accepted.size
-		for len(manager.accepted) > acceptedMessageLimit || manager.acceptedBytes > acceptedMessageByteLimit {
-			manager.removeAccepted(manager.acceptedOrder.Front())
+		manager.mu.Lock()
+		now := time.Now().UTC()
+		manager.pruneAccepted(now)
+		if accepted.size <= acceptedMessageByteLimit {
+			// Insertion time must be assigned inside the same lock as list
+			// publication: concurrent bulk/single sends keep retention order.
+			accepted.retainedAt = now
+			accepted.order = manager.acceptedOrder.PushBack(accepted)
+			manager.accepted[accepted.id] = accepted
+			manager.retainDevTrackingLocked(accepted)
+			manager.acceptedBytes += accepted.size
+			for len(manager.accepted) > acceptedMessageLimit || manager.acceptedBytes > acceptedMessageByteLimit {
+				manager.removeAccepted(manager.acceptedOrder.Front())
+			}
+		} else {
+			accepted.devTracking = nil
 		}
+		manager.mu.Unlock()
 	}
-	manager.mu.Unlock()
 	for _, message := range prepared {
 		manager.publishEvent(ctx, requestID, message.accepted, "Send", map[string]any{}, message.sendTopics)
 	}
@@ -255,8 +277,27 @@ func (manager *SESManager) pruneAccepted(now time.Time) {
 func (manager *SESManager) removeAccepted(element *list.Element) {
 	accepted := element.Value.(*acceptedMessage)
 	delete(manager.accepted, accepted.id)
+	manager.removeDevTrackingLocked(accepted)
 	manager.acceptedBytes -= accepted.size
 	manager.acceptedOrder.Remove(element)
+}
+
+// Caller holds manager.mu and has pruned expired correlations. A replacement
+// configuration generation cannot inherit messages; per-message native tracking
+// overrides survive later configuration changes.
+func (manager *SESManager) retainedEventLocked(id, matching string) (*acceptedMessage, []string) {
+	accepted := manager.accepted[id]
+	if accepted == nil {
+		return nil, nil
+	}
+	configuration := accepted.configuration
+	if configuration != nil && manager.configurationSets[configuration.name] != configuration {
+		configuration = nil
+	}
+	if matching == "open" && accepted.openTrackingDisabled {
+		configuration = nil
+	}
+	return accepted, eventTopics(configuration, matching)
 }
 
 func (manager *SESManager) publishEvent(ctx context.Context, requestID string, accepted *acceptedMessage, eventType string, details map[string]any, topics []string) []eventAdmission {

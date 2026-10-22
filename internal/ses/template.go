@@ -13,14 +13,9 @@ var sesSubstitution = regexp.MustCompile(`\{\{\{?\s*([^{}]+?)\s*\}?\}\}`)
 // This is an optional capture view. The request and original template data stay
 // intact; unsupported rich Handlebars expressions do not change API acceptance.
 func sesRenderTemplate(template SESTemplate, data string) (map[string]any, error) {
-	var values map[string]any
-	decoder := json.NewDecoder(strings.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&values); err != nil {
-		return nil, fmt.Errorf("capture template data: %w", err)
-	}
-	if values == nil {
-		return nil, errors.New("capture template data must be a JSON object")
+	values, err := sesTemplateData(data)
+	if err != nil {
+		return nil, err
 	}
 	result := map[string]any{}
 	for field, text := range map[string]string{"subject": template.SubjectPart, "text": template.TextPart, "html": template.HtmlPart} {
@@ -56,4 +51,19 @@ func sesRenderTemplate(template SESTemplate, data string) (map[string]any, error
 		result[field] = rendered
 	}
 	return result, nil
+}
+
+// sesTemplateData preserves numeric text during optional rendering and returns
+// an owned map, so local provider bindings cannot mutate submitted template data.
+func sesTemplateData(data string) (map[string]any, error) {
+	var values map[string]any
+	decoder := json.NewDecoder(strings.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&values); err != nil {
+		return nil, fmt.Errorf("capture template data: %w", err)
+	}
+	if values == nil {
+		return nil, errors.New("capture template data must be a JSON object")
+	}
+	return values, nil
 }

@@ -36,6 +36,7 @@ type config struct {
 	sqsDeliveryLog           string
 	sesLog                   string
 	sesConfig                string
+	sesTracking              bool
 	debug                    bool
 }
 
@@ -77,6 +78,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	sqsDeliveryLog := flags.String("sqs-delivery-log", "", "Optional private JSON Lines evidence path for native SQS delivery and joined completion (requires --lambda-functions)")
 	sesLog := flags.String("ses-log", "-", "SES JSON Lines capture path ('-' for stdout; no email delivery)")
 	sesConfig := flags.String("ses-config", "", "Optional SES sending fixtures (templates, identities, configuration sets, received messages)")
+	sesTracking := flags.Bool("ses-tracking", false, "Enable local SES rendered-message views and HTTP Open tracking pixels")
 	debug := flags.Bool("debug", false, "Enable debug logging")
 
 	if err := flags.Parse(args); err != nil {
@@ -127,6 +129,7 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		sqsDeliveryLog:           *sqsDeliveryLog,
 		sesLog:                   *sesLog,
 		sesConfig:                *sesConfig,
+		sesTracking:              *sesTracking,
 		debug:                    *debug,
 	}
 	if err := validateDevEvidenceConfig(cfg); err != nil {

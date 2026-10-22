@@ -59,22 +59,16 @@ func (handler *Handler) ServeDevOutcome(w http.ResponseWriter, r *http.Request) 
 	manager := handler.ses
 	manager.mu.Lock()
 	manager.pruneAccepted(now)
-	accepted := manager.accepted[outcome.MessageID]
+	matching := "open"
+	if outcome.EventType == "Bounce" {
+		matching = "bounce"
+	}
+	accepted, topics := manager.retainedEventLocked(outcome.MessageID, matching)
 	if accepted == nil {
 		manager.mu.Unlock()
 		writeError(http.StatusNotFound, "MessageNotFound", "No retained accepted SES message has this message_id")
 		return
 	}
-	// A same-name replacement configuration set cannot inherit old messages.
-	configuration := accepted.configuration
-	if configuration != nil && manager.configurationSets[configuration.name] != configuration {
-		configuration = nil
-	}
-	matching := "open"
-	if outcome.EventType == "Bounce" {
-		matching = "bounce"
-	}
-	topics := eventTopics(configuration, matching)
 	manager.mu.Unlock()
 	recipients := outcome.Recipients
 	if len(recipients) == 0 {

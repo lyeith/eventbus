@@ -82,6 +82,8 @@ SES captures all nine sending operations and now supports six v1 configuration-s
 
 For remaining APIs, `--ses-config` supplies sending prerequisites. Its configuration-set names seed the mutable native registry.
 Fixture configuration is a development convenience, not an AWS operation.
+Native duplicate `{{ses:openTracker}}` rejection remains a sending validation
+gap; the local view renders a single pixel without claiming that validation.
 Advanced stored-template Handlebars rendering is also low priority; captures
 retain the source request and template data, with an optional simple rendering
 view. SMTP and SES Mail Manager are separate interfaces and are not in the

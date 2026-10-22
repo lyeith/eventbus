@@ -67,7 +67,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 | SQS Lambda mappings | Native Create/Get/Delete mappings, batches of 1–10 records (default 10), configured maximum concurrency, registered function/alias execution, FIFO ordering and native visibility/DLQ policy. [Contracts](docs/EVENT-SOURCES.md). |
 | Dev consumers | Recipe-driven Go/Python handlers receive SQS events with harness timeouts, partial batch retry and dead-letter policy. |
 | Retained-owner dev profile | Opt-in source/callback ownership barrier for native mappings, Scheduler, EventBridge Rules, Cognito runners, Firehose and gateway roots; declared cleanup, diagnostics and generation-checked resume. [Contract](docs/RETAINED-OWNER.md). |
-| SES | All six v1 and three v2 sending operations with original JSONL capture; six v1 configuration-set/destination operations, native Send events through SNS, and explicit local Open/Bounce outcomes. [Contracts](docs/SES.md). |
+| SES | All six v1 and three v2 sending operations with original JSONL capture; six v1 configuration-set/destination operations, native Send events through SNS, opt-in local email views/tracking pixels, and explicit Open/Bounce outcomes. [Contracts](docs/SES.md). |
 | Firehose | SNS/record/batch ingestion, Go jq partitions, GZIP, error prefixes and retained S3 delivery retries with configurable credentials. [Contracts](docs/FIREHOSE.md). |
 | SSM | Four Standard parameter operations, versions, hierarchy pagination and local SecureString protection. |
 | Secrets Manager | Values/stages/metadata/readback, random passwords and on-demand four-step Lambda rotation. |

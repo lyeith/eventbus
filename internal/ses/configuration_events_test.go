@@ -513,3 +513,40 @@ func TestSESConcurrentDestinationUpdatesPreserveResourceGeneration(t *testing.T)
 	require.Nil(t, apiErr)
 	require.Equal(t, []any{"open"}, output["EventDestinations"].([]map[string]any)[0]["MatchingEventTypes"])
 }
+
+func TestSESNativeOpenTrackingOverrideUsesCoreSelectionWithoutDevTracking(t *testing.T) {
+	for _, policy := range []string{"", "ENABLED", "DISABLED"} {
+		t.Run(policy, func(t *testing.T) {
+			publisher := &recordingSESPublisher{}
+			manager := newEventManager(NewSESCapture(io.Discard), publisher)
+			t.Cleanup(func() { require.NoError(t, manager.Close()) })
+			require.Nil(t, manager.devTracking)
+			configureEvent(t, manager, "CreateConfigurationSetEventDestination", "native", true, "open")
+			input := map[string]any{"FromEmailAddress": "sender@example.test", "ConfigurationSetName": "tracking",
+				"Destination": map[string]any{"ToAddresses": []string{"recipient@example.test"}},
+				"Content": map[string]any{"Simple": map[string]any{"Subject": map[string]any{"Data": "native"},
+					"Body": map[string]any{"Html": map[string]any{"Data": "<body>native</body>"}}}}}
+			if policy != "" {
+				input["ConfigurationOverrides"] = map[string]any{"Tracking": map[string]any{"OpenTrackingEnabled": policy}}
+			}
+			body, err := json.Marshal(input)
+			require.NoError(t, err)
+			handler := NewHandler(manager)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v2/email/outbound-emails", bytes.NewReader(body)))
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var output map[string]any
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &output))
+			id := sesString(output["MessageId"])
+			require.NotEmpty(t, id)
+			require.Equal(t, http.StatusOK, eventOutcome(handler, map[string]any{"message_id": id, "event_type": "Open"}).Code)
+			events := publisher.snapshot()
+			if policy == "DISABLED" {
+				require.Empty(t, events, "accepted per-message native policy controls Open independently of local rendering")
+			} else {
+				require.Len(t, events, 1)
+				require.Equal(t, id, sesObject(events[0].payload["mail"])["messageId"])
+			}
+		})
+	}
+}

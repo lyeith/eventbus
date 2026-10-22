@@ -98,7 +98,11 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("failed to open SES capture: %w", err)
 	}
-	sesManager := ses.NewSESManager(sesFixtures, capture, ses.WithEventPublisher(sesSNSPublisher{broker: broker}, cfg.region, cfg.accountID))
+	sesOptions := []ses.ManagerOption{ses.WithEventPublisher(sesSNSPublisher{broker: broker}, cfg.region, cfg.accountID)}
+	if cfg.sesTracking {
+		sesOptions = append(sesOptions, ses.WithDevTracking())
+	}
+	sesManager := ses.NewSESManager(sesFixtures, capture, sesOptions...)
 	owned.ses = sesManager
 	cognitoLog := cfg.cognitoLog
 	if cognitoLog == "" {
@@ -267,7 +271,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if retained != nil {
 		services = retainedServices(services)
 	}
-	var router http.Handler = withDevSESOutcomes(server.New(services), sesHandler)
+	var router http.Handler = withDevSES(server.New(services), sesHandler, sesHandler)
 	if functions != nil {
 		router = withDevLambdaReload(router, functions, cfg.lambdaFunctions, projectRoot)
 	}

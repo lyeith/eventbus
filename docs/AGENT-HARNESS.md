@@ -143,8 +143,12 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
 - Read SES JSONL from the selected `--ses-log` file. Use `request` and
   `outcome` for assertions; [SES capture](SES.md) explains bulk failures and
   derived email views. Native SES configuration-set SNS Send events correlate
-  through `mail.messageId`; explicit local Open/Bounce controls reuse that exact
-  accepted ID and configured destinations. See [SES events](SES.md).
+  through `mail.messageId`. For an upstream open action, start with
+  [`--ses-tracking`](SES.md#local-email-views-and-tracking-pixels), discover the
+  view/pixel by the SDK's MessageId and render/fetch the image over HTTP. Assert
+  the resulting native SNS consumer effect against that original ID, including
+  older messages after resend. Capture/discovery reads do not mean opened.
+  Explicit Open/Bounce controls remain separate local injection.
 - For repeated Python/Node calls, opt into [warm workers](LAMBDA.md#warm-workers).
   Reload a selected function explicitly after recipe/source/environment edits.
   [Tune public warm budgets](LAMBDA.md#live-development-budget-tuning) in place

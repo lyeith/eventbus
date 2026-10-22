@@ -21,6 +21,7 @@ type SESManager struct {
 	accepted          map[string]*acceptedMessage
 	acceptedOrder     *list.List
 	acceptedBytes     int
+	devTracking       *devTrackingState
 }
 
 func NewSESManager(fixtures SESFixtures, capture *SESCapture, options ...ManagerOption) *SESManager {

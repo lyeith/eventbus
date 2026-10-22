@@ -1,52 +1,48 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. #43 and #44 are published in v0.19.0:
+and agent development harness. #45, #46 and #47 are implemented on 2026-10-23.
+Source-only changes; latest published binaries remain v0.19.0:
 https://github.com/lyeith/eventbus/releases/tag/v0.19.0
+No binary publication was requested for this pass.
 
-Release v0.19.0 (2026-10-22):
-- Annotated tag/source: b457954c682e691260ea3ed09ee1346dee2915ce.
-- Source CI39727887097 passed full Go race/vet, the frozen SDK suite, fixture
-  contracts and unchanged Express/Swagger handlers.
-- Eight CGO-free Linux/macOS amd64/arm64 service/gateway binaries + SHA256SUMS.
-  Target formats and clean source metadata verified; all uploaded downloads
-  matched the built manifest and passed checksums. Latest/public/non-prerelease.
-- Actual Linux amd64 and Mac arm64 packages passed maintained native Runtime API
-  and Go SDK proofs for both tickets, plus service/gateway help.
-- Release build, downloads, Mac package copies and temporary test drivers removed.
-  Inspected managed source/build/package owners quiescent; scratch auto-removed.
+#45 Firehose signing:
+- Strict encoded S3 wire paths preserve decoded object keys and encoded endpoint
+  segments. Existing SigV4 signs actual bytes without a provider-specific mode.
+- Native VersityGW 1.9.0 passes six SDK controls and six Firehose PUT/list/get
+  cases, including =, +, space, Unicode and literal %/%2F with exact binary bytes.
+  Independent canonicalization covers encoded endpoint base paths.
 
-#43 final shutdown:
-- Positive --shutdown-timeout controls ordinary and retained final joins;
-  default30s and graceful/discard-pending behavior remain.
-- Lambda freezes bounded native IDs/state/attempt/retry metadata before abort.
-  App reports final async timeout without payload, environment, errors or output.
-- Native retries and per-request HTTP deadlines remain. Final timeout fails and
-  cancels in-memory work; restart cannot recover it. Retained /quiesce remains
-  resumable and preserves accepted work on timeout.
+#46 Firehose retry/logging:
+- Existing pending objects retry at 1,2,4,8,16,32,60-second capped intervals.
+  Buffer readiness, native dynamic retry windows and cooldown are independent.
+- Retained force-readiness honors cooldown and keeps leases; explicit delete
+  and final shutdown attempt once despite cooldown and report retained failures.
+- Redacted first/change/minute-summary/recovery logs replace per-second errors.
+  No dropped 4xx data, changed retry keys or separate delivery owner.
 
-#44 Firehose:
-- Independent --s3-access-key/--s3-secret-key/--s3-session-token selections,
-  defaults test/testtest123/empty; no ambient provider chain or role assumption.
-- Existing SigV4 signs actual object bytes and optional session token.
-- Redirects fail without forwarding credentials/body; prepared objects retain
-  their key for retry at the configured endpoint. No dependency added.
+#47 SES local tracking:
+- Opt-in --ses-tracking exposes dev message discovery/HTML and opaque GIF URLs.
+  Ordinary image GET publishes native Open through current SNS destinations,
+  using original MessageId and actual request timestamp/socket IP/user agent.
+- Normal sending responses and exact capture remain unchanged. Shared native
+  selection honors destination generations and v2 per-message DISABLED tracking.
+- Named dev adapters share the accepted-message 24h/10k/64MiB owner. Raw MIME
+  decoding is bounded; bulk views are rendered/retired one at a time after capture.
+- Views are sandboxed; scripts/forms/external images are blocked. Retained HTTP
+  counts pixel GET as work and refuses held source/cleanup callback publication.
+- Simple template rendering preserves large JSON numbers through one decoder.
+  Duplicate native openTracker-marker rejection stays a documented core gap.
 
-Validation:
-- Full local affected race and all-tag vet passed before publication; current
-  source CI covers the complete race/vet/SDK/Swagger lanes.
-- Linux package proof39.347s; Mac package proof passes all maintained cases:
-  real third retry >30s after SIGTERM, original identity/payload, overlapping
-  handler, SDK/JWKS callbacks, final timeout metadata and resumable recovery.
-- Native SDK Firehose ingestion flushes on SIGTERM to held actual S3 responses;
-  selected secret/token signatures, legacy defaults and redaction are verified.
-  Core independently authenticates HMAC and redirect failure/same-key retry.
-- CI exposed a Python fixture readiness/exit-observation race. Atomic publication
-  and bounded descendant checks preserve actual PID/ownership assertions.
-  Focused race24.966s and vet pass; no production process leak demonstrated.
-- Independent implementation/privacy/docs and final fixture reviews are clean.
+Verification:
+- Affected SES/Firehose/app/server/messaging/devquiescence/tests race passed;
+  all integration+sdksmoke-tag vet passed. Final template-only race/vet passed.
+- Native Versity race13.877s; SES SDK/native SNS/Python subscriber race9.298s:
+  enabled7 Opens/24 observations, default-off0 Opens/5 observations.
+- Real Chromium loaded the trailing sandboxed pixel once and blocked mail script.
+- Independent ownership/code/docs review clean; no dependencies added.
+- Managed test owners inspected quiescent and scratch removed. Raw /tmp ticket
+  evidence follows existing24h expiry, no pins. No task branches/environments
+  or live/default-stack/cache changes. Laptop Plans untouched.
 
-Raw /tmp/eventbus-v0.19.0-* and /tmp/eventbus-v019-* evidence follows existing24h
-retention, no pins. Inspected failed scratch removed. No task worktrees, branches,
-environments, live-stack/default-state changes or dependencies. Laptop Plans
-untouched. Source, publication and cleanup complete.
+Next: observe source CI after push; publish new binaries when requested.
