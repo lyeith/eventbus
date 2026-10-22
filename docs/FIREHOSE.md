@@ -167,8 +167,14 @@ state is in memory; restart loses configuration and undelivered records. There
 is no AWS 24-hour durable retention or active-partition quota simulation.
 
 A materialized object keeps the same key and bytes on retries, including an
-ambiguous S3 response. Dynamic RetryOptions defaults to 300 seconds (0..7200
-supported); expiry moves original records into a retained error-prefix object.
+ambiguous S3 response. Each failed object retries after 1, 2, 4, 8, 16, 32 and
+then at most once per 60 seconds. This pacing is independent of the initial
+buffer interval. An unchanged failed object in cooldown does not block healthy
+partitions or other streams; no permanent-looking 4xx drops accepted records.
+
+Dynamic RetryOptions defaults to 300 seconds (0..7200 supported). Its deadline
+is checked before cooldown: expiry immediately moves original records into a
+retained error-prefix object, whose failed delivery also backs off.
 Parsing, extraction and prefix failures also create uncompressed JSONL
 diagnostics with base64 rawData and error metadata. Successful data uses the
 configured compression; processing never reserializes its original payload.
@@ -179,8 +185,19 @@ policy, while accepted-record S3 retries remain Firehose-owned.
 App shutdown quiesces background callers and drains HTTP before closing
 Firehose. Firehose stops admission, cancels/joins its worker and attempts final
 delivery. Failed final flush is reported and its data stays reachable in the
-manager until process exit; repeated shutdown shares that result. Failed
-DeleteDeliveryStream retains the stopping stream for an explicit retry.
+manager until process exit; repeated shutdown shares that result. Final shutdown
+and explicit DeleteDeliveryStream bypass cooldown for one final delivery attempt;
+a skipped retry never attests successful cleanup. Failed DeleteDeliveryStream
+retains the stopping stream for an explicit retry. Resumable retained-owner
+force-flush makes small buffers eligible but honors object retry deadlines and
+keeps their leases until actual delivery.
+
+Operational logs report `delivery_state`: `first_failure`, `error_changed`,
+`retry_summary` or `recovered`. Identical failures coalesce, with at most one
+summary per minute while attempts continue. Cooldown passes never report
+recovery. Fields include `error_codes`, `retained_records`, `pending_objects`,
+`attempts_since_log`, `attempts` and `retry_after_seconds`, without object
+keys, payloads or credentials. Full final-flush failure still reaches the caller.
 
 The opt-in [native integration test](../internal/firehose/pipeline_integration_test.go)
 uses real Go SNS/Firehose SDK requests and a unique bucket on an explicitly

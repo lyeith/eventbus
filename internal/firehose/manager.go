@@ -20,7 +20,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 )
 
 const maxRecordBytes = 1000 * 1024
@@ -44,6 +43,10 @@ type deliveryObject struct {
 	originalBytes int
 	attempts      int
 	firstFailure  time.Time
+	retryAt       time.Time
+	retryFailures int
+	lastError     string
+	failureCode   string
 }
 
 type DeliveryStream struct {
@@ -63,6 +66,7 @@ type DeliveryStream struct {
 	// preparation/retry intervals; only joined successful delivery decrements it.
 	retainedRecords   int
 	lastDeliveryError string
+	diagnostics       deliveryDiagnostics
 	mu                sync.Mutex
 	flushSlot         chan struct{}
 	stopping          bool
@@ -88,6 +92,8 @@ type FirehoseManager struct {
 	buildObject                   objectBuilder
 	dev                           *devDelivery
 	bufferLimit                   int
+	now                           func() time.Time
+	logDelivery                   func(deliveryLogEvent)
 	httpClient                    *http.Client
 	stopping                      bool
 	done                          chan struct{}
@@ -117,6 +123,8 @@ func NewFirehoseManagerWithS3Credentials(region, accountID, s3Endpoint string, c
 		s3Endpoint:    s3Endpoint,
 		s3Credentials: credentials,
 		bufferLimit:   maxBufferedBytes,
+		now:           time.Now,
+		logDelivery:   writeDeliveryLog,
 		buildObject:   makeObject,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
@@ -387,21 +395,31 @@ func (fm *FirehoseManager) flushLoop(ctx context.Context, ds *DeliveryStream) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := fm.flushReady(ctx, ds, false); err != nil && ctx.Err() == nil {
-			log.Error().Err(err).Str("stream", ds.Name).Msg("Firehose delivery failed; records retained")
-		}
+		_ = fm.flushReady(ctx, ds, false)
 	}
 }
 
 func (fm *FirehoseManager) flushBuffer(ctx context.Context, ds *DeliveryStream) error {
-	return fm.flushReady(ctx, ds, true)
+	// Explicit final/manual flushing attempts each pending object once, even if
+	// its normal retry is delayed. The result must still report retained failure.
+	return fm.flush(ctx, ds, flushOptions{forceBuffer: true, bypassRetry: true})
+}
+
+type flushOptions struct {
+	forceBuffer bool
+	bypassRetry bool
 }
 
 func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, force bool) error {
+	return fm.flush(ctx, ds, flushOptions{forceBuffer: force})
+}
+
+func (fm *FirehoseManager) flush(ctx context.Context, ds *DeliveryStream, options flushOptions) (resultErr error) {
 	ctx, finishAttempt, err := fm.devAttempt(ctx)
 	if err != nil {
 		return err
 	}
+	attempted := 0
 	var acknowledged []*devRecordLease
 	acquired := false
 	defer func() {
@@ -414,6 +432,11 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 			lease.finish(nil)
 		}
 		finishAttempt()
+	}()
+	defer func() {
+		if acquired && ctx.Err() == nil {
+			fm.reportDelivery(ds, attempted, resultErr)
+		}
 	}()
 	select {
 	case ds.flushSlot <- struct{}{}:
@@ -438,7 +461,7 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 	// flush owns an immutable snapshot. Appends can proceed during construction.
 	buffer := append([]bufferedRecord(nil), ds.buffer...)
 	ds.mu.Unlock()
-	objects, selected, err := buildBufferedObjects(ctx, ds, buffer, force)
+	objects, selected, err := buildBufferedObjects(ctx, ds, buffer, options.forceBuffer)
 	if err != nil {
 		return err
 	}
@@ -461,7 +484,7 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 		if options := ds.config.DynamicPartitioningConfiguration.RetryOptions; options != nil {
 			retrySeconds = options.DurationInSeconds
 		}
-		if ds.config.DynamicPartitioningConfiguration.Enabled && !object.firstFailure.IsZero() && object.records[0].errorType == "" && time.Since(object.firstFailure) >= time.Duration(retrySeconds)*time.Second {
+		if ds.config.DynamicPartitioningConfiguration.Enabled && !object.firstFailure.IsZero() && object.records[0].errorType == "" && !fm.now().Before(object.firstFailure.Add(time.Duration(retrySeconds)*time.Second)) {
 			// The flush slot exclusively owns replacement; readers see its old
 			// immutable records until the complete replacement is published.
 			records, attempts := object.records, object.attempts
@@ -485,10 +508,19 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 				return err
 			}
 			object.key, object.data, object.records = replacement.key, replacement.data, replacement.records
+			// This is a new error destination, admitted immediately at the
+			// native retry-window boundary, with its own bounded retry delay.
+			object.retryAt = time.Time{}
+			object.retryFailures = 0
+		}
+		if !options.bypassRetry && !object.retryAt.IsZero() && fm.now().Before(object.retryAt) {
+			ds.mu.Unlock()
+			continue
 		}
 		ds.mu.Unlock()
 		_, bucket, _ := strings.Cut(ds.config.BucketARN, ":::")
 		err := fm.putS3Object(ctx, bucket, object.key, object.data)
+		attempted++
 		ds.mu.Lock()
 		object.attempts++
 		if err == nil {
@@ -505,14 +537,16 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 			}
 			ds.bufferedBytes -= object.originalBytes
 			ds.retainedRecords -= len(object.records)
-			if len(ds.pending) == 0 {
-				ds.lastDeliveryError = ""
-			}
+			refreshLastDeliveryError(ds)
 		} else {
 			if object.firstFailure.IsZero() {
-				object.firstFailure = time.Now()
+				object.firstFailure = fm.now()
 			}
-			ds.lastDeliveryError = err.Error()
+			object.retryFailures++
+			object.retryAt = fm.now().Add(deliveryRetryDelay(object.retryFailures))
+			object.lastError = err.Error()
+			object.failureCode = deliveryFailureCode(err)
+			ds.lastDeliveryError = object.lastError
 			failures = append(failures, fmt.Errorf("Firehose retained %d records after failed delivery: %w", len(object.records), err))
 		}
 		ds.mu.Unlock()
@@ -543,7 +577,7 @@ func (fm *FirehoseManager) putS3Object(ctx context.Context, bucket, key string, 
 	_, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 	closeErr := response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return errors.Join(fmt.Errorf("Firehose destination returned status %d", response.StatusCode), readErr, closeErr)
+		return errors.Join(&destinationStatusError{status: response.StatusCode}, readErr, closeErr)
 	}
 	if err := errors.Join(readErr, closeErr); err != nil {
 		return fmt.Errorf("complete Firehose destination response: %w", err)

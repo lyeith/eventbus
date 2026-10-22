@@ -213,7 +213,7 @@ func (fm *FirehoseManager) devForceLoop(owner *devDelivery) {
 			if hasRecords {
 				// Includes failed DELETING streams whose native worker has joined.
 				// Transient errors retain the original object and its record leases.
-				_ = fm.flushReady(owner.forceContext, stream, true)
+				_ = fm.flush(owner.forceContext, stream, flushOptions{forceBuffer: true})
 			}
 		}
 	}
