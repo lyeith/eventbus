@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -93,7 +94,11 @@ func verifyS3DeliverySignature(request *http.Request, body []byte, credentials S
 		sort.Strings(query[key])
 	}
 	canonicalQuery := strings.ReplaceAll(query.Encode(), "+", "%20")
-	canonical := strings.Join([]string{request.Method, request.URL.EscapedPath(), canonicalQuery, headers.String(), signedHeaders, hashText}, "\n")
+	canonicalPath, err := canonicalS3TestPath(strings.SplitN(request.RequestURI, "?", 2)[0])
+	if err != nil {
+		return err
+	}
+	canonical := strings.Join([]string{request.Method, canonicalPath, canonicalQuery, headers.String(), signedHeaders, hashText}, "\n")
 	canonicalHash := sha256.Sum256([]byte(canonical))
 	toSign := strings.Join([]string{algorithm, stamp, strings.Join(scope[1:], "/"), hex.EncodeToString(canonicalHash[:])}, "\n")
 	key := []byte("AWS4" + credentials.SecretAccessKey)
@@ -131,6 +136,7 @@ func TestFirehoseS3StaticCredentialsSignDeliveredObjects(t *testing.T) {
 			type received struct {
 				body    []byte
 				path    string
+				rawPath string
 				failure error
 			}
 			var mu sync.Mutex
@@ -142,7 +148,7 @@ func TestFirehoseS3StaticCredentialsSignDeliveredObjects(t *testing.T) {
 				}
 				err = errors.Join(err, verifyS3DeliverySignature(r, body, test.credentials, region))
 				mu.Lock()
-				objects = append(objects, received{body, r.URL.Path, err})
+				objects = append(objects, received{body, r.URL.Path, strings.SplitN(r.RequestURI, "?", 2)[0], err})
 				mu.Unlock()
 				if err != nil {
 					w.WriteHeader(http.StatusForbidden)
@@ -151,7 +157,7 @@ func TestFirehoseS3StaticCredentialsSignDeliveredObjects(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}))
 			t.Cleanup(sink.Close)
-			endpoint := sink.URL + "/s3%20base?z=last&trace=b+space&trace=a"
+			endpoint := sink.URL + "/s3%20base/encoded%2Fsegment/%25tenant%3Dfoo%2B?z=last&trace=b+space&trace=a"
 			credentials := test.credentials
 			var manager *FirehoseManager
 			if test.legacy {
@@ -162,7 +168,7 @@ func TestFirehoseS3StaticCredentialsSignDeliveredObjects(t *testing.T) {
 			// Passing a value fixes all three selections before background work starts.
 			credentials = S3Credentials{AccessKeyID: "changed", SecretAccessKey: "changed", SessionToken: "changed"}
 			t.Cleanup(func() { require.NoError(t, manager.Shutdown()) })
-			stream, err := manager.CreateStream("signed", "selected-bucket", "space prefix/plus+unicode-é/", "", 100, 3600)
+			stream, err := manager.CreateStream("signed", "selected-bucket", "topic=example/year=2026/space prefix/plus+unicode-é/percent%2F%-/", "", 100, 3600)
 			require.NoError(t, err)
 			payload := []byte{'e', 'x', 'a', 'c', 't', '\n', 0, 0xff, '\n'}
 			_, err = manager.PutRecord(stream, payload)
@@ -175,7 +181,8 @@ func TestFirehoseS3StaticCredentialsSignDeliveredObjects(t *testing.T) {
 			require.NoError(t, actual[0].failure, "local S3 receiver must authenticate actual signed request")
 			require.NoError(t, err)
 			require.Equal(t, payload, actual[0].body)
-			require.True(t, strings.HasPrefix(actual[0].path, "/s3 base/selected-bucket/space prefix/plus+unicode-é/"))
+			require.True(t, strings.HasPrefix(actual[0].path, "/s3 base/encoded/segment/%tenant=foo+/selected-bucket/topic=example/year=2026/space prefix/plus+unicode-é/percent%2F%-/"))
+			require.True(t, strings.HasPrefix(actual[0].rawPath, "/s3%20base/encoded%2Fsegment/%25tenant%3Dfoo%2B/selected-bucket/topic%3Dexample/year%3D2026/space%20prefix/plus%2Bunicode-%C3%A9/percent%252F%25-/"))
 			snapshot, ok := manager.Snapshot(stream.Name)
 			require.True(t, ok)
 			require.Zero(t, snapshot.BufferedRecords)
@@ -252,4 +259,27 @@ func TestFirehoseS3RedirectsRetainRecordsWithoutForwardingCredentials(t *testing
 			require.Zero(t, unexpectedCalls.Load())
 		})
 	}
+}
+
+// Canonicalize the receiver's wire path independently of Go's permissive
+// EscapedPath and the production Smithy encoder. Decode each wire segment once,
+// then encode every non-unreserved byte; encoded endpoint slashes stay encoded.
+func canonicalS3TestPath(raw string) (string, error) {
+	segments := strings.Split(raw, "/")
+	for index, segment := range segments {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil {
+			return "", err
+		}
+		var out strings.Builder
+		for _, value := range []byte(decoded) {
+			if value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || strings.ContainsRune("-._~", rune(value)) {
+				out.WriteByte(value)
+			} else {
+				fmt.Fprintf(&out, "%%%02X", value)
+			}
+		}
+		segments[index] = out.String()
+	}
+	return strings.Join(segments, "/"), nil
 }

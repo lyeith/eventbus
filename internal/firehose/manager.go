@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -522,12 +521,10 @@ func (fm *FirehoseManager) flushReady(ctx context.Context, ds *DeliveryStream, f
 }
 
 func (fm *FirehoseManager) putS3Object(ctx context.Context, bucket, key string, data []byte) error {
-	endpoint, err := url.Parse(fm.s3Endpoint)
+	endpoint, err := s3ObjectURL(fm.s3Endpoint, bucket, key)
 	if err != nil {
 		return err
 	}
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + bucket + "/" + key
-	endpoint.RawPath = ""
 	request, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint.String(), bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("create Firehose delivery request: %w", err)

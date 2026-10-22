@@ -29,6 +29,11 @@ without forwarding the credentials/body; the prepared object remains retained
 for retry at the configured endpoint. Credential values are absent from delivery
 readback and logs.
 
+S3 wire paths use strict URI encoding: partition separators such as `=` and
+literal `+` are encoded without changing the decoded object key. Spaces,
+Unicode, percent characters and already encoded endpoint base segments are
+preserved without double escaping or path normalization.
+
 ## SNS → Firehose → S3 example
 
 Set `EVENTBUS_ENDPOINT_URL` to your owned EventBus listener and `S3_ENDPOINT_URL`
@@ -187,3 +192,20 @@ S3_ENDPOINT_URL="$S3_ENDPOINT_URL" \
   ssd-dev operation --purpose test -- \
   go test -race -tags integration ./internal/firehose ./internal/messaging
 ```
+
+The separate [VersityGW qualification](../internal/firehose/versity_integration_test.go)
+starts its own temporary loopback provider from an explicitly selected
+VersityGW 1.9.0 executable and uses the frozen Python SDK for independent
+provisioning/listing/readback. It covers partition `=`, plus, spaces, Unicode and
+literal percent keys, and cleans up its provider and private storage:
+
+```sh
+uv sync --frozen
+EVENTBUS_TEST_VERSITYGW_BINARY=/absolute/path/versitygw \
+  ssd-dev operation --purpose test -- \
+  go test -race -tags integration ./internal/firehose \
+  -run '^TestFirehoseSignedDeliveryToNativeVersityGW$'
+```
+
+Encoded endpoint base paths are covered by the independent signing receiver;
+VersityGW does not provide an S3 path-prefix mount for that case.
