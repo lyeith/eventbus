@@ -30,6 +30,10 @@ func TestCLIConfigDefaultsAndOverrides(t *testing.T) {
 	}{
 		{"defaults", nil, func(t *testing.T, c config) {
 			require.Equal(t, 4100, c.port)
+			require.Equal(t, "http://localhost:9000", c.s3Endpoint)
+			require.Equal(t, "test", c.s3AccessKey)
+			require.Equal(t, "testtest123", c.s3SecretKey)
+			require.Empty(t, c.s3SessionToken)
 			require.Equal(t, "us-east-1", c.region)
 			require.Equal(t, "000000000000", c.accountID)
 			require.Equal(t, "http://localhost:4100", c.issuerBase)
@@ -91,6 +95,7 @@ func TestCLIConfigRejectsUnexpectedPositionals(t *testing.T) {
 		{"--port", "14100", "version", "--debug"},
 		{"--cognito-profile", "unknown", "version"},
 		{"--shutdown-timeout", "0s", "version"},
+		{"--s3-secret-key=", "version"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			flags := flag.NewFlagSet("eventbus", flag.ContinueOnError)
@@ -281,4 +286,34 @@ func TestCLIStartupValidFlagsStillServeAndCloseOwnedPaths(t *testing.T) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	require.NoError(t, err, "valid CLI did not release its listener")
 	require.NoError(t, listener.Close())
+}
+
+func TestCLIConfigFirehoseCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		invalid bool
+	}{
+		{name: "custom credentials preserve default endpoint", args: []string{"--s3-access-key", "custom-access", "--s3-secret-key", "private-secret", "--s3-session-token", "private-token"}},
+		{name: "empty access", args: []string{"--s3-access-key=", "--s3-secret-key", "private-secret", "--s3-session-token", "private-token"}, invalid: true},
+		{name: "empty secret", args: []string{"--s3-access-key", "custom-access", "--s3-secret-key=", "--s3-session-token", "private-token"}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := flag.NewFlagSet("eventbus", flag.ContinueOnError)
+			flags.SetOutput(io.Discard)
+			cfg, err := readConfig(flags, tc.args)
+			if tc.invalid {
+				require.ErrorContains(t, err, "s3-access-key and s3-secret-key must be non-empty")
+				require.NotContains(t, err.Error(), "private-secret")
+				require.NotContains(t, err.Error(), "private-token")
+				require.Equal(t, config{}, cfg)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "http://localhost:9000", cfg.s3Endpoint)
+			require.Equal(t, "custom-access", cfg.s3AccessKey)
+			require.Equal(t, "private-secret", cfg.s3SecretKey)
+			require.Equal(t, "private-token", cfg.s3SessionToken)
+		})
+	}
 }

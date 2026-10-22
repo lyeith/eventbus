@@ -54,7 +54,9 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: "15:04:05"})
 
 	broker := messaging.NewBroker(cfg.region, cfg.accountID, cfg.port)
-	firehoseManager := firehose.NewFirehoseManager(cfg.region, cfg.accountID, cfg.s3Endpoint, "test", "testtest123")
+	firehoseManager := firehose.NewFirehoseManagerWithS3Credentials(cfg.region, cfg.accountID, cfg.s3Endpoint, firehose.S3Credentials{
+		AccessKeyID: cfg.s3AccessKey, SecretAccessKey: cfg.s3SecretKey, SessionToken: cfg.s3SessionToken,
+	})
 	if err := firehoseManager.SetMetadataExtractor(firehose.NewGoJQMetadataExtractor()); err != nil {
 		return fmt.Errorf("failed to configure Firehose metadata extraction: %w", err)
 	}

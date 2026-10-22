@@ -351,3 +351,15 @@ selection, then append before the retained invocation; no extra queue/coordinato
 Native responses, retry/ACK owners, redacted evidence, output bounds and privacy
 remain unchanged. This addresses retained storage, without a latency claim.
 See [private diagnostics](LAMBDA.md#private-invocation-diagnostics).
+
+## Final drain budget and Firehose credentials
+
+| Ticket | Classification and owner | Contract |
+| --- | --- | --- |
+| [#43](https://github.com/lyeith/eventbus/issues/43) Retry waits during final shutdown | Development lifecycle in app config; Lambda dev metadata projection | Positive `--shutdown-timeout`, default 30s, covers ordinary/retained final joins; pre-abort bounded redacted metadata; final timeout fails while resumable quiescence preserves accepted work |
+| [#44](https://github.com/lyeith/eventbus/issues/44) S3 delivery credentials | Local endpoint/credential selection in app; native SigV4 delivery in Firehose | Explicit access/secret/optional token with preserved defaults, independently signed real PUTs, no ambient provider chain; redirects fail and retain records |
+
+These controls do not alter native retry timings, claim delivery or add durable
+replay. See [final shutdown](LAMBDA.md#graceful-final-shutdown) and
+[S3 credentials](FIREHOSE.md#s3-delivery-credentials). STATE/HANDOFF record
+verification and release status.

@@ -183,7 +183,10 @@ Events SDK endpoint for recurring Lambda producers; the harness owns Terraform
 extraction and resource provisioning. Reprovision in-memory resources after restart. Follow Lambda JSONL terminal
 records for asynchronous completion, and Scheduler/rotation redacted operational
 logs for target admission/workflow outcomes. HTTP acceptance alone is insufficient. Supply `--s3-endpoint` for
-Firehose tests; its local S3 credentials are `test`/`testtest123`.
+Firehose tests. [S3 delivery credentials](FIREHOSE.md#s3-delivery-credentials)
+default to `test`/`testtest123`; select other values with `--s3-access-key`,
+`--s3-secret-key` and optional `--s3-session-token`. These are independent of
+the consuming SDK's credentials and do not read ambient AWS configuration.
 
 Use the application's tests for end-to-end behavior. When changing EventBus,
 follow [AGENTS.md](../AGENTS.md) and [SDK verification](../tests/README.md).

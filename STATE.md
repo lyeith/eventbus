@@ -1,51 +1,48 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
-and agent development harness. #42 is complete and published in v0.18.0:
+and agent development harness. #43 and #44 source changes are complete.
+Latest published binaries remain v0.18.0:
 https://github.com/lyeith/eventbus/releases/tag/v0.18.0
+The new flags below require the updated source; no binary release in this pass.
 
-Release v0.18.0 (2026-10-19):
-- Annotated tag/source: 0d3f46f9cb0aad4a48f8feb9cd88366ec922ece9.
-- Full source CI39229148267 passed Go race/vet, complete frozen SDK suite,
-  fixture contracts and unchanged Express/Swagger handlers.
-- Eight CGO-free Linux/macOS amd64/arm64 service/gateway binaries + SHA256SUMS.
-  Target formats and clean VCS metadata verified; uploaded downloads all hashed.
-- Actual Linux amd64 and macOS arm64 packages passed service/gateway help and
-  the maintained native SNS/Runtime API all-versus-failures retry proof.
-- Release build, downloads, platform copies and temporary Mac test driver removed.
-  Inspected source/build/package owners quiescent; managed scratch auto-removed.
+#43 final shutdown:
+- Positive --shutdown-timeout controls ordinary and retained final joins;
+  default 30s and graceful/discard-pending behavior are preserved.
+- Lambda dev metadata freezes before permanent abort, at most16 native IDs
+  with state/attempt/known retry time and outstanding/reservation/omitted counts.
+  App logs it only for a final async timeout, without payload/env/error/output.
+- Retry timings and per-request HTTP deadlines are unchanged. Final timeout
+  still cancels/joins work and exits nonzero; pending Events cannot survive restart.
+  Retained /quiesce remains resumable and preserves accepted work on timeout.
 
-#42 failure-only private diagnostics:
-- Optional dev_diagnostics.mode: failures; omitted or all preserves every
-  existing owned-attempt record. No diagnostic configuration means no sink.
-- Diagnostics alone selects final joined attempts using native state, frozen
-  cancellation, ownership uncertainty and injected native retry/crash facts.
-  It does not classify free-form process errors or recovered Init phases.
-- Clean success emits no private row; caught/logged business errors need all.
-  Failed async attempts remain retained independently of later successful retry.
-  Owned launch/Init, timeout/cancellation and native429 failures retain detail.
-- Python uses its existing bounded session record. In failures mode it defers
-  append until terminal selection, then stack precedes invocation; clean success
-  writes neither schema. All mode retains existing live snapshot visibility.
-- Native responses/Tail, warm reuse, retry/ACK owners, async/SQS metadata, private
-  file protection, output limits and sticky capture failures stay authoritative.
-  This changes retained storage, with no latency improvement claim/dependency.
-- Lambda/agent/architecture/triage docs cover configuration and boundaries.
+#44 Firehose:
+- --s3-access-key/--s3-secret-key/--s3-session-token are independent of endpoint.
+  Defaults remain test/testtest123/empty; empty access or secret fails parsing.
+- App selects an immutable credential value. Existing AWS SigV4 signs real
+  object bytes and optional session token; no provider chain or role assumption.
+- Owned HTTP client refuses redirects. Failed PUTs retain the prepared object
+  for retry at the original endpoint without forwarding credentials or body.
+- Existing static constructor is preserved. No dependency added.
 
 Verification:
-- Focused real runtime race3.640s; real Python collection/fault race4.000s.
-- Native SNS CLI race4.740s: failure then successful retry, same native event/
-  request/message identity, private failure detail retained, later success
-  omitted only in failures mode. Default all retains both; children/owners join.
-  Maintained proof supports an actual package through EVENTBUS_SMOKE_BINARY.
-- Config/final-selection table race1.053s; invalid modes fail before file effects.
-- Full affected race passed: Lambda161.595s, app64.742s, gateway25.374s,
-  eventsource1.604s, architecture1.051s. All-tag vet and diff checks passed.
-- Independent production, Python ownership and documentation review is clean.
+- Full affected race: Lambda188.171s, Firehose9.307s, app154.283s,
+  gateway29.725s, eventsource1.940s, messaging7.599s, devquiescence1.076s,
+  architecture1.188s. All-tag integration/sdksmoke vet and diff checks passed.
+- Real ordinary CLI third native attempt starts >30s after SIGTERM, with the
+  original request/payload, overlapping active work and live SDK/JWKS callbacks.
+- Retained final timeout fails with exact pre-abort metadata/ServiceShutdown;
+  separate /quiesce timeout recovers to held before successful final stop.
+  Existing disposable/business-failed/default lifecycle cases remain in full gates.
+- Independent HMAC authenticates actual S3 bytes/custom/session/legacy settings;
+  redirect301/302/303/307/308 never forward and retained same-key retry succeeds.
+- Real CLI SDK ingestion flushes to a held S3 receiver on SIGTERM; exact selected
+  secret authenticates Authorization; no secret/token in health/readback/logs.
+- Independent ownership, privacy and docs review clean.
 
-Owned source tests joined; successful managed test scratch removed.
-Raw /tmp/eventbus-ticket42-* logs and one corrected test-expectation failure
-use existing24h unpinned retention. No task worktrees/branches/new environments,
-application/default-state changes or dependencies. Laptop Plans untouched.
-Publication and cleanup complete. Release logs under /tmp/eventbus-v0.18.0-*
-follow existing24h retention; no pins or remaining release resources.
+Successful managed source owners quiescent and scratch automatically removed.
+Corrected fixture failures retain raw evidence under existing24h unpinned policy;
+disposable failed scratch removed after inspection. No task worktrees, branches,
+environments, application/default-state changes or new dependencies. Laptop
+Plans untouched. Packaged binaries and full frozen SDK lane were not run locally;
+CI covers the complete SDK lane on push.

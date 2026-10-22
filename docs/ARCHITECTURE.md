@@ -160,6 +160,10 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   services do not import Lambda.
 - SNS owns FirehoseDelivery; `app` injects Firehose. Filters/raw/envelopes belong
   to SNS, while extraction/buffering/retry/destination lifetime belong to Firehose.
+  App selects explicit static S3 credentials at startup; Firehose's existing
+  SigV4 signer consumes the immutable access/secret/optional-token value.
+  Its owned HTTP client refuses redirects; no provider chain or second delivery
+  owner is introduced.
 - `awsprotocol` holds reusable wire helpers, without service state. Callers own
   protocol admission and body budgets; over-budget bodies must fail, never truncate.
   SES/Cognito/SQS retain distinct serializers, size limits and error envelopes.

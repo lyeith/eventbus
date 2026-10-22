@@ -81,27 +81,52 @@ type StreamSnapshot struct {
 }
 
 type FirehoseManager struct {
-	streams                                                 map[string]*DeliveryStream
-	mu                                                      sync.RWMutex
-	region, accountID, s3Endpoint, s3AccessKey, s3SecretKey string
-	metadata                                                MetadataExtractor
-	buildObject                                             objectBuilder
-	dev                                                     *devDelivery
-	bufferLimit                                             int
-	httpClient                                              *http.Client
-	stopping                                                bool
-	done                                                    chan struct{}
-	shutdownErr                                             error
+	streams                       map[string]*DeliveryStream
+	mu                            sync.RWMutex
+	region, accountID, s3Endpoint string
+	s3Credentials                 S3Credentials
+	metadata                      MetadataExtractor
+	buildObject                   objectBuilder
+	dev                           *devDelivery
+	bufferLimit                   int
+	httpClient                    *http.Client
+	stopping                      bool
+	done                          chan struct{}
+	shutdownErr                   error
 }
 
+// NewFirehoseManager preserves the static-credential construction contract.
+// Callers requiring a session token use NewFirehoseManagerWithS3Credentials.
 func NewFirehoseManager(region, accountID, s3Endpoint, s3AccessKey, s3SecretKey string) *FirehoseManager {
+	return NewFirehoseManagerWithS3Credentials(region, accountID, s3Endpoint, S3Credentials{AccessKeyID: s3AccessKey, SecretAccessKey: s3SecretKey})
+}
+
+// NewFirehoseManagerWithS3Credentials fixes delivery credentials for this manager.
+// Credential defaults and selection belong to the caller; no environment or AWS
+// provider chain is consulted.
+func NewFirehoseManagerWithS3Credentials(region, accountID, s3Endpoint string, credentials S3Credentials) *FirehoseManager {
 	if region == "" {
 		region = "us-east-1"
 	}
 	if accountID == "" {
 		accountID = "000000000000"
 	}
-	return &FirehoseManager{streams: make(map[string]*DeliveryStream), region: region, accountID: accountID, s3Endpoint: s3Endpoint, s3AccessKey: s3AccessKey, s3SecretKey: s3SecretKey, bufferLimit: maxBufferedBytes, buildObject: makeObject, httpClient: &http.Client{Timeout: 10 * time.Second}, done: make(chan struct{})}
+	return &FirehoseManager{
+		streams:       make(map[string]*DeliveryStream),
+		region:        region,
+		accountID:     accountID,
+		s3Endpoint:    s3Endpoint,
+		s3Credentials: credentials,
+		bufferLimit:   maxBufferedBytes,
+		buildObject:   makeObject,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+			// Delivery credentials and body belong only to the configured endpoint.
+			// A redirect needs a separately signed request and cannot confirm this PUT.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		done: make(chan struct{}),
+	}
 }
 
 // SetMetadataExtractor is a construction-time port, never a mutable per-request
@@ -511,7 +536,7 @@ func (fm *FirehoseManager) putS3Object(ctx context.Context, bucket, key string, 
 	hash := sha256.Sum256(data)
 	payloadHash := hex.EncodeToString(hash[:])
 	request.Header.Set("X-Amz-Content-Sha256", payloadHash)
-	if err := v4.NewSigner().SignHTTP(ctx, aws.Credentials{AccessKeyID: fm.s3AccessKey, SecretAccessKey: fm.s3SecretKey}, request, payloadHash, "s3", fm.region, time.Now(), func(options *v4.SignerOptions) { options.DisableURIPathEscaping = true }); err != nil {
+	if err := v4.NewSigner().SignHTTP(ctx, aws.Credentials{AccessKeyID: fm.s3Credentials.AccessKeyID, SecretAccessKey: fm.s3Credentials.SecretAccessKey, SessionToken: fm.s3Credentials.SessionToken}, request, payloadHash, "s3", fm.region, time.Now(), func(options *v4.SignerOptions) { options.DisableURIPathEscaping = true }); err != nil {
 		return fmt.Errorf("sign Firehose delivery: %w", err)
 	}
 	response, err := fm.httpClient.Do(request)

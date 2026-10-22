@@ -15,6 +15,9 @@ type config struct {
 	region                   string
 	accountID                string
 	s3Endpoint               string
+	s3AccessKey              string
+	s3SecretKey              string
+	s3SessionToken           string
 	consumersFile            string
 	lambdaFunctions          string
 	workDir                  string
@@ -47,6 +50,9 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	region := flags.String("region", "us-east-1", "AWS region")
 	accountID := flags.String("account-id", "000000000000", "AWS account ID")
 	s3Endpoint := flags.String("s3-endpoint", "http://localhost:9000", "S3 endpoint for Firehose flush (RustFS)")
+	s3AccessKey := flags.String("s3-access-key", "test", "S3 access key for Firehose delivery")
+	s3SecretKey := flags.String("s3-secret-key", "testtest123", "S3 secret key for Firehose delivery")
+	s3SessionToken := flags.String("s3-session-token", "", "Optional S3 session token for Firehose delivery")
 	lambdaFunctions := flags.String("lambda-functions", "", "Application-owned Lambda functions YAML (Go/provided, Python, Node or command handlers)")
 	consumersFile := flags.String("consumers", "", "Path to consumers.yaml (enables Lambda pollers)")
 	workDir := flags.String("work-dir", "", "Application root for consumer and trigger handlers (auto-detected if empty)")
@@ -85,6 +91,9 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	if *shutdownTimeout <= 0 {
 		return config{}, fmt.Errorf("shutdown-timeout must be positive")
 	}
+	if *s3AccessKey == "" || *s3SecretKey == "" {
+		return config{}, fmt.Errorf("s3-access-key and s3-secret-key must be non-empty")
+	}
 	if *cognitoProfile != "" && *cognitoProfile != "legacy-fixtures" {
 		return config{}, fmt.Errorf("unknown Cognito fixture profile %q", *cognitoProfile)
 	}
@@ -97,6 +106,9 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 		region:                   *region,
 		accountID:                *accountID,
 		s3Endpoint:               *s3Endpoint,
+		s3AccessKey:              *s3AccessKey,
+		s3SecretKey:              *s3SecretKey,
+		s3SessionToken:           *s3SessionToken,
 		consumersFile:            *consumersFile,
 		lambdaFunctions:          *lambdaFunctions,
 		workDir:                  *workDir,

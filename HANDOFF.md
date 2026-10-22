@@ -1,64 +1,52 @@
 # Handoff
 
-Canonical SSD /home/spite/Projects/eventbus, main. #42 source is complete.
-Published v0.18.0 as latest on 2026-10-19:
-https://github.com/lyeith/eventbus/releases/tag/v0.18.0
+Canonical SSD /home/spite/Projects/eventbus, main. #43/#44 implementation complete.
+Latest binary release is still v0.18.0; this pass changes source only.
 
-Release:
-- Annotated tag targets 0d3f46f9cb0aad4a48f8feb9cd88366ec922ece9.
-- Source CI39229148267 passed full Go race/vet and frozen SDK/Swagger lanes.
-- All eight CGO-free Linux/macOS amd64/arm64 service/gateway binaries have
-  matching clean source metadata and correct target formats. Uploaded downloads
-  passed SHA256SUMS; GitHub confirms latest, public, non-prerelease, nine assets.
-- Actual packaged Linux amd64/macOS arm64 binaries passed the maintained native
-  SNS SDK/Runtime API proof below: default all retains both attempts; failures
-  retains the failed attempt before successful native retry. Identities,
-  diagnostics, redacted records, real child joins and CLI cleanup verified.
-- Build/test owners inspected quiescent; successful managed scratch removed.
-  Deleted dist, asset downloads, platform copies and temporary Mac test drivers.
-  Raw /tmp/eventbus-v0.18.0-* logs use existing24h retention without pins.
+#43:
+- App --shutdown-timeout is a positive duration, default30s, wired into the
+  existing final listener budget for ordinary/retained graceful or discard stop.
+- Named lambda/dev_async_drain.go snapshots first permanent abort under the
+  existing owner mutex before cancellation clears retry state. Getter detaches
+  capped16 metadata rows and accounts for unpublished admission reservations.
+- app/dev_shutdown.go consumes that port only for final deadline failure.
+  Error summary is pre-abort evidence, with no payload/env/error/output.
+- Final timeout still fails and cancels in-memory work; no restart/replay claim.
+  Existing retained /quiesce timeout preserves work and can be retried.
+- Commit1ffec6f owns this change; ordinary broker needs no callback profile.
 
-#42:
-- DevDiagnosticsConfig.Mode accepts all/failures; omitted defaults all.
-  dev_diagnostics.go owns configuration and final joined-attempt retention.
-- failures omits clean native successes, including caught/logged business errors,
-  successful provided-runtime cleanup and successful internal Init fallback.
-  It retains non-success/uncertain owned attempts, native admission rejection,
-  failed async attempts before later success and injected completion loss/crash.
-- Private Python publish keeps its existing bounded session.record in failures
-  mode; terminal diagnostics flushes it only for retained outcomes, before the
-  invocation row. All-mode live publication is unchanged. Collectors always join.
-  Deferred append failure remains sticky, without fabricating healthy evidence.
-- Native responses/Tail, queue/retry/ACK behavior, warm reuse, redacted metadata,
-  private-file protection, output limits and no-sink default remain unchanged.
-  No new dependency, execution policy, buffer owner or latency claim.
-- Native errors before any owned invocation still create no diagnostic row.
+#44:
+- Explicit --s3-access-key, --s3-secret-key and optional --s3-session-token
+  replace hidden CLI literals, preserving test/testtest123/empty defaults.
+- Firehose S3Credentials value feeds the existing AWS SigV4 signer; the legacy
+  constructor delegates. No provider chain, credential refresh or dependency.
+- Client rejects all redirects, preserving failed prepared objects for same-key
+  retry at the configured endpoint. Credentials/body never follow Location.
+- App flags validate non-empty access/secret before opening owned resources.
 
 Validation:
-- Focused real Node/Python fresh/warm/provided runtime race3.640s: success/caught
-  omission, logs/detail retention, same-ID async retry, timeout/cancel/Init/start
-  failures, actual concurrency429 and ordinary all compatibility.
-- Actual Python explicit snapshots with active file empty: success leaves zero
-  rows of both schemas; failure/cancel appends stack then terminal. Sticky sink
-  append fault preserves native outcome, waits joins and fails evidence/Close.
-  Focused race4.000s; final mutex-only assertion cleanup included in full gate.
-- Native SNS real CLI race4.740s: all keeps failed+successful attempts, failures
-  keeps failed attempt only; original event/request/message IDs and five redacted
-  async transitions preserved. Children/listener/CLI join.
-- Full affected race: Lambda161.595s, app64.742s, gateway25.374s,
-  eventsource1.604s, architecture1.051s. All-tag vet and diff checks pass.
-- Config/selector tables passed1.053s; invalid modes create no output directory.
-- Independent final owner/privacy/docs review is clean.
+- Full race receipts:2296a50496944131bf4736e25c627fe5 core,
+  1552ff0897a445829dcd50791792bee5 consumers; both success/quiescent.
+  Lambda188.171s, Firehose9.307s, app154.283s, gateway29.725s,
+  eventsource1.940s, messaging7.599s, devquiescence1.076s, architecture1.188s.
+- All-tag vet:3c5bd1be2a1d41ada3348887aef830c0 success/quiescent.
+- Final ordinary35s retry proof is included in the full app gate; retained
+  timeout/recovery and existing discard/exhausted-business-failure cases pass.
+- Core receiver independently authenticates SigV4 with stdlib HMAC; app receiver
+  re-signs with the selected secret to prove real CLI composition, retaining
+  held-response join and no-secret/token health/readback/log assertions.
+- Config tests cover defaults/overrides, invalid durations and empty credentials.
+  Source/owner/docs review, gofmt and diff checks pass.
 
-Release verification seam:
+Maintained package proof seams (not exercised against release artifacts here):
 EVENTBUS_SMOKE_BINARY=/absolute/eventbus-package
-go test -race -count=1 -timeout 2m ./internal/app \
-  -run '^TestCLIFailureOnlyDiagnosticsPreserveNativeSNSRetries$'
-This uses the same maintained native Go SNS/Runtime API proof, with owned paths
-and no external stack. Test binary itself provides the real child handler.
+go test -race -count=1 -timeout 3m ./internal/app \
+  -run '^(TestCLIConfiguredGrace.*|TestCLIQuiesceTimeoutRecoversNativeRetryBeforeFinalStop|TestCLIFirehoseS3Credentials)$'
+The test binary supplies real native handlers; paths/listeners/state are owned.
+Full frozen SDK smoke is left to normal GitHub CI; native Go SDK consumers ran.
 
-Raw /tmp/eventbus-ticket42-* logs/failed expectation evidence retain existing24h
-expiry, no pins. Successful inspected source tests quiescent/scratch removed.
-No temporary worktrees/branches/new environments/live-stack changes/dependencies.
-Laptop Plans unchanged. Source, publication and cleanup complete; no pending
-release work or retained task resources beyond expiring test evidence.
+Raw logs: /tmp/eventbus-ticket43-44-*, /tmp/eventbus-ticket43-* and
+/tmp/eventbus-44-* follow existing24h expiry, no pins. Successful managed scratch
+auto-removed; inspected disposable failed scratch removed. No task worktrees,
+branches, environments, live-stack/default-state changes or dependencies.
+Laptop Plans unchanged. Source is ready for the next binary release.

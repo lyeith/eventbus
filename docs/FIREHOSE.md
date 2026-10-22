@@ -3,9 +3,31 @@
 EventBus supports CreateDeliveryStream, DescribeDeliveryStream,
 DeleteDeliveryStream, PutRecord and PutRecordBatch through AWS JSON 1.1.
 Streams use DirectPut and one local S3 destination. The application provisions
-its bucket and selects the S3 endpoint with `--s3-endpoint`; the CLI signs S3
-requests with local credentials `test` / `testtest123`. Role ARNs are validated
-metadata; EventBus does not assume roles or enforce IAM.
+its bucket and selects the S3 endpoint with `--s3-endpoint`. Role ARNs are
+validated metadata; EventBus does not assume roles or enforce IAM.
+
+## S3 delivery credentials
+
+The CLI signs delivery PUTs using these startup flags:
+
+| Flag | Default |
+| --- | --- |
+| `--s3-access-key` | `test` |
+| `--s3-secret-key` | `testtest123` |
+| `--s3-session-token` | empty (static credentials) |
+
+Access and secret keys must be non-empty. To use a different local S3 provider,
+add `--s3-access-key "$S3_ACCESS_KEY" --s3-secret-key "$S3_SECRET_KEY"` to the
+existing EventBus command, plus `--s3-session-token "$S3_SESSION_TOKEN"` when
+required. These values are independent of `--s3-endpoint` and of credentials
+used by a consuming SDK to call EventBus. Selection is fixed at startup; EventBus
+does not read an AWS environment/provider chain or refresh temporary credentials.
+
+Firehose's existing SigV4 signer signs the actual object bytes for `--region`,
+including the session-token header when configured. Redirects fail delivery
+without forwarding the credentials/body; the prepared object remains retained
+for retry at the configured endpoint. Credential values are absent from delivery
+readback and logs.
 
 ## SNS → Firehose → S3 example
 
