@@ -517,6 +517,7 @@ func (service *Service) abortAsyncLocked(reason error) {
 	if service.asyncAborted {
 		return
 	}
+	service.captureDevAsyncDrainLocked()
 	service.asyncClosed = true
 	service.asyncAborted = true
 	service.asyncAbortErr = reason

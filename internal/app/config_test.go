@@ -90,6 +90,7 @@ func TestCLIConfigRejectsUnexpectedPositionals(t *testing.T) {
 		{"version", "--port", "14100"},
 		{"--port", "14100", "version", "--debug"},
 		{"--cognito-profile", "unknown", "version"},
+		{"--shutdown-timeout", "0s", "version"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			flags := flag.NewFlagSet("eventbus", flag.ContinueOnError)

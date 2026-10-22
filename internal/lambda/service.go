@@ -85,6 +85,7 @@ type Service struct {
 	invocationEvidenceErr                              error
 	pythonStacks                                       *DevPythonStacksConfig
 	devAsyncShutdown                                   devAsyncShutdownState
+	devAsyncDrainSummary                               *DevAsyncDrainSummary
 	asyncClosed, asyncAborted                          bool
 	asyncAbortErr                                      error
 	asyncDrainDone                                     chan struct{}

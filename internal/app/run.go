@@ -319,7 +319,7 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 		}
 		httpServer.Handler, devHTTP = newRetainedHTTP(retained, router, cfg.retainedCallbackPort, cleanup)
 	}
-	shutdown := newEventBusListener(httpServer, owned, 30*time.Second)
+	shutdown := newEventBusListener(httpServer, owned, cfg.shutdownTimeout)
 	shutdown.devRetained = devHTTP
 	shutdown.shutdownPolicy = cfg.shutdownPolicy
 	listenerOwns = true

@@ -84,7 +84,9 @@ before configuring endpoints or cleaning fixtures.
 - Final-process disposable shutdown belongs in named `dev_shutdown.go` /
   `dev_async_shutdown.go` adapters. App applies the policy before retained joins;
   existing Lambda, Scheduler and Events owners settle and join their own work.
-  Keep default graceful drain and resumable retained controls unchanged.
+  App configuration owns final drain budgets; `dev_async_drain.go` projects
+  bounded native retry metadata before permanent abort. Final timeout fails;
+  resumable retained controls preserve accepted work and remain separate.
 - Shared mechanics have one owner: `devcapture` for bounded synchronous JSONL
   group commit (every successful owned-file append awaits its covering Sync),
   `localexec` for process groups/descendants and capped output, `awsprotocol`

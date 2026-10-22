@@ -365,12 +365,37 @@ returns HTTP 500 `ServiceException` before accepting the event. A later failure
 preserves accepted execution, blocks subsequent Event admission, emits redacted
 failure metadata to stderr and makes drain/close return an error.
 
-## Disposable shutdown
+## Graceful final shutdown
 
 The default `--shutdown-policy graceful` drains accepted Lambda Events,
-including their native one- and two-minute retry waits, within the existing
-30-second final shutdown budget. A retry beyond that budget causes a failed
-shutdown; it does not mean the event was delivered.
+including their native one- and two-minute retry waits. Set a positive
+`--shutdown-timeout` at startup to budget the whole Ctrl-C/SIGTERM drain,
+in ordinary and retained-owner modes. The default remains `30s`.
+For example, add `--shutdown-timeout 5m` to the existing launch command;
+choose enough time for retry waits, all handler attempts and the other owners'
+joins. This changes the final budget, not native retry times or per-request HTTP
+deadlines. AWS/callback listeners stay available while accepted work joins.
+
+For recovery before stopping a retained process, use
+[`/quiesce`](RETAINED-OWNER.md#refusals-dirty-recovery-and-shutdown).
+A quiesce timeout leaves the process and accepted work live; inspect and retry
+the barrier, then stop after reaching held. Final shutdown is irreversible:
+budget expiry cancels/joins local work and exits nonzero. Pending Events are in
+memory and cannot be recovered by restarting or replayed from metadata.
+A business-exhausted `failed` event is distinct from `succeeded`, even when
+either settles cleanly enough to permit shutdown.
+
+If final timeout aborts outstanding async work, the error log
+`Lambda async drain timed out` includes `shutdown_timeout_ms`, `captured_at`,
+`outstanding`, `pending_admissions`, `shown`, `omitted` and `invocations`.
+This is a pre-abort snapshot, retained after cleanup. At most 16 invocations
+appear, ordered by native request ID, with `request_id`, `function_name`,
+`state`, `attempts` and a known `next_attempt_at`. Unpublished admissions
+have no invented ID: `outstanding = pending_admissions + shown + omitted`.
+There are no payloads, environment values, handler errors or output.
+The summary explains an aborted drain; it never confirms delivery.
+
+## Disposable shutdown
 
 For an owned disposable stack, add `--shutdown-policy discard-pending` to
 the existing launch command.
@@ -398,7 +423,8 @@ Capture, ownership, child cleanup and deadline failures still fail shutdown.
 Scheduler/EventBridge stop unaccepted target-admission retries through their
 existing owners. In retained-owner mode, source fencing and this policy happen
 before waiting for accepted leases; callback peers and stores remain available
-until joins finish. The same 30-second budget applies to active work.
+until joins finish. The same configured `--shutdown-timeout` budget applies
+to active work, including the default `30s`.
 Resumable `/quiesce` and `/resume` never apply the discard policy.
 Events remain in memory; discarded payloads cannot be replayed from metadata.
 

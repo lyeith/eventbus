@@ -71,6 +71,7 @@ func (listener *eventBusListener) close(ctx context.Context) (resultErr error) {
 		if recovered := recover(); recovered != nil {
 			resultErr = fmt.Errorf("eventbus cleanup panicked: %v", recovered)
 		}
+		listener.reportShutdownTimeout(resultErr)
 	}()
 	if listener.server == nil || listener.timeout <= 0 {
 		return errors.Join(errHTTPNotDrained, errors.New("HTTP server and positive shutdown timeout required"))

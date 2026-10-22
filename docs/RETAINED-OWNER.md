@@ -271,7 +271,14 @@ aborts/joins local owners and closes transports before joining received
 envelopes; stores/evidence are retained. Uncertain foreign leases may become
 sticky dirt only after irreversible shutdown and transport closure, never
 cleanup-safe completion. Resumable `/quiesce` never applies that abort policy.
-Shutdown never grants cleanup or resume permission.
+Shutdown never grants cleanup or resume permission. Its final budget is
+`--shutdown-timeout` (positive duration, default `30s`), independent of the
+`/quiesce` request timeout. Configure enough time for native retry waits and
+active handlers, or use repeatable `/quiesce` before signaling the process.
+A final timeout exits nonzero and cancels pending in-memory work; restarting
+cannot recover it. The bounded, redacted
+[async timeout summary](LAMBDA.md#graceful-final-shutdown) freezes retry metadata
+before abort. It is neither delivery proof nor a recovery log.
 
 For disposable process teardown, [`--shutdown-policy discard-pending`](LAMBDA.md#disposable-shutdown)
 applies after the irreversible source fence and before the retained join.

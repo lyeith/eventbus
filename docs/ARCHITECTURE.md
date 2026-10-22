@@ -62,7 +62,10 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   drain HTTP and release resources. `dev_shutdown.go` composes the explicit
   final-process discard policy before retained joins; named Lambda/Scheduler/
   Events dev ports activate cancellation, while existing native owners publish
-  outcomes and join work. Resumable quiescence never uses this policy.
+  outcomes and join work. App config owns the positive final shutdown budget;
+  `lambda/dev_async_drain.go` projects bounded native metadata before abort,
+  and the app reports it only on final timeout. Resumable quiescence never
+  uses permanent abort or discard.
 - `server` declares the HTTP interfaces it consumes. It selects a protocol and
   delegates operations; it imports no service package and accesses no store.
 - Each service owns its state and operation adapter. Services do not import

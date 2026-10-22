@@ -3,9 +3,11 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
+	lambdaservice "github.com/lyeith/eventbus/internal/lambda"
 	"github.com/rs/zerolog/log"
 )
 
@@ -86,4 +88,33 @@ func (listener *eventBusListener) reportShutdownPolicy() {
 			Int("canceled_events", owner.DevDiscardedAsyncCount()).
 			Msg("Lambda async shutdown policy applied")
 	}
+}
+
+// The Lambda owner freezes metadata before permanent abort clears retry state.
+// App reports that snapshot only for failed final deadlines, never /quiesce.
+type devAsyncDrainOwner interface {
+	DevAsyncDrainSummary() lambdaservice.DevAsyncDrainSummary
+}
+
+func (listener *eventBusListener) reportShutdownTimeout(err error) {
+	if !errors.Is(err, context.DeadlineExceeded) || listener.owned == nil {
+		return
+	}
+	owner, ok := listener.owned.functions.(devAsyncDrainOwner)
+	if !ok {
+		return
+	}
+	summary := owner.DevAsyncDrainSummary()
+	if summary.CapturedAt.IsZero() || summary.Outstanding == 0 {
+		return
+	}
+	log.Error().
+		Int64("shutdown_timeout_ms", listener.timeout.Milliseconds()).
+		Time("captured_at", summary.CapturedAt).
+		Int("outstanding", summary.Outstanding).
+		Int("pending_admissions", summary.PendingAdmissions).
+		Int("shown", summary.Shown).
+		Int("omitted", summary.Omitted).
+		Interface("invocations", summary.Invocations).
+		Msg("Lambda async drain timed out")
 }

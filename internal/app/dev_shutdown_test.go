@@ -138,3 +138,32 @@ func TestDiscardPendingUnsupportedOwnerWithholdsResourceRelease(t *testing.T) {
 	require.ErrorContains(t, listener.Shutdown(t.Context()), "Lambda owner does not support")
 	require.Equal(t, []string{"lambda.drain"}, order)
 }
+
+func TestCLIShutdownTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		want    time.Duration
+		invalid bool
+	}{
+		{name: "default", want: 30 * time.Second},
+		{name: "longer final drain", args: []string{"--shutdown-timeout", "5m"}, want: 5 * time.Minute},
+		{name: "discard uses same budget", args: []string{"--shutdown-policy", "discard-pending", "--shutdown-timeout", "2m"}, want: 2 * time.Minute},
+		{name: "zero", args: []string{"--shutdown-timeout", "0s"}, invalid: true},
+		{name: "negative", args: []string{"--shutdown-timeout", "-1s"}, invalid: true},
+		{name: "malformed", args: []string{"--shutdown-timeout", "soon"}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := flag.NewFlagSet("eventbus", flag.ContinueOnError)
+			flags.SetOutput(io.Discard)
+			cfg, err := readConfig(flags, tc.args)
+			if tc.invalid {
+				require.ErrorContains(t, err, "shutdown-timeout")
+				require.Equal(t, config{}, cfg)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cfg.shutdownTimeout)
+		})
+	}
+}

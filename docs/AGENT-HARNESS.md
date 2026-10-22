@@ -161,10 +161,15 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
 - Stop the owned process with Ctrl-C or SIGTERM. Native SQS mappings cancel/join,
   scheduling/dev consumers stop first;
   accepted rotation and Lambda Event work drain with the AWS listener available.
-  HTTP drains before stores/captures close. A deadline abort is a failed shutdown.
+  HTTP drains before stores/captures close. Set
+  [`--shutdown-timeout`](LAMBDA.md#graceful-final-shutdown) at startup to cover
+  native retry waits and handlers (default `30s`). Final deadline abort is a
+  failed shutdown and loses pending in-memory work; its redacted async summary
+  records native IDs/states/retry times before cancellation, not delivery.
   In retained-owner mode, shutdown first joins accepted callback chains with
   peers available and irreversibly disables resume. Use the resumable barrier
-  while retaining the process between suites.
+  while retaining the process between suites; a `/quiesce` timeout preserves
+  accepted work and can be retried before stopping.
   For a disposable stack, select [`--shutdown-policy discard-pending`](LAMBDA.md#disposable-shutdown)
   at startup. Pending Lambda Events and unaccepted Scheduler/EventBridge
   admissions cancel; active attempts still join. Assert `Dev.ShutdownDiscarded`
