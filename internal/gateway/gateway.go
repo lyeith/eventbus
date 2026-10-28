@@ -167,7 +167,7 @@ func (gateway *Gateway) serveRetainedHTTP(w http.ResponseWriter, r *http.Request
 		writeGatewayError(w, http.StatusServiceUnavailable)
 		return
 	}
-	if gateway.retained == nil || r.Method == http.MethodGet && r.URL.Path == gateway.config.DevHealthPath && canonicalRequestPath(r.URL) {
+	if gateway.retained == nil || gateway.isDevHealthRequest(r) && canonicalRequestPath(r.URL) {
 		gateway.serveHTTP(w, r)
 		return
 	}
@@ -204,10 +204,9 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		routeLabel = "{readiness}"
 		return
 	}
-	routingPath, mapped := apiPath(gateway.config.BasePath, r.URL.Path)
+	routingPath, routingParts, mapped := requestRoutePath(gateway.config.BasePath, r.URL)
 	var route *compiledRoute
 	var parameters map[string]string
-	var routingParts []string
 	for i := range gateway.routes {
 		if !mapped {
 			break
@@ -219,9 +218,6 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if candidate.config.RouteKey == "$default" {
 			route, parameters = candidate, map[string]string{}
 			break
-		}
-		if !candidate.template.literal && routingParts == nil {
-			routingParts = splitRequestPath(routingPath)
 		}
 		if values, ok := candidate.template.matchSegments(routingPath, routingParts); ok {
 			route = candidate
@@ -239,11 +235,8 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routeLabel = route.config.Path
-	var redactionParts []string
+	_, redactionParts, _ := requestRoutePath("", r.URL)
 	for _, template := range gateway.redactions {
-		if !template.literal && redactionParts == nil {
-			redactionParts = splitRequestPath(r.URL.Path)
-		}
 		if _, ok := template.matchSegments(r.URL.Path, redactionParts); ok {
 			routeLabel = template.original
 			break
@@ -263,7 +256,7 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		gateway.serveLambda(w, r, route.config, event, response)
 		return
 	}
-	target, headers, err := route.integration.mapRequest(mappingInput{request: r, parameters: parameters, authorizer: response, config: gateway.config, requestID: requestID})
+	target, headers, err := route.integration.mapRequest(mappingInput{request: r, parameters: parameters, escapedParameters: requestEscapedParameters(route.template, event.rawPath), authorizer: response, config: gateway.config, requestID: requestID})
 	if err != nil {
 		writeGatewayError(w, http.StatusInternalServerError)
 		return

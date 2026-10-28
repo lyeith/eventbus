@@ -73,8 +73,19 @@ func (template pathTemplate) match(requestPath string) (map[string]string, bool)
 // use match; both entry points preserve literal slashes and fresh captures.
 func (template pathTemplate) matchSegments(requestPath string, parts []string) (map[string]string, bool) {
 	if template.literal {
-		if requestPath != template.original {
-			return nil, false
+		if parts == nil {
+			if requestPath != template.original {
+				return nil, false
+			}
+		} else {
+			if len(parts) != len(template.segments) {
+				return nil, false
+			}
+			for index, item := range template.segments {
+				if item.literal != parts[index] {
+					return nil, false
+				}
+			}
 		}
 		return map[string]string{}, true
 	}
@@ -145,30 +156,115 @@ func canonicalSegments(raw string) bool {
 	return raw == cleaned || (cleaned != "/" && raw == cleaned+"/")
 }
 
-func canonicalRequestPath(requestURL *url.URL) bool {
-	if requestURL == nil || requestURL.Path == "" || !strings.HasPrefix(requestURL.Path, "/") || strings.ContainsAny(requestURL.Path, "\\\x00\r\n") {
-		return false
+// Request component boundaries come only from literal wire slashes. Decoding
+// a component never gives an encoded separator structural routing authority.
+func requestComponents(requestURL *url.URL) ([]string, bool) {
+	if requestURL == nil || requestURL.Path == "" || !strings.HasPrefix(requestURL.Path, "/") {
+		return nil, false
 	}
-	if !canonicalSegments(requestURL.Path) {
-		return false
-	}
+	raw := requestURL.EscapedPath()
 	if requestURL.RawPath != "" {
-		decoded, err := url.PathUnescape(requestURL.RawPath)
+		raw = requestURL.RawPath
+		decoded, err := url.PathUnescape(raw)
 		if err != nil || decoded != requestURL.Path {
-			return false
+			return nil, false
 		}
-		for _, part := range strings.Split(requestURL.RawPath, "/") {
-			value, err := url.PathUnescape(part)
-			if err != nil || value == "." || value == ".." || strings.ContainsAny(value, "/\\") {
-				return false
+	}
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.ContainsAny(raw, "\\?#") || !canonicalSegments(raw) {
+		return nil, false
+	}
+	for _, value := range []byte(raw) {
+		if value <= 0x20 || value == 0x7f {
+			return nil, false
+		}
+	}
+	if raw == "/" {
+		return []string{}, true
+	}
+	rawParts := splitRequestPath(raw)
+	parts := make([]string, len(rawParts))
+	for index, part := range rawParts {
+		decoded, err := url.PathUnescape(part)
+		if err != nil || decoded == "." || decoded == ".." {
+			return nil, false
+		}
+		for _, value := range []byte(decoded) {
+			if value < 0x20 || value == 0x7f {
+				return nil, false
 			}
 		}
+		parts[index] = decoded
 	}
-	return true
+	return parts, true
 }
 
-// Integration placeholders may occur within path segments; mapped values are
-// assigned to URL.Path rather than parsed as URLs, preventing host/query injection.
+func canonicalRequestPath(requestURL *url.URL) bool {
+	_, valid := requestComponents(requestURL)
+	return valid
+}
+
+// requestRoutePath removes the configured mapping only across original wire
+// component boundaries. Its decoded display path must never be split again.
+func requestRoutePath(base string, requestURL *url.URL) (string, []string, bool) {
+	parts, valid := requestComponents(requestURL)
+	if !valid {
+		return "", nil, false
+	}
+	if base != "" {
+		baseParts := splitRequestPath(base)
+		if len(parts) < len(baseParts) {
+			return "", nil, false
+		}
+		for index, part := range baseParts {
+			if parts[index] != part {
+				return "", nil, false
+			}
+		}
+		parts = parts[len(baseParts):]
+		if len(parts) == 1 && parts[0] == "" {
+			parts = []string{}
+		}
+	}
+	return "/" + strings.Join(parts, "/"), parts, true
+}
+
+// Policy resources must not alias a component containing '/' with an actual
+// child route, or interpret caller data as IAM wildcard syntax. Ordinary
+// decoded spaces and Unicode retain the existing native event contract.
+func routePathIdentity(parts []string) string {
+	encoded := make([]string, len(parts))
+	replacer := strings.NewReplacer("%", "%25", "/", "%2F", "\\", "%5C", "*", "%2A", "?", "%3F")
+	for index, part := range parts {
+		encoded[index] = replacer.Replace(part)
+	}
+	return "/" + strings.Join(encoded, "/")
+}
+
+// Captures retain their exact encoded spelling for outbound HTTP mappings.
+// Route selection has already checked the template against decoded components.
+func requestEscapedParameters(template pathTemplate, rawPath string) map[string]string {
+	parts := splitRequestPath(rawPath)
+	if rawPath == "/" {
+		parts = []string{}
+	}
+	captures := make(map[string]string)
+	for index, item := range template.segments {
+		if index >= len(parts) {
+			return captures
+		}
+		if item.greedy {
+			captures[item.name] = strings.Join(parts[index:], "/")
+			break
+		}
+		if item.name != "" {
+			captures[item.name] = parts[index]
+		}
+	}
+	return captures
+}
+
+// Integration placeholders may occur within path segments. Their substitutions
+// stay in the URL path; they never acquire host, query or fragment authority.
 func parseIntegrationPath(raw string) ([]string, error) {
 	var names []string
 	for remaining := raw; strings.ContainsAny(remaining, "{}"); {

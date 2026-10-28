@@ -28,7 +28,7 @@ func TestDevHealthDefaultAndRequestBoundary(t *testing.T) {
 		{"HEAD", "/health", 401},
 		{"POST", "/health", 401},
 		{"GET", "/health/", 401},
-		{"GET", "/health%2f", 400},
+		{"GET", "/health%2f", 401},
 		{"GET", "/%2e/health", 400},
 	} {
 		t.Run(tc.method+tc.path, func(t *testing.T) {

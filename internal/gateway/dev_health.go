@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strings"
 )
 
 // validateDevHealth owns the harness readiness reservation. Its path is on the
@@ -43,10 +44,17 @@ func (cfg *Config) validateDevHealth() error {
 }
 
 func (gateway *Gateway) serveDevHealth(w http.ResponseWriter, r *http.Request) bool {
-	if r.Method != http.MethodGet || r.URL.Path != gateway.config.DevHealthPath {
+	if !gateway.isDevHealthRequest(r) {
 		return false
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, `{"status":"healthy","service":"eventbus-gateway"}`)
 	return true
+}
+
+// Readiness must not acquire an application route's path through an encoded
+// separator. Both retained admission and dispatch use this same boundary check.
+func (gateway *Gateway) isDevHealthRequest(r *http.Request) bool {
+	return r.URL != nil && r.Method == http.MethodGet && r.URL.Path == gateway.config.DevHealthPath &&
+		strings.Count(r.URL.EscapedPath(), "/") == strings.Count(gateway.config.DevHealthPath, "/")
 }

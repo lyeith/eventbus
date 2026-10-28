@@ -553,3 +553,40 @@ func TestRetainedGatewayGrantAcknowledgementCannotBypassNewCompletionUncertainty
 	require.NoError(t, fixture.gateway.Close())
 	require.Zero(t, fixture.owner.Load().Snapshot().WorkCount)
 }
+
+func TestRetainedReadinessCannotBypassHeldAdmissionThroughEncodedSeparator(t *testing.T) {
+	fixture := newRetainedGatewayFixtureVersion(t, "2.0")
+	cfg := fixture.gateway.config.clone()
+	require.NoError(t, fixture.gateway.Close())
+	cfg.DevHealthPath = "/ready/private"
+	cfg.RetainedOwnerContinuationPort = cfg.Port + 1
+	cfg.Routes[0].Path, cfg.Routes[0].Method, cfg.Routes[0].RouteKey = "/{proxy+}", "ANY", "$default"
+	edge, err := New(cfg, Options{})
+	require.NoError(t, err)
+	fixture.gateway = edge
+	t.Cleanup(func() { require.NoError(t, edge.Close()) })
+	_, err = fixture.owner.Load().Quiesce(t.Context())
+	require.NoError(t, err)
+	continuation := edge.RetainedContinuationHandler()
+	require.NotNil(t, continuation)
+	for _, handler := range []http.Handler{edge, continuation} {
+		for _, path := range []string{"/ready/private", "/ready/%70rivate"} {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			require.Equal(t, http.StatusOK, response.Code, path)
+			require.Contains(t, response.Body.String(), "eventbus-gateway")
+		}
+		for _, path := range []string{"/ready%2Fprivate", "/ready%2fprivate", "/ready%5Cprivate"} {
+			body := &retainedBody{}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, path, body)
+			request.Header.Set("Authorization", "owned")
+			handler.ServeHTTP(response, request)
+			require.Equal(t, http.StatusServiceUnavailable, response.Code, path+": "+response.Body.String())
+			require.Zero(t, body.reads.Load(), "held admission must precede any application body read")
+		}
+	}
+	require.Zero(t, fixture.owner.Load().Snapshot().WorkCount)
+	require.Zero(t, fixture.authorizations.Load())
+	require.Zero(t, fixture.invocations.Load())
+}

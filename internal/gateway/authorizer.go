@@ -127,9 +127,9 @@ func newRequestEvent(cfg Config, route RouteConfig, r *http.Request, parameters 
 	if err != nil {
 		sourceIP = r.RemoteAddr
 	}
-	routedPath, _ := apiPath(cfg.BasePath, r.URL.Path)
+	routedPath, parts, _ := requestRoutePath(cfg.BasePath, r.URL)
 	rawPath := rawAPIPath(cfg.BasePath, r.URL.EscapedPath())
-	arn := "arn:aws:execute-api:" + cfg.Region + ":" + cfg.AccountID + ":" + cfg.APIID + "/" + cfg.Stage + "/" + r.Method + "/" + strings.TrimPrefix(routedPath, "/")
+	arn := "arn:aws:execute-api:" + cfg.Region + ":" + cfg.AccountID + ":" + cfg.APIID + "/" + cfg.Stage + "/" + r.Method + "/" + strings.TrimPrefix(routePathIdentity(parts), "/")
 	contextPath := "/" + cfg.Stage + r.URL.Path
 	if cfg.Stage == "$default" {
 		contextPath = r.URL.Path

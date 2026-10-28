@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -81,7 +82,7 @@ func TestNativeTrailingSlashRoutesPreservePathAndAuthorization(t *testing.T) {
 						{method: "GET", path: "/api/locked/", status: 401},
 						{method: "GET", path: "/api/locked/", route: "/api/locked/", credential: "valid", status: 200},
 						{method: "GET", path: "/api/docs//", status: 400},
-						{method: "GET", path: "/api/docs/%2f", status: 400},
+						{method: "GET", path: "/api/docs/%2f", route: "/api/docs/{proxy+}", proxy: "/", status: 200},
 						{method: "GET", path: "/api/%2e/docs/", status: 400},
 					} {
 						request := httptest.NewRequest(tc.method, "/edge"+tc.path+"?source=original", nil)
@@ -143,11 +144,15 @@ func TestNativeTrailingSlashRoutesPreservePathAndAuthorization(t *testing.T) {
 func assertTrailingSlashEvent(t *testing.T, event map[string]any, version, path, route string) {
 	t.Helper()
 	requestContext := event["requestContext"].(map[string]any)
+	decoded, err := url.PathUnescape(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if version == "2.0" {
-		if event["rawPath"] != path || requestContext["http"].(map[string]any)["path"] != path || event["routeKey"] != "GET "+route {
+		if event["rawPath"] != path || requestContext["http"].(map[string]any)["path"] != decoded || event["routeKey"] != "GET "+route {
 			t.Fatalf("v2 path/route rewritten: %v", event)
 		}
-	} else if event["path"] != "/edge"+path || requestContext["path"] != "/edge"+path || event["resource"] != route {
+	} else if event["path"] != "/edge"+decoded || requestContext["path"] != "/edge"+decoded || event["resource"] != route {
 		t.Fatalf("v1 path/route rewritten: %v", event)
 	}
 }

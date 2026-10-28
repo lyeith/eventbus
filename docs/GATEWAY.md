@@ -59,6 +59,33 @@ precede named parameters within each class. The [AWS route reference](https://do
 defines this precedence but does not specify trailing-slash equivalence. Literal
 slash matching is covered locally; a live AWS parity result is not claimed.
 
+### Escaped path components
+
+Routing splits the wire path at literal slashes, then decodes each component
+once. `/items/example%2Fhistory` can match `/items/{id}` with
+`id: "example/history"`; it cannot select `/items/example/history`.
+`%5C` stays component data and `%252F` becomes a literal `%2F` without
+a second decode. Spaces/Unicode and escaped spelling reach the native event;
+2.0 `rawPath` excludes only the configured API mapping.
+
+Mapping prefixes also match original component boundaries: `/edge%2Fv1`
+cannot select `base_path: /edge/v1`. REQUEST policy ARNs keep separators,
+percent signs and wildcard characters inside a component escaped, so a policy
+for a neighboring literal route cannot authorize its encoded lookalike.
+Malformed escapes, framing/control bytes, dot components and interior empty
+components still fail before invocation. Readiness uses the same boundary rule.
+
+HTTP_PROXY substitutions retain raw path-capture provenance, including renamed
+and greedy captures. Captured text cannot become another template placeholder.
+Explicit recipe-owned mappings keep their existing multi-segment behavior.
+Original query bytes pass through when no recipe query override is selected.
+
+AWS documents [decoded backend parameters and route precedence](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html)
+and [rawPath/API mapping behavior](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html).
+Those references do not specify encoded-separator route normalization.
+Component-preserving matching is verified locally; live AWS normalization parity
+remains unverified. Applications still own their component-boundary decisions.
+
 A native `$default` route is expressed as `route_key: $default`, `method: ANY`
 and `path: /{proxy+}`. The `$default` stage is supported independently.
 

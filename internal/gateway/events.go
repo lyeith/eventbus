@@ -198,8 +198,9 @@ func apiPath(basePath, path string) (string, bool) {
 	return strings.TrimPrefix(path, basePath), true
 }
 
-// Canonical path validation rejects encoded separators. Removing mapping
-// segments also handles equivalent percent-encoded spelling in the raw URL.
+// Mapping names are validated literal components. Removing the same number of
+// wire components preserves every remaining escape spelling and separator;
+// an encoded slash inside one component never increases the removal count.
 func rawAPIPath(basePath, path string) string {
 	if basePath == "" {
 		return path

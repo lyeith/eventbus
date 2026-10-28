@@ -60,7 +60,7 @@ func TestTrailingSlashTemplatesMatchLiterally(t *testing.T) {
 }
 
 func TestCanonicalRequestRetainsSingleTrailingSlash(t *testing.T) {
-	for _, raw := range []string{"/", "/docs", "/docs/", "/docs/assets/", "/docs/a%20b/"} {
+	for _, raw := range []string{"/", "/docs", "/docs/", "/docs/assets/", "/docs/a%20b/", "/docs/%2f", "/docs/a%5Cb"} {
 		requestURL, err := url.Parse(raw)
 		if err != nil {
 			t.Fatal(err)
@@ -70,7 +70,7 @@ func TestCanonicalRequestRetainsSingleTrailingSlash(t *testing.T) {
 			t.Errorf("valid request rejected or rewritten: %q %+v", raw, requestURL)
 		}
 	}
-	for _, raw := range []string{"//", "/docs//", "/docs/./", "/docs/../", "/docs/%2f", "/docs/%2e/"} {
+	for _, raw := range []string{"//", "/docs//", "/docs/./", "/docs/../", "/docs/%2e/"} {
 		requestURL, err := url.ParseRequestURI(raw)
 		if err != nil {
 			t.Fatal(err)

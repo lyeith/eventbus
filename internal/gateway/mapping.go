@@ -10,8 +10,9 @@ import (
 )
 
 type mappingInput struct {
-	request    *http.Request
-	parameters map[string]string
+	request           *http.Request
+	parameters        map[string]string
+	escapedParameters map[string]string
 
 	authorizer authorizerResponse
 	config     Config
@@ -44,6 +45,7 @@ type requestMapping struct {
 // these URL/query/slice values; each request owns its output URL and headers.
 type compiledIntegration struct {
 	target           url.URL
+	rawPath          string
 	query            url.Values
 	placeholders     []string
 	parameters       []requestMapping
@@ -112,7 +114,7 @@ func compileIntegration(config IntegrationConfig) (*compiledIntegration, error) 
 	if err != nil {
 		return nil, err
 	}
-	plan := &compiledIntegration{target: *target, query: target.Query(), placeholders: placeholders, removeHeaders: slices.Clone(config.RemoveHeaders)}
+	plan := &compiledIntegration{target: *target, rawPath: restorePathPlaceholders(target.EscapedPath(), placeholders), query: target.Query(), placeholders: placeholders, removeHeaders: slices.Clone(config.RemoveHeaders)}
 	destinations := make([]string, 0, len(config.RequestParameters))
 	for destination := range config.RequestParameters {
 		destinations = append(destinations, destination)
@@ -153,9 +155,14 @@ func (plan *compiledIntegration) mapRequest(input mappingInput) (*url.URL, http.
 		header.Del(name)
 	}
 	pathValues := make(map[string]string, len(input.parameters))
+	escapedValues := make(map[string]string, len(input.escapedParameters))
 	for key, value := range input.parameters {
 		pathValues[key] = value
 	}
+	for key, value := range input.escapedParameters {
+		escapedValues[key] = value
+	}
+	queryModified := plan.target.RawQuery != ""
 	sourceQuery := input.request.URL.Query()
 	query := sourceQuery
 	if plan.needsSourceQuery {
@@ -174,32 +181,65 @@ func (plan *compiledIntegration) mapRequest(input mappingInput) (*url.URL, http.
 		switch mapping.kind {
 		case "path":
 			pathValues[mapping.name] = value
+			delete(escapedValues, mapping.name)
+			if mapping.source.kind == mappingPath {
+				if raw, ok := input.escapedParameters[mapping.source.name]; ok {
+					escapedValues[mapping.name] = raw
+				}
+			}
 		case "header":
 			if strings.ContainsAny(value, "\r\n\x00") {
 				return nil, nil, fmt.Errorf("integration header mapping contains invalid characters")
 			}
 			header.Set(mapping.name, value)
 		case "querystring":
+			queryModified = true
 			query.Set(mapping.name, value)
 		}
 	}
-	// Retain the recipe's sequential replacement semantics, including repeated
-	// placeholders and values containing a later placeholder.
+	// Exact raw captures keep their original component boundaries and percent
+	// spelling. Explicit recipe-owned values retain the existing slash expansion
+	// and sequential placeholder semantics, without interpreting captures again.
+	fragments := []integrationPathFragment{{value: plan.rawPath}}
 	for _, name := range plan.placeholders {
 		value, ok := pathValues[name]
-		if !ok || value == "" || strings.ContainsAny(value, "\\\x00\r\n") {
+		if !ok || value == "" {
 			return nil, nil, fmt.Errorf("integration path mapping is absent or invalid")
 		}
-		target.Path = strings.ReplaceAll(target.Path, "{"+name+"}", value)
+		raw, hasCapture := escapedValues[name]
+		if !hasCapture {
+			if strings.ContainsAny(value, "\\\x00\r\n") {
+				return nil, nil, fmt.Errorf("integration path mapping is absent or invalid")
+			}
+			raw = restorePathPlaceholders((&url.URL{Path: value}).EscapedPath(), plan.placeholders)
+		}
+		fragments = replaceIntegrationPathPlaceholder(fragments, name, raw, hasCapture)
 	}
-	if target.Path == "" {
-		target.Path = "/"
+	var pathBuilder strings.Builder
+	for _, fragment := range fragments {
+		pathBuilder.WriteString(fragment.value)
 	}
+	rawPath := pathBuilder.String()
+	if rawPath == "" {
+		rawPath = "/"
+	}
+	decoded, err := url.PathUnescape(rawPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("integration mapping produced an invalid path")
+	}
+	target.Path = decoded
 	target.RawPath = ""
+	if target.EscapedPath() != rawPath {
+		target.RawPath = rawPath
+	}
 	if !canonicalRequestPath(&target) {
 		return nil, nil, fmt.Errorf("integration mapping produced an ambiguous path")
 	}
-	target.RawQuery = query.Encode()
+	if queryModified {
+		target.RawQuery = query.Encode()
+	} else {
+		target.RawQuery = input.request.URL.RawQuery
+	}
 	return &target, header, nil
 }
 
@@ -215,4 +255,40 @@ func sanitizeProxyHeaders(header http.Header) {
 	for _, name := range []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
 		header.Del(name)
 	}
+}
+
+func restorePathPlaceholders(raw string, names []string) string {
+	for _, name := range names {
+		for _, open := range []string{"%7B", "%7b"} {
+			for _, close := range []string{"%7D", "%7d"} {
+				raw = strings.ReplaceAll(raw, open+name+close, "{"+name+"}")
+			}
+		}
+	}
+	return raw
+}
+
+// Captured path data is opaque to later placeholder substitutions. Recipe-owned
+// values remain expandable to preserve the existing sequential mapping contract.
+type integrationPathFragment struct {
+	value    string
+	captured bool
+}
+
+func replaceIntegrationPathPlaceholder(fragments []integrationPathFragment, name, value string, captured bool) []integrationPathFragment {
+	var result []integrationPathFragment
+	for _, fragment := range fragments {
+		if fragment.captured {
+			result = append(result, fragment)
+			continue
+		}
+		parts := strings.Split(fragment.value, "{"+name+"}")
+		for index, part := range parts {
+			if index > 0 {
+				result = append(result, integrationPathFragment{value: value, captured: captured})
+			}
+			result = append(result, integrationPathFragment{value: part})
+		}
+	}
+	return result
 }
