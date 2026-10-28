@@ -75,6 +75,11 @@ jobs:
       - name: Smoke fixture contracts
         shell: bash
         run: set -o pipefail; uv run --frozen python -m unittest discover -s tests/sdk/python -p 'test_*.py' 2>&1 | tee sdk-contracts.log
+      - name: Offline AWS gateway observation contracts
+        shell: bash
+        run: set -o pipefail; go test -race -count=1 -timeout 3m -tags awsparity ./tests/sdk -run '^(TestAWSParityConfig|TestAWSParitySanitize)$' 2>&1 | tee sdk-aws-parity-offline.log
+        env:
+          EVENTBUS_AWS_PARITY_PYTHON: ${{ github.workspace }}/.venv/bin/python
       - name: Real SDK smoke
         shell: bash
         run: set -o pipefail; go test -race -count=1 -timeout 15m -tags sdksmoke ./tests/sdk 2>&1 | tee sdk-smoke.log

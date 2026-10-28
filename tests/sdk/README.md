@@ -259,3 +259,85 @@ Diagnostics, delivery evidence and a final retained-owner barrier prove joined
 failures, success, receipt settlement and worker cleanup. Terminal selection
 checks await the native owner snapshot after JSONL evidence becomes readable.
 This test runs in the normal `sdksmoke` lane and needs no additional dependency.
+
+## Optional live AWS gateway observations
+
+The separate `awsparity` tag contains an observer for **pre-existing, disposable
+echo fixtures**. It creates or changes no AWS resources. Ordinary SDK tests never
+run it. Run the offline configuration/sanitization checks without contacting AWS:
+
+```sh
+go test -count=1 -tags awsparity ./tests/sdk \
+  -run '^(TestAWSParityConfig|TestAWSParitySanitize)$'
+```
+
+An operator must first provide HTTP API payload-v2 and/or REST API payload-v1
+Lambda proxy fixtures. Each selected HTTPS URL must end in
+`/__eventbus_aws_parity__/` (a stage or domain mapping may precede it).
+Both `GET /__eventbus_aws_parity__/control` and
+`GET /__eventbus_aws_parity__/{proxy+}` must use AWS_IAM authorization,
+allow the selected caller, and invoke an echo Lambda. Its proxy response must
+have `X-EventBus-AWS-Parity: echo-v1` and a JSON body containing the
+**unmodified native event**. Use only these dedicated routes; the observer will
+send synthetic escaped paths and repeated/raw query variants below the prefix.
+It refuses redirects and requires a successful marked control echo followed by
+a 403 response to a tampered signature before sending the case matrix.
+
+For route-selection comparison, optionally add sibling IAM echo routes
+`GET /__eventbus_aws_parity__/items/Type/{id}` and
+`GET /__eventbus_aws_parity__/items/Type/example/history`. The greedy route alone
+measures event projection; these siblings reveal encoded-versus-structural
+route selection.
+
+Select a named profile from the standard `~/.aws/config` and
+`~/.aws/credentials` files and an explicit region (including sovereign region names). SDK-supported SSO,
+role/source-profile, process and static profiles work; ambient
+`credential_source`, provider-less profiles, inherited credential keys,
+`AWS_PROFILE` selection and metadata fallback do not. Profile refresh may
+contact its configured AWS credential services. Custom shared-file environment
+overrides are not used. No credential discovery or AWS call occurs in the
+offline checks.
+
+```sh
+EVENTBUS_AWS_PARITY=1 \
+EVENTBUS_AWS_PARITY_PROFILE=explicit-parity-profile \
+EVENTBUS_AWS_PARITY_REGION=eu-west-1 \
+EVENTBUS_AWS_PARITY_HTTP_V2_URL=https://HTTP_API_ID.execute-api.eu-west-1.amazonaws.com/__eventbus_aws_parity__/ \
+EVENTBUS_AWS_PARITY_REST_URL=https://REST_API_ID.execute-api.eu-west-1.amazonaws.com/test/__eventbus_aws_parity__/ \
+EVENTBUS_AWS_PARITY_OUTPUT=/absolute/private/new-gateway-observations.jsonl \
+go test -count=1 -timeout 10m -tags awsparity ./tests/sdk \
+  -run '^TestAWSGatewayParity$'
+```
+
+Either endpoint variable may be omitted; at least one is required. The output
+must be a new absolute path: it is created exclusively with mode `0600`.
+Compact JSONL retains statuses, synthetic path/capture/route fields, redacted
+identity ARN types, and signature outcomes. It never stores full responses,
+headers, tokens or credentials. Remove the private artifact when no longer needed.
+
+Observations cover structural/encoded slash, backslash, double escape, percent,
+space, Unicode, dot/repeated-slash paths and query variants. Every row labels
+`signer` and `mode` and records `requestedQuery` versus actual `wireQuery`.
+The Go signer runs in two modes: `serialized-query` sends its normalized query;
+`original-query` restores the original query after signing. The latter measures
+AWS acceptance of strict canonical signatures over noncanonical wire bytes,
+not botocore's raw-URL canonical signature. Both modes require their own signed
+control echo and tampered-signature 403; the second mode runs only query cases.
+
+Optionally set `EVENTBUS_AWS_PARITY_PYTHON` to the absolute existing frozen
+interpreter to add `botocore/1.40.76/SigV4Auth`, `original-query` observations.
+Its exact version is checked. This signer uses `AWSRequest(url=originalURL)`
+and explicitly supplied credentials in memory/stdin; it never loads an AWS
+credential chain or sends requests. The bounded child inherits no AWS, profile,
+proxy or Python control settings, and its private headers are never logged.
+No Python is discovered or installed. The same option enables an **offline**
+proof using fake credentials and a fake HTTP transport:
+
+```sh
+EVENTBUS_AWS_PARITY_PYTHON="$PWD/.venv/bin/python" \
+go test -count=1 -tags awsparity ./tests/sdk \
+  -run '^(TestAWSParityConfig|TestAWSParitySanitize)$'
+```
+
+HTTP rejections are observations rather than parity failures; no live AWS
+comparison is implied by passing the offline checks.

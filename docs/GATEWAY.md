@@ -83,8 +83,11 @@ Original query bytes pass through when no recipe query override is selected.
 AWS documents [decoded backend parameters and route precedence](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html)
 and [rawPath/API mapping behavior](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html).
 Those references do not specify encoded-separator route normalization.
-Component-preserving matching is verified locally; live AWS normalization parity
-remains unverified. Applications still own their component-boundary decisions.
+Component-preserving matching is verified locally. AWS-maintained HTTP v2
+fixtures also preserve escaped slash/percent spelling in `requestContext.http.path`;
+that field and its authorizer identity source share one protected decode.
+Live AWS normalization parity remains unverified. Applications still own
+their component-boundary decisions.
 
 A native `$default` route is expressed as `route_key: $default`, `method: ANY`
 and `path: /{proxy+}`. The `$default` stage is supported independently.

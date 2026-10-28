@@ -286,3 +286,58 @@ func TestEscapedPathRedactionUsesOriginalComponents(t *testing.T) {
 		t.Fatalf("redaction matched decoded structural alias or exposed component: %s", logs.String())
 	}
 }
+
+// The escaped-slash/percent context expectations come from AWS-maintained HTTP
+// API v2 consumer fixtures. Captures/v1 assert existing local behavior; these
+// cases do not establish route-selection parity: https://github.com/aws/aws-lambda-dotnet/tree/master/Libraries/test/Amazon.Lambda.AspNetCoreServer.Test
+func TestHTTPV2ContextPathPreservesProvenEscapesWithoutChangingCapturesOrV1(t *testing.T) {
+	for _, tc := range []struct {
+		raw, contextPath, captured string
+	}{
+		{"example%2Fhistory", "/items/example%2Fhistory", "example/history"},
+		{"example%2fhistory", "/items/example%2fhistory", "example/history"},
+		{"foo%25bar", "/items/foo%25bar", "foo%bar"},
+		{"foo%25%2Fbar", "/items/foo%25%2Fbar", "foo%/bar"},
+		{"%252F", "/items/%252F", "%2F"},
+		{"a%20b", "/items/a b", "a b"},
+		{"%E9%9B%AA", "/items/雪", "雪"},
+		{"a+b", "/items/a+b", "a+b"},
+		// Backslash normalization has no equivalent AWS fixture; keep existing
+		// decoded behavior here while rawPath stays exact for observation.
+		{"a%5Cb", "/items/a\\b", "a\\b"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "/edge/items/"+tc.raw+"?x=one%20two&x=second", nil)
+			before := *request.URL
+			event := newRequestEvent(Config{BasePath: "/edge", Stage: "$default"}, RouteConfig{Path: "/items/{id}", RouteKey: "GET /items/{id}"},
+				request, map[string]string{"id": tc.captured}, "fixture-request")
+			for _, native := range []map[string]any{
+				httpV2Event(event),
+				authorizerPayload(event, "2.0", nil).(map[string]any),
+			} {
+				context := native["requestContext"].(map[string]any)
+				if native["rawPath"] != "/items/"+tc.raw || context["http"].(map[string]string)["path"] != tc.contextPath {
+					t.Fatalf("native HTTP v2 path changed: %v", native)
+				}
+				if native["pathParameters"].(map[string]string)["id"] != tc.captured || native["rawQueryString"] != request.URL.RawQuery {
+					t.Fatalf("event projection changed decoded captures or query: %v", native)
+				}
+			}
+			identity, exists := nativeIdentityValue("$context.http.path", event)
+			if !exists || identity != tc.contextPath {
+				t.Fatalf("authorizer identity disagrees with native HTTP context: %q", identity)
+			}
+			legacyIdentity, exists := nativeIdentityValue("$context.path", event)
+			if !exists || legacyIdentity != event.apiPath {
+				t.Fatalf("HTTPv2 correction changed the separate legacy identity: %q", legacyIdentity)
+			}
+			v1 := httpV1Event(event)
+			if v1["path"] != request.URL.Path || v1["requestContext"].(map[string]any)["path"] != request.URL.Path {
+				t.Fatalf("HTTPv2 correction changed v1: %v", v1)
+			}
+			if *request.URL != before {
+				t.Fatal("event projection mutated incoming URL")
+			}
+		})
+	}
+}

@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"maps"
+	"net/url"
 	"strings"
 )
 
@@ -42,7 +43,7 @@ func httpV2Event(event requestEvent) map[string]any {
 			"accountId": context.AccountID, "apiId": context.APIID, "domainName": context.DomainName,
 			"domainPrefix": strings.Split(context.DomainName, ".")[0], "requestId": context.RequestID,
 			"routeKey": event.routeKey, "stage": context.Stage, "time": context.RequestTime, "timeEpoch": context.RequestTimeEpoch,
-			"http": map[string]string{"method": event.HTTPMethod, "path": event.apiPath, "protocol": context.Protocol, "sourceIp": context.Identity.SourceIP, "userAgent": context.Identity.UserAgent},
+			"http": map[string]string{"method": event.HTTPMethod, "path": httpV2ContextPath(event), "protocol": context.Protocol, "sourceIp": context.Identity.SourceIP, "userAgent": context.Identity.UserAgent},
 		},
 	}
 	// Native HTTP events retain each Cookie header value and its original text.
@@ -53,6 +54,25 @@ func httpV2Event(event requestEvent) map[string]any {
 		}
 	}
 	return result
+}
+
+// AWS's HTTP API v2 slash and escaped-percent fixtures retain these original
+// escapes in requestContext.http.path. Parameters retain their separate owner.
+// Keep this projection narrow: other path decoding and all v1 fields retain
+// their existing behavior until the opt-in AWS observer supplies more evidence.
+var httpV2ContextPathEscapes = strings.NewReplacer("%25", "%2525", "%2F", "%252F", "%2f", "%252f")
+
+func httpV2ContextPath(event requestEvent) string {
+	if event.rawPath == "" {
+		return event.apiPath
+	}
+	// NewReplacer processes original matches once, so a literal %252F cannot
+	// become a newly interpreted separator while decoding the other bytes.
+	value, err := url.PathUnescape(httpV2ContextPathEscapes.Replace(event.rawPath))
+	if err != nil {
+		return event.apiPath // Incoming paths have already passed native validation.
+	}
+	return value
 }
 
 func httpV1Event(event requestEvent) map[string]any {
@@ -109,7 +129,9 @@ func nativeIdentityValue(source string, event requestEvent) (string, bool) {
 		return event.routeKey, true
 	case "$context.http.method":
 		return event.HTTPMethod, true
-	case "$context.http.path", "$context.path":
+	case "$context.http.path":
+		return httpV2ContextPath(event), true
+	case "$context.path":
 		return event.apiPath, true
 	case "$context.http.sourceIp":
 		return event.RequestContext.Identity.SourceIP, true
