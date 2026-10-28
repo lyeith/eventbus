@@ -1,45 +1,52 @@
 # Handoff
 
-Canonical SSD /home/spite/Projects/eventbus, main. User authorized completion,
-push and publication of #48/#49 as v0.21.0. Source fixes and final local checks
-are complete; release verification/publication is next.
+Canonical SSD /home/spite/Projects/eventbus, main. #48/#49 published as latest
+v0.21.0 on 2026-10-28:
+https://github.com/lyeith/eventbus/releases/tag/v0.21.0
 
-Ownership:
-- routes.go owns once-decoded wire component routing and safe policy identity.
-  mapping.go retains exact raw-capture provenance without recursive replacement;
-  trusted recipe mappings retain their existing multi-segment behavior.
-- dev_health.go owns the shared reserved-readiness boundary, including retained
-  ingress/continuations. Escaped separators cannot bypass held admission.
-- iam.go owns native SigV4 canonical request verification against original bytes.
-  dev_iam.go owns explicit local static key/token/principal fixtures.
-- gateway.go composes selected authentication, preserving a detached integration
-  view. Verified request bytes are reused by HTTP proxy and Lambda event owners.
-  events.go projects v2 IAM / v1 identity; API owner remains a separate account.
-- No consuming application dependency, new dependency or alternate verifier.
+Release evidence:
+- Tag/source4276a0685328f1dea2164b23df3b64cb9b21439f.
+- CI40661265617 success: full race/vet, frozen SDK/fixture contracts, unchanged
+  Express/Swagger handlers. /tmp/eventbus-v0.21.0-source-ci.log.
+- All eight Linux/macOS amd64/arm64 service/gateway assets: CGO0, correct target
+  formats, v0.21.0 module version, exact revision, vcs.modified=false.
+  /tmp/eventbus-v0.21.0-artifact-audit.log.
+- Actual Linux amd64 gateway SDK HTTP -> native Go Lambda race proof1.897s;
+  actual Mac arm64 package proof1.959s, both payload versions. Encoded paths,
+  exact query, caller/API accounts, tokens, unsigned/tamper rejection before
+  invoke, actor spoofing and REQUEST/anonymous/NoAuth isolation.
+  /tmp/eventbus-v0.21.0-linux-gateway-package.log and ...-mac-sdk-race.log.
+- Service binary acceptance here is hash/metadata/format/help, no new runtime
+  behavior claimed. Other CPU targets cross-build/metadata verified only.
+- All nine public downloads match built SHA; GitHub latest/public/nonprerelease.
+  /tmp/eventbus-v0.21.0-download-verification.log.
 
-Verification:
-- /tmp/eventbus-v0.21.0-final-race.log: gateway15.515s, cmd/gateway2.201s,
-  tests1.096s, all passed with race detector.
-- /tmp/eventbus-v0.21.0-final-vet.log: integration/sdksmoke-tagged vet passed.
-- /tmp/eventbus-v0.21.0-final-swagger.log: unchanged Express/Swagger smoke10.419s.
-- Native real SDK HTTP -> provided Go process proof covers v1/v2 identity, raw
-  components/base paths/query bytes, unsigned/tampered rejection before invoke,
-  token credentials, actor spoofing controls and NoAuth/REQUEST separation.
-- Optional EVENTBUS_SMOKE_GATEWAY_BINARY reuses that maintained proof against the
-  actual CLI package, with private0600 YAML, child readiness, SIGTERM/join/rebind.
-- Independent frozen botocore control and HTTP_PROXY body-reuse proof pass.
-- Independent source review found no blocker; readiness gap fixed and tested
-  with real REQUEST fixture before body read, authorization and invocation.
-- Pre-reboot temporary logs disappeared; above final evidence was saved fresh.
+Owners:
+- routes.go: once-decoded wire component routing and safe policy identity.
+  mapping.go: exact raw-capture provenance without recursive substitution;
+  explicit trusted recipe mappings retain existing multi-segment behavior.
+- dev_health.go: shared readiness boundary for normal/retained ingress.
+- iam.go: native header SigV4 verification against original bytes.
+  dev_iam.go: explicit local key/token/principal fixture binding.
+- gateway.go composes authentication and a detached integration view;
+  events.go projects IAM caller separately from API owner, payload reused once.
+- Native capability gaps stay core; local fixture controls stay named dev adapters.
 
-Qualification:
-- Live AWS encoded-route normalization and noncanonical raw-URL query parity are
-  unverified. Docs state component-safe local behavior and strict SDK query form.
-- No presign/SigV4a/streaming/unsigned-payload/STS/refresh/IAM policy evaluation.
-  Every configured key is admitted to this gateway's IAM routes.
+Cleanup:
+- Build305bbf5b86bd4dab921cfe2d884366bf, artifact audit
+  a02b6c89516f461dbfd6c0011226a75b, Linux package
+  1e472155ebb14fd0a05a1964bafad94c, downloads
+  7b24ee8efd514bdea730034603e41f8b quiescent; success scratch auto-removed.
+- Earlier failed test scratch was empty/quiescent and removed.
+- Owned dist/output/notes/downloads removed. Mac export/packages/tempdriver28MiB
+  removed after process/open-file inspection; ...-mac-cleanup.log copied to SSD.
+- No task worktrees/branches/environments, owned processes, dependencies or live/
+  default-stack/cache-policy/laptop Plans changes. Evidence uses host retention.
 
-Next: push commits, await source CI, tag/build all eight CGO-free targets and
-SHA256SUMS; actual Linux amd64/Mac arm64 packaged gateway SDK acceptance; publish
-and verify all public downloads; remove owned output and update these documents.
-No live/default-stack changes, task worktrees/environments or dependencies added.
-Managed success scratch auto-removes; failed-run scratch has existing6h expiry.
+Next:
+User requested work to close remaining gateway parity gaps after publication.
+Read-only primary-source audits in progress; no post-release source changes yet.
+Check Date-header signing, presigning/payload forms, native invoke permissions
+and explicit local credential expiry/rotation seams. AWS docs exclude SigV4a
+for HTTP/WebSocket APIs; REST supports it. No live AWS path/query comparison or
+credentials/provisioning used. IAM/STS provisioning remains separate scope.

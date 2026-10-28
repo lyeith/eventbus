@@ -1,40 +1,39 @@
 # EventBus state
 
 Canonical SSD /home/spite/Projects/eventbus, main; standalone public MIT AWS
-emulator and agent development harness. #48/#49 implemented; v0.21.0 publication
-authorized and in progress. Latest public release remains v0.20.0 until verified.
+emulator and agent development harness. #48/#49 published as latest v0.21.0:
+https://github.com/lyeith/eventbus/releases/tag/v0.21.0
 
-#48:
-- Original wire components drive route/base mapping and REQUEST policy identity.
-  Encoded slash/backslash stay component data; raw Lambda paths and renamed/
-  greedy HTTP captures preserve original escapes. Original query bytes survive.
-- Readiness cannot alias an encoded separator, including held root/continuation
-  ingress. Malformed framing, dot and interior-empty components remain refused.
+Publication complete on 2026-10-28:
+- Annotated tag/source4276a0685328f1dea2164b23df3b64cb9b21439f.
+- Source CI40661265617 passed full Go race/vet, frozen SDK/fixture contracts and
+  unchanged Express/Swagger handlers.
+- Eight CGO-free service/gateway binaries: Linux/macOS amd64/arm64. Target
+  formats, v0.21.0 module version, exact revision and clean metadata verified.
+- All nine public downloads match the built manifest; eight checksums passed.
+  GitHub confirms latest/public/non-prerelease.
+- Actual Linux amd64 and Mac arm64 gateway packages pass the maintained native
+  SDK-signed HTTP -> real Go Lambda race proof, both event versions, caller/API
+  account separation, escaped paths/query bytes, tokens and tamper refusals.
+  Both service/gateway help commands pass. Other targets cross-build only.
 
-#49:
-- Native header SigV4 execute-api verification owns original URL/headers/body.
-  Explicit dev_iam.go key/secret/token-to-principal registry supplies identity;
-  config snapshots are private. No ambient credentials or second verifier.
-- AWS_IAM routes project verified v2 authorizer.iam / v1 identity separately from
-  the API owner account. Anonymous, REQUEST and NoAuth contracts remain separate.
-- Ten-MiB hashing bound; verified bytes reused once by HTTP/Lambda integrations.
-  Six-MiB encoded Lambda Invoke limit remains.
+#48 preserves wire component boundaries through routing/base mapping, REQUEST
+policy identity and HTTP proxy captures. Raw Lambda paths/query survive.
+Readiness cannot alias encoded separators, including held continuation ingress.
+#49 verifies original header SigV4 request bytes with explicit local static
+identity bindings; v2 IAM/v1 identity projection and one verified-body owner.
+REQUEST/anonymous/NoAuth stay separate. No dependencies added.
 
-Verification on 2026-10-28 after SSD restart:
-- Affected gateway/cmd/tests race passed; all-tag gateway/cmd vet passed.
-- Unchanged real Express/Swagger handler smoke passed.
-- Native SDK-signed actual HTTP -> real Go Lambda covers both event versions,
-  escaped components, session credentials, tamper/unsigned controls, NoAuth and
-  exact invocation counts. Independent frozen botocore signature control passed.
-- Raw logs: /tmp/eventbus-v0.21.0-final-{race,vet,swagger}.log.
+Cleanup complete:
+- Managed build/test/download owners quiescent; success scratch auto-removed.
+  Earlier failed scratch inspected empty/quiescent and removed.
+- Owned dist binaries/manifest/notes and private downloads removed after public
+  verification. Mac source/package/driver export28MiB removed after process/
+  open-file inspection. No owned processes, worktrees or environments remain.
+- Raw /tmp/eventbus-v0.21.0-* evidence follows existing host retention, no pins.
+  No live/default-stack/cache-policy or laptop Plans changes.
 
-Limits:
-- No live AWS encoded-route normalization or noncanonical raw-query comparison.
-  Strict standard SDK query serialization is qualified; no fallback verifier.
-- Presign/SigV4a/streaming/unsigned payloads, STS/refresh and IAM policies remain
-  documented core gaps. Every registered key is allowed on this gateway's IAM
-  routes. Static local binding is explicitly a harness fixture.
-
-Next: push source, green CI, tag/build v0.21.0, actual Linux amd64/Mac arm64
-gateway acceptance, public assets/checksums, owned-output cleanup and final docs.
-No dependencies added; no live/default stack or laptop Plans changes.
+Next, user requested remaining gateway parity gaps closed after publication.
+Primary-source audit in progress: request signing forms, IAM invoke policies and
+credential lifecycle, encoded routing/query qualification. IAM/STS provisioning
+remains separate service scope. No post-release source changes yet.
