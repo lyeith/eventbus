@@ -377,3 +377,16 @@ Application status assertions belong to consumers; a capture, GIF or event
 admission alone does not attest application completion. See
 [Firehose](FIREHOSE.md#acceptance-retries-and-shutdown) and
 [local SES views](SES.md#local-email-views-and-tracking-pixels).
+
+## Escaped HTTP components and authenticated IAM callers
+
+| Ticket | Classification and owner | Contract |
+| --- | --- | --- |
+| [#48](https://github.com/lyeith/eventbus/issues/48) Encoded components | Native gateway route/event/mapping owners; readiness stays in dev_health | Decode components once, preserve wire boundaries/raw paths/query, distinct policy identity, raw capture provenance and no encoded readiness alias |
+| [#49](https://github.com/lyeith/eventbus/issues/49) Verified caller identity | Native SigV4 verifier/event projection; dev_iam static fixture adapter | Original signed request -> configured caller, separate API/caller accounts, bounded shared body read, REQUEST/anonymous independence |
+
+No application fallback actor, trusted identity header, second ingress verifier
+or consuming application dependency is added. Local credential bindings do not
+implement IAM policy management. Presigning/SigV4a/streaming/STS remain core
+gaps; encoded-separator normalization and noncanonical direct-URL signing have
+not been compared against live AWS. See [gateway contracts](GATEWAY.md).

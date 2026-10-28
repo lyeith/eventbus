@@ -33,7 +33,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 - [Retained-owner recovery](docs/RETAINED-OWNER.md): opt-in source/callback fencing,
   joined native owners, declared cleanup and explicit resume for one exclusive suite owner.
 - [Cognito contracts](docs/COGNITO.md): lifecycle, SRP, custom triggers and persistence.
-- [API gateway](docs/GATEWAY.md): REST/HTTP REQUEST authorizers and HTTP/Lambda proxy integrations.
+- [API gateway](docs/GATEWAY.md): REST/HTTP REQUEST authorizers, local SigV4 IAM identity and HTTP/Lambda proxy integrations.
 - [Lambda execution](docs/LAMBDA.md): application-owned handlers, opt-in warm workers, local reload and private diagnostics with optional failure-only retention.
 - [Runtime fault controls](docs/LAMBDA.md#one-shot-worker-crash): opt-in exact-request worker crashes for real SNS/SQS flows.
 - [S3 notifications](docs/S3-NOTIFICATIONS.md): validated LocalStack uploads into registered EventBus Lambda targets.
@@ -60,7 +60,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 | Cognito | Pools/clients with native discovery and user lifecycle; password/admin/refresh/SRP auth, application-owned Node custom challenges, TOTP, native configuration/schema/client token policy, verification/recovery capture, signed JWT/JWKS and revocation. [Operation coverage](docs/COGNITO.md). |
 | SNS | All 42 operations: topics/subscriptions, filters, batch/FIFO publishing, SMS and mobile push. SQS/Firehose delivery and registered Lambda execution are local; external delivery is captured. [Contracts](docs/MESSAGING.md). |
 | SQS | All 23 operations, including direct/batch sending, attributes/checksums, visibility, FIFO, policies/tags and DLQ redrive. [Contracts](docs/MESSAGING.md). |
-| API gateway | Separate `eventbus-gateway` executable; REST/HTTP API REQUEST authorizers, IAM/simple responses, HTTP_PROXY and AWS_PROXY 1.0/2.0. [Contracts](docs/GATEWAY.md). |
+| API gateway | Separate `eventbus-gateway` executable; REST/HTTP REQUEST authorizers, local AWS_IAM SigV4 identity, policy/simple responses, HTTP_PROXY and AWS_PROXY 1.0/2.0. [Contracts](docs/GATEWAY.md). |
 | Lambda | Synchronous/async Invoke, registered-target GetFunction metadata, and opt-in bounded warm Python/Node workers. Go/custom runtimes and command handlers remain fresh. [Execution](docs/LAMBDA.md), [S3 routing](docs/S3-NOTIFICATIONS.md). |
 | Scheduler | Create/Get/Delete one-time schedules, local Lambda admission, named fixture groups and cancellation. |
 | EventBridge Rules | Default-bus recurring rate rules, rule/target CRUD and readback, Lambda admission and Input/InputPath/InputTransformer. Cron, event patterns and other target types return explicit errors. [Contracts](docs/EVENTBRIDGE.md). |
@@ -74,7 +74,7 @@ Point the selected app SDK clients at that endpoint, using local credentials and
 
 The application owns SDK configuration, seeds, resource names, provisioning and
 consumer handlers. S3 and DynamoDB run separately. EventBus implements a local
-AWS subset; IAM enforcement, SMTP and full production AWS semantics are outside
+AWS subset; full IAM policy enforcement, SMTP and full production AWS semantics are outside
 its current scope.
 
 Cognito identities and signing keys persist in SQLite. SES, SNS and Cognito notification JSONL files append across

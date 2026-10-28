@@ -191,7 +191,7 @@ a stable expected issuer. See [endpoint setup](RETAINED-OWNER.md#configure-the-o
 | --- | --- |
 | REST/HTTP 1.0 REQUEST | Method ARN, headers/query including repeated values, path/stage parameters and native request context; no body. |
 | HTTP 2.0 REQUEST | Route ARN/key, raw path/query, identity array, cookies and HTTP context; no body. |
-| IAM result | Invoke action, string/array actions/resources, wildcards, implicit deny and explicit Deny precedence. |
+| REQUEST policy result | Invoke action, string/array actions/resources, wildcards, implicit deny and explicit Deny precedence. |
 | Simple result | `isAuthorized` only when 2.0 plus `enable_simple_responses`; structured 2.0 context is retained. |
 | Missing/empty selected HTTP API identity | 401 before Invoke, even at TTL zero. |
 | Function error `Unauthorized` / valid refusal | 401 / 403. |
@@ -207,6 +207,75 @@ routes, matching native behavior. Native HTTP identity syntax includes
 `$request.header.NAME`, `$request.querystring.NAME`, `$stageVariables.NAME` and supported `$context` fields.
 Native HTTP authorizers allow at most ten seconds; integrations at most thirty.
 Invoke requests/results are capped at 6 MiB including JSON/base64 overhead.
+
+## Local IAM caller authentication
+
+Set a route's native `authorization_type: AWS_IAM` and bind explicit local
+credentials to a caller identity. The gateway verifies the real incoming SigV4
+request; the registry is a local fixture, with no IAM/STS provisioning or policy
+evaluation. Every registered credential is allowed on this gateway's IAM routes.
+
+```yaml
+region: us-east-1
+account_id: "111111111111"  # API owner
+iam_credentials:
+  LOCAL_SERVICE:
+    secret_access_key: local-only-example-secret
+    # session_token: optional-local-session-token
+    principal_arn: arn:aws:iam::222222222222:user/service
+    account_id: "222222222222"  # authenticated caller
+    user_id: AIDAEXAMPLE        # optional; never inferred from the ARN
+    caller_id: AIDAEXAMPLE      # optional
+routes:
+  - path: /{proxy+}
+    method: ANY
+    route_key: $default
+    authorization_type: AWS_IAM
+    integration:
+      type: AWS_PROXY
+      payload_format_version: "2.0"
+      invoke_url: http://localhost:14100/2015-03-31/functions/application/invocations
+```
+
+Use an ordinary SDK SigV4 signer with service `execute-api`, the configured
+region and these local credentials. Sign the full listener URL, including any
+API mapping, original headers and actual body bytes. No identity header/body
+field or separate ingress verifier is needed. Principal ARNs must match their
+explicit caller account; optional user/caller IDs remain fixture facts.
+
+The supported form is header `AWS4-HMAC-SHA256` with signed host and
+`x-amz-date`, matching date/region/service scope and a timestamp within five
+minutes of gateway UTC. A configured session token must match and be signed.
+The verifier hashes the actual payload. Ambiguous duplicate auth headers,
+malformed queries and missing/invalid credentials return 403 before integration.
+Body read errors return 400; IAM hashing caps bodies at 10 MiB with 413 on overflow.
+AWS_PROXY retains its smaller 6 MiB encoded Invoke budget. IAM HTTP_PROXY reuses
+verified bytes; other proxy routes retain streaming.
+
+Native 2.0 exposes `requestContext.authorizer.iam` with `accessKey`, `accountId`,
+`userArn` and optional `userId`/`callerId`. Native 1.0 uses
+`requestContext.identity.accessKey/accountId/userArn/user/caller`.
+The outer `requestContext.accountId` remains the API owner's account.
+Only a verified credential lookup supplies identity. Header removal/generated
+IDs happen on a separate integration view and cannot change authenticated bytes.
+
+Existing named REQUEST authorizers select CUSTOM when `authorization_type` is
+omitted; unnamed routes select NONE. Explicit NONE/CUSTOM/AWS_IAM selections
+are validated. IAM cannot also select a REQUEST authorizer. `-no-auth` bypasses
+authentication and emits no verified IAM identity. Anonymous and REQUEST routes
+never parse IAM credentials.
+
+Query verification uses strict URI encoding and sorted parameter pairs; wire
+query order/spelling is preserved for integrations. Go SDK signing and the frozen
+botocore serialized-query control are covered. Direct raw-URL botocore signatures
+using noncanonical escapes or plus encoding are not qualified against live AWS;
+there is no alternate-canonicalization fallback.
+
+Presigned queries, SigV4a, streaming/unsigned payload signing, credential refresh,
+STS and IAM policy evaluation remain core gaps. See
+[AWS IAM route authorization](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-access-control-iam.html),
+[SigV4](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html)
+and [native event types](https://github.com/aws/aws-lambda-go/blob/main/events/apigw.go).
 
 ## Integration and development controls
 
@@ -229,13 +298,14 @@ HTTP_PROXY retains streaming and upgrades. `request_parameters` maps
 `context.requestId`, `stageVariables.NAME` or a single-quoted literal. These
 mappings apply to HTTP_PROXY; AWS_PROXY receives its native event instead.
 
-Top-level `remove_headers` removes credentials before authorization; integration
-`remove_headers` removes them before forwarding without mutating authorizer data.
+Top-level `remove_headers` edits the REQUEST-authorizer/integration view.
+IAM always verifies untouched incoming headers first. Integration
+`remove_headers` edits forwarding without mutating shared authorization data.
 These fields, file loading, frontend proxy/static hosting and `-no-auth` are
 explicit local harness controls. Logs contain route templates and request IDs,
 without request bodies, credentials or mapped paths.
 
-API Gateway management/deployment APIs, VTL, TOKEN/IAM/Cognito authorizers,
+API Gateway management/deployment APIs, VTL, TOKEN/Cognito authorizers,
 usage plans and WebSocket API management remain outside this request scope.
 SIGTERM drains HTTP and closes upgraded connections. Tests use real registered
 Go, Python and Node handlers, both payload formats and independent combinations;

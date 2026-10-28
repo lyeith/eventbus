@@ -14,7 +14,7 @@ internal/
   devactivity/           Optional typed source/descendant ownership ports
   devquiescence/         Retained-owner fence, source leases, cleanup and resumable generations
   localexec/             Shared process groups, descendant cleanup and capped output
-  gateway/               REST/HTTP API REQUEST events, IAM/simple responses and HTTP/Lambda proxy
+  gateway/               REQUEST/IAM request authentication and HTTP/Lambda proxy
   lambda/                App-owned multi-language execution, Invoke/Runtime API and child lifetime
   cognito/               SQLite identities, lifecycle, shared challenge state, SRP/auth and JWT/JWKS
   cognitotrigger/        Configured trigger events, responses, deadlines and execution port
@@ -114,9 +114,13 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   without client secrets.
   Store bootstrap owns one transaction for schema/identity/verification setup;
   the `dev_seed_store.go` adapter uses the native credential owner.
-- `gateway` consumes authorizers only through AWS Lambda Invoke HTTP. It knows no
-  application policy, identity, private route format or database. Apps configure
-  opaque context mappings and credential removal.
+- `gateway` consumes REQUEST authorizers through AWS Lambda Invoke HTTP.
+  `iam.go` owns native SigV4 verification and immutable verified identities;
+  `dev_iam.go` binds explicit local credentials to fixture principals.
+  `routes.go` preserves original component boundaries; `mapping.go` retains
+  raw capture provenance. `events.go` projects IAM separately from REQUEST
+  context. One request-owned verified body is reused by Lambda/HTTP integrations.
+  It imports no application policy/store. Apps own fixtures and context mappings.
   Cache-enabled same-identity misses share a bounded, joined flight. Each waiter
   evaluates the returned policy against its own ARN; cancellation cannot release
   a peer's work. TTL-zero and overflow callers retain direct native execution.
@@ -238,7 +242,7 @@ owners. Do not merge these policies into a generic runner or wire decoder.
 | --- | --- |
 | Durable JSONL concurrency/restart/write/sync/close failure | `internal/devcapture` tests; service HTTP tests cover acceptance and schema |
 | OS cancellation, descendants, retained pipes and output bounds | `internal/localexec` tests; runner tests cover invocation/settlement lifetime |
-| REQUEST formats, policy/simple decisions, Lambda/HTTP proxy, cache and upgrade lifetime | `internal/gateway` tests |
+| REQUEST/IAM authentication, escaped components, native events, Lambda/HTTP proxy and lifetime | `internal/gateway` tests |
 | Lambda Invoke, Runtime API, language handlers, child cleanup and private diagnostics | `internal/lambda` tests; actual native SDK evidence lane in `tests/sdk` |
 | Store, validation, capture, filtering or operation behavior | Colocated service tests; real SQLite for Cognito |
 | Custom trigger configuration, strict response and execution-port lifetime | `internal/cognitotrigger` tests; actual Node fresh/warm/private-runtime composition in `internal/app` |

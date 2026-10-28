@@ -53,9 +53,11 @@ before configuring endpoints or cleaning fixtures.
   Apps own handler policy and dependencies. Private triggers have no Invoke route.
   Selected trigger source reload uses the named Cognito dev port and Lambda's
   existing generation retirement; it never resets Cognito state or drains peers.
-- `internal/gateway` owns generic REQUEST-authorizer and HTTP proxy contracts;
-  applications own authorizers and all private integration mappings. It imports
-  no consuming application package or store.
+- `internal/gateway` owns native REQUEST/SigV4 authentication and HTTP/Lambda
+  proxy contracts. `iam.go` verifies original requests; `dev_iam.go` owns static
+  local identity bindings. Preserve wire component boundaries through routing,
+  policy identity and HTTP mapping. Applications own REQUEST handlers and
+  integration mappings; no consuming application package/store is imported.
 - `internal/lambda` owns Invoke, language execution and child lifetime. Warm
   execution and idle retention have independent bounded budgets; saturation
   uses native throttling, with already-admitted Events kept by the async owner.

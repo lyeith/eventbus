@@ -27,6 +27,8 @@ const maxAuthorizerFlights = 128
 const maxAuthorizerFlightWaiters = 128
 
 type requestEvent struct {
+	iam                             *iamIdentity
+	verifiedBody                    []byte
 	routeKey                        string
 	apiPath                         string
 	rawPath                         string

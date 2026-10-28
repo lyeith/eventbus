@@ -27,6 +27,7 @@ type Config struct {
 	DevHealthPath                 string                      `yaml:"dev_health_path"`                  // Local readiness reservation, not an AWS route.
 	StageVariables                map[string]string           `yaml:"stage_variables"`
 	Authorizers                   map[string]AuthorizerConfig `yaml:"authorizers"`
+	IAMCredentials                map[string]DevIAMCredential `yaml:"iam_credentials"` // Local static identity fixtures; no IAM management API.
 	Routes                        []RouteConfig               `yaml:"routes"`
 	LogRedactions                 []string                    `yaml:"log_redactions"`
 	RemoveHeaders                 []string                    `yaml:"remove_headers"`
@@ -43,11 +44,12 @@ type AuthorizerConfig struct {
 }
 
 type RouteConfig struct {
-	Path        string            `yaml:"path"`
-	RouteKey    string            `yaml:"route_key"`
-	Method      string            `yaml:"method"`
-	Authorizer  string            `yaml:"authorizer"`
-	Integration IntegrationConfig `yaml:"integration"`
+	Path              string            `yaml:"path"`
+	RouteKey          string            `yaml:"route_key"`
+	Method            string            `yaml:"method"`
+	Authorizer        string            `yaml:"authorizer"`
+	AuthorizationType string            `yaml:"authorization_type"`
+	Integration       IntegrationConfig `yaml:"integration"`
 }
 
 type IntegrationConfig struct {
@@ -147,6 +149,9 @@ func (cfg *Config) Validate() error {
 		}
 		cfg.Authorizers[name] = authorizer
 	}
+	if err := cfg.validateDevIAM(); err != nil {
+		return err
+	}
 	seen := make(map[string]bool)
 	for i, route := range cfg.Routes {
 		template, err := parseTemplate(route.Path)
@@ -181,6 +186,22 @@ func (cfg *Config) Validate() error {
 			if _, ok := cfg.Authorizers[route.Authorizer]; !ok {
 				return fmt.Errorf("route %d: unknown authorizer %q", i+1, route.Authorizer)
 			}
+		}
+		switch routeAuthorizationType(route) {
+		case "NONE":
+			if route.Authorizer != "" {
+				return fmt.Errorf("route %d: NONE cannot select a REQUEST authorizer", i+1)
+			}
+		case "CUSTOM":
+			if route.Authorizer == "" {
+				return fmt.Errorf("route %d: CUSTOM requires a named REQUEST authorizer", i+1)
+			}
+		case "AWS_IAM":
+			if route.Authorizer != "" || len(cfg.IAMCredentials) == 0 {
+				return fmt.Errorf("route %d: AWS_IAM requires local iam_credentials and cannot select a REQUEST authorizer", i+1)
+			}
+		default:
+			return fmt.Errorf("route %d: authorization_type must be NONE, CUSTOM or AWS_IAM", i+1)
 		}
 		switch route.Integration.Type {
 		case "HTTP_PROXY":
@@ -328,6 +349,7 @@ func (cfg Config) clone() Config {
 	cloned := cfg
 	cloned.StageVariables = maps.Clone(cfg.StageVariables)
 	cloned.Authorizers = maps.Clone(cfg.Authorizers)
+	cloned.IAMCredentials = maps.Clone(cfg.IAMCredentials)
 	for name, authorizer := range cloned.Authorizers {
 		authorizer.IdentitySources = slices.Clone(authorizer.IdentitySources)
 		if authorizer.TTL != nil {
@@ -377,4 +399,16 @@ func validHTTPIdentitySource(source string) bool {
 		return true
 	}
 	return false
+}
+
+// Empty authorization_type retains existing recipes: a named Lambda authorizer
+// selects CUSTOM; an unnamed route remains anonymous.
+func routeAuthorizationType(route RouteConfig) string {
+	if route.AuthorizationType != "" {
+		return route.AuthorizationType
+	}
+	if route.Authorizer != "" {
+		return "CUSTOM"
+	}
+	return "NONE"
 }

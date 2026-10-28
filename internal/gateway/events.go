@@ -61,7 +61,7 @@ func httpV1Event(event requestEvent) map[string]any {
 	nativeContext := map[string]any{
 		"accountId": context.AccountID, "apiId": context.APIID, "domainName": context.DomainName,
 		"domainPrefix": strings.Split(context.DomainName, ".")[0], "extendedRequestId": context.RequestID,
-		"httpMethod": event.HTTPMethod, "identity": context.Identity, "path": event.Path, "protocol": context.Protocol,
+		"httpMethod": event.HTTPMethod, "identity": httpV1Identity(event), "path": event.Path, "protocol": context.Protocol,
 		"requestId": context.RequestID, "requestTime": context.RequestTime, "requestTimeEpoch": context.RequestTimeEpoch,
 		"resourceId": nil, "resourcePath": event.Resource, "stage": context.Stage,
 	}
@@ -134,7 +134,9 @@ func integrationEvent(event requestEvent, version, body string, encoded bool, re
 	var result map[string]any
 	if version == "2.0" {
 		result = httpV2Event(event)
-		if authorized {
+		if event.iam != nil {
+			result["requestContext"].(map[string]any)["authorizer"] = map[string]any{"iam": event.iam}
+		} else if authorized {
 			result["requestContext"].(map[string]any)["authorizer"] = map[string]any{"lambda": integrationAuthorizer(response)}
 		}
 	} else {
@@ -211,4 +213,24 @@ func rawAPIPath(basePath, path string) string {
 		return "/"
 	}
 	return "/" + strings.Join(segments[count:], "/")
+}
+
+// Native IAM identity is projected only from a successful verifier result.
+// Header/body fields cannot populate this request-owned value.
+func httpV1Identity(event requestEvent) any {
+	identity := event.iam
+	if identity == nil {
+		return event.RequestContext.Identity
+	}
+	result := map[string]string{
+		"sourceIp": event.RequestContext.Identity.SourceIP, "userAgent": event.RequestContext.Identity.UserAgent,
+		"accessKey": identity.AccessKey, "accountId": identity.AccountID, "userArn": identity.UserARN,
+	}
+	if identity.CallerID != "" {
+		result["caller"] = identity.CallerID
+	}
+	if identity.UserID != "" {
+		result["user"] = identity.UserID
+	}
+	return result
 }

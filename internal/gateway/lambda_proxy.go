@@ -19,9 +19,9 @@ type proxyResponse struct {
 }
 
 func (gateway *Gateway) serveLambda(w http.ResponseWriter, request *http.Request, route RouteConfig, event requestEvent, authorization authorizerResponse) {
-	var body []byte
+	body := event.verifiedBody
 	var err error
-	if request.Body != nil {
+	if event.iam == nil && request.Body != nil {
 		body, err = io.ReadAll(io.LimitReader(request.Body, maxInvokePayload+1))
 	}
 	if err != nil {

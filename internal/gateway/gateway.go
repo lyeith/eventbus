@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,7 @@ type Gateway struct {
 	routes       []compiledRoute
 	redactions   []pathTemplate
 	authorizers  map[string]*lambdaAuthorizer
+	iam          *iamVerifier
 	frontend     http.Handler
 	invokeClient *http.Client
 	transport    *http.Transport
@@ -78,6 +80,7 @@ func New(cfg Config, options Options) (*Gateway, error) {
 	result := &Gateway{config: cfg, options: options, transport: transport, connections: connections, authorizers: make(map[string]*lambdaAuthorizer), retained: retained}
 	invokeClient := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	result.invokeClient = invokeClient
+	result.iam = newIAMVerifier(cfg.Region, cfg.devIAMCredentials())
 	for _, redaction := range cfg.LogRedactions {
 		template, _ := parseTemplate(redaction) // Validated before allocating owners.
 		result.redactions = append(result.redactions, template)
@@ -181,6 +184,9 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	started := time.Now()
 	requestID := uuid.NewString()
+	// Verification consumes the actual wire request before gateway-owned header
+	// removal/metadata edits. Routing and integrations use the detached clone.
+	originalRequest := r
 	r = r.Clone(r.Context())
 	for _, name := range gateway.config.RemoveHeaders {
 		r.Header.Del(name)
@@ -244,6 +250,20 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	event := newRequestEvent(gateway.config, route.config, r, parameters, requestID)
 	response := authorizerResponse{Context: make(map[string]string)}
+	if routeAuthorizationType(route.config) == "AWS_IAM" && !gateway.options.NoAuth {
+		identity, body, status := gateway.iam.authenticate(originalRequest)
+		if status != 0 {
+			writeGatewayError(w, status)
+			return
+		}
+		event.iam, event.verifiedBody = &identity, body
+		if route.config.Integration.Type == "HTTP_PROXY" {
+			// The original reader remains owned by the incoming HTTP server. The
+			// proxy consumes these exact already-verified bytes through its clone.
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+		}
+	}
 	if route.config.Authorizer != "" && !gateway.options.NoAuth {
 		var status int
 		response, status = gateway.authorizers[route.config.Authorizer].authorize(r.Context(), event)

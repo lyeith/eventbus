@@ -137,6 +137,10 @@ batch); Python handlers return the result object. Send diagnostic logs to stderr
   opt into [Python wait snapshots](LAMBDA.md#python-wait-snapshots) before a known
   shorter caller budget when terminal logs cannot locate a wait.
 - To test runtime death in real SNS/SQS flows, opt into the [exact-attempt worker crash](LAMBDA.md#one-shot-worker-crash). Select the existing native request ID; inspect joined failure and retry/redelivery evidence before asserting effects.
+- For service-to-service HTTP actor checks, configure a gateway
+  [AWS_IAM route and local identity](GATEWAY.md#local-iam-caller-authentication),
+  sign the actual request with an SDK and assert the Lambda's native IAM context.
+  Preserve escaped paths and query bytes; an injected identity header is no proof.
 - Read Cognito notification JSONL from `--cognito-log`; native signup, recovery
   and invitation flows expose local codes/passwords there. Use schema and resource
   IDs to correlate requests; [Cognito](COGNITO.md) documents the evidence fields.
