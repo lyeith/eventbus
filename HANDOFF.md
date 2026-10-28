@@ -6,7 +6,10 @@ Tag4276a0685328f1dea2164b23df3b64cb9b21439f; CI40661265617 success.
 All8 target binaries/9 downloads verified; actual Linux/Mac gateway SDK proof,
 clean metadata, checksums and help. Release cleanup complete.
 
-User then requested remaining gateway parity gaps closed. Post-release source:
+User then requested remaining gateway parity gaps closed. Follow-up source
+bd1ec41e0b3f7466c16799edc03c131c45c00b4c pushed; CI40667518696 passed
+full Go race/vet, frozen SDKs, offline observer and unchanged Swagger. Evidence:
+/tmp/eventbus-gateway-parity-source-ci-20261028.log. Post-release owners:
 - f9fd37e protects HTTPv2 context path/identity escaped separators/percent,
   with AWS-maintained fixture evidence; opt-in live AWS observation seam.
 - iam.go one verifier; iam_signing.go one header/Date/query metadata parser and
@@ -46,8 +49,9 @@ Combined set+IfExists/nonstring variables and malformed static ARN conditions
 are rejected; exact native policy bounds documented. IAM/STS/SCP/trust/boundary
 resolution is separate scope. v0.21.0 binaries do not include this follow-up.
 
-Finish: push new source, await full CI, record result. No additional release was
-requested for post-publication follow-up. All owned author scratch/empty failed
+Source follow-up and validation complete. Remaining live qualification awaits
+explicit fixture/profile input. No additional release was requested for the
+post-publication follow-up; published binaries remain v0.21.0. All owned author scratch/empty failed
 managed scratch cleaned after quiescent inspection; success scratch auto-removed.
 No processes/worktrees/envs/deps/live-stack/cache-policy/laptop Plans changes.
 Evidence follows existing host retention, no pins.

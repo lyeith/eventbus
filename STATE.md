@@ -34,13 +34,14 @@ Verification:
   static/session, exact bodies, policy denial and tamper no-invocation counts.
 - Unchanged Express/Swagger race9.005s; observer offline race incl real frozen
   botocore fake-transport proof passed. No dependencies added.
-- Full post-release source CI pending push; final docs will record result.
+- Source bd1ec41e0b3f7466c16799edc03c131c45c00b4c pushed; full CI40667518696
+  passed Go race/vet, frozen SDKs, offline observer and unchanged Swagger.
 
 Remaining: live AWS encoded-route/raw-query behavior, long execute-api presign
 lifetimes and unsigned/AWS-chunked acceptance need evidence. SigV4a is excluded
 by AWS HTTP API docs; REST support is a separate expansion. Policy dialect bounds
 are explicit in docs/GATEWAY.md. IAM/STS provisioning remains separate scope.
-User asked for live echo endpoint/profile/region; awaiting input. No live AWS
+Awaiting user-supplied live echo endpoint/profile/region for further comparison. No live AWS
 calls/provisioning, default-stack/cache-policy or laptop Plans changes.
 
 All task scratch/processes/temporary exports cleaned. Raw /tmp evidence uses
