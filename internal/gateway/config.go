@@ -197,8 +197,8 @@ func (cfg *Config) Validate() error {
 				return fmt.Errorf("route %d: CUSTOM requires a named REQUEST authorizer", i+1)
 			}
 		case "AWS_IAM":
-			if route.Authorizer != "" || len(cfg.IAMCredentials) == 0 {
-				return fmt.Errorf("route %d: AWS_IAM requires local iam_credentials and cannot select a REQUEST authorizer", i+1)
+			if route.Authorizer != "" {
+				return fmt.Errorf("route %d: AWS_IAM cannot select a REQUEST authorizer", i+1)
 			}
 		default:
 			return fmt.Errorf("route %d: authorization_type must be NONE, CUSTOM or AWS_IAM", i+1)
@@ -349,7 +349,7 @@ func (cfg Config) clone() Config {
 	cloned := cfg
 	cloned.StageVariables = maps.Clone(cfg.StageVariables)
 	cloned.Authorizers = maps.Clone(cfg.Authorizers)
-	cloned.IAMCredentials = maps.Clone(cfg.IAMCredentials)
+	cloned.IAMCredentials = cloneDevIAMCredentials(cfg.IAMCredentials)
 	for name, authorizer := range cloned.Authorizers {
 		authorizer.IdentitySources = slices.Clone(authorizer.IdentitySources)
 		if authorizer.TTL != nil {

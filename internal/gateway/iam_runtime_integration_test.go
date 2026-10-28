@@ -152,6 +152,7 @@ func TestNativeGatewaySDKVerifiedIAMIdentityAndEncodedComponents(t *testing.T) {
 	const originalQuery = "repeat=two&repeat=one&plus=a%2Bb&literal=%252F&space=a%20b"
 	credentials := aws.Credentials{AccessKeyID: "AKIAIOSFODNN7EXAMPLE", SecretAccessKey: "owned-native-static-secret"}
 	temporary := aws.Credentials{AccessKeyID: "ASIAIOSFODNN7EXAMPLE", SecretAccessKey: "owned-native-session-secret", SessionToken: "owned-session/token+value=="}
+	scoped := aws.Credentials{AccessKeyID: "AKIAPOLICY7EXAMPLE", SecretAccessKey: "owned-native-policy-secret"}
 	directory := t.TempDir()
 	executable, err := os.Executable()
 	require.NoError(t, err)
@@ -205,6 +206,11 @@ func TestNativeGatewaySDKVerifiedIAMIdentityAndEncodedComponents(t *testing.T) {
 				IAMCredentials: map[string]gateway.DevIAMCredential{
 					credentials.AccessKeyID: {SecretAccessKey: credentials.SecretAccessKey, PrincipalARN: principal, AccountID: callerAccount, UserID: userID, CallerID: userID},
 					temporary.AccessKeyID:   {SecretAccessKey: temporary.SecretAccessKey, SessionToken: temporary.SessionToken, PrincipalARN: principal, AccountID: callerAccount, UserID: userID, CallerID: userID},
+					scoped.AccessKeyID: {SecretAccessKey: scoped.SecretAccessKey, PrincipalARN: principal, AccountID: callerAccount, UserID: userID, CallerID: userID,
+						Policy: map[string]any{"Version": "2012-10-17", "Statement": []any{
+							map[string]any{"Effect": "Allow", "Action": "execute-api:Invoke", "Resource": "*"},
+							map[string]any{"Effect": "Deny", "Action": "execute-api:Invoke", "Resource": "arn:aws:execute-api:" + region + ":" + ownerAccount + ":owned-iam/$default/POST/policy/blocked"},
+						}}},
 				},
 				Authorizers: map[string]gateway.AuthorizerConfig{"request": {Type: "REQUEST", PayloadFormatVersion: "2.0", TTL: &zero,
 					InvokeURL: native.URL + "/2015-03-31/functions/iam-request/invocations", IdentitySources: []string{"$request.header.Authorization"}, Timeout: 5 * time.Second}},
@@ -237,6 +243,28 @@ func TestNativeGatewaySDKVerifiedIAMIdentityAndEncodedComponents(t *testing.T) {
 				// SigV4 sorts query pairs; their wire order remains application data.
 				// Restore the equivalent original spelling after SDK canonicalization.
 				r.URL.RawQuery = rawQuery
+			}
+			presign := func(t *testing.T, r *http.Request, payload []byte, selected aws.Credentials) {
+				t.Helper()
+				applicationQuery := r.URL.RawQuery
+				r.URL.RawQuery += "&X-Amz-Expires=60"
+				hash := sha256.Sum256(payload)
+				signedURL, _, err := v4.NewSigner().PresignHTTP(t.Context(), selected, r, hex.EncodeToString(hash[:]), "execute-api", region, time.Now())
+				require.NoError(t, err)
+				r.URL, err = url.Parse(signedURL)
+				require.NoError(t, err)
+				var authentication []string
+				for _, pair := range strings.Split(r.URL.RawQuery, "&") {
+					if strings.HasPrefix(pair, "X-Amz-") {
+						authentication = append(authentication, pair)
+					}
+				}
+				// Use the SDK's authentication values unchanged; restore only the
+				// canonical-equivalent application pair order for native capture.
+				r.URL.RawQuery = applicationQuery + "&" + strings.Join(authentication, "&")
+				require.Empty(t, r.Header.Get("Authorization"))
+				require.Empty(t, r.Header.Get("X-Amz-Security-Token"))
+				require.Equal(t, selected.SessionToken, r.URL.Query().Get("X-Amz-Security-Token"))
 			}
 			send := func(t *testing.T, r *http.Request, status int) map[string]any {
 				t.Helper()
@@ -289,11 +317,19 @@ func TestNativeGatewaySDKVerifiedIAMIdentityAndEncodedComponents(t *testing.T) {
 					}
 				}
 			}
-			paths := []string{"/items/Type/example%2Fhistory"}
-			if version == "2.0" {
-				paths = append(paths, "/items/Type/literal%252Fhistory", "/items/Type/space%20value", "/items/Type/%E6%9D%B1%E4%BA%AC", "/items/Type/back%5Cslash")
+			paths := []struct{ raw, httpPath string }{
+				{"/items/Type/example%2Fhistory", "/items/Type/example%2Fhistory"},
 			}
-			for _, path := range paths {
+			if version == "2.0" {
+				paths = append(paths, []struct{ raw, httpPath string }{
+					{"/items/Type/literal%252Fhistory", "/items/Type/literal%252Fhistory"},
+					{"/items/Type/space%20value", "/items/Type/space value"},
+					{"/items/Type/%E6%9D%B1%E4%BA%AC", "/items/Type/東京"},
+					{"/items/Type/back%5Cslash", "/items/Type/back\\slash"},
+				}...)
+			}
+			for _, expected := range paths {
+				path := expected.raw
 				t.Run(path, func(t *testing.T) {
 					r := request(t, "/edge/v1"+path, body)
 					sign(t, r, body, credentials, time.Now())
@@ -309,6 +345,7 @@ func TestNativeGatewaySDKVerifiedIAMIdentityAndEncodedComponents(t *testing.T) {
 					require.NotEqual(t, "original-client-correlation", headers["x-correlation-id"])
 					if version == "2.0" {
 						require.Equal(t, path, event["rawPath"])
+						require.Equal(t, expected.httpPath, event["requestContext"].(map[string]any)["http"].(map[string]any)["path"])
 						require.Equal(t, "$default", event["routeKey"], "encoded separator cannot borrow neighboring REQUEST route permissions")
 						require.Equal(t, originalQuery, event["rawQueryString"])
 						require.Equal(t, "two,one", event["queryStringParameters"].(map[string]any)["repeat"])
@@ -328,7 +365,84 @@ func TestNativeGatewaySDKVerifiedIAMIdentityAndEncodedComponents(t *testing.T) {
 				require.Equal(t, "example/history", event["pathParameters"].(map[string]any)["id"])
 				if version == "2.0" {
 					require.Equal(t, "/parameters/example%2Fhistory", event["rawPath"])
+					require.Equal(t, "/parameters/example%2Fhistory", event["requestContext"].(map[string]any)["http"].(map[string]any)["path"])
 				}
+			})
+			for _, selected := range []aws.Credentials{credentials, temporary} {
+				name := "presigned-static"
+				if selected.SessionToken != "" {
+					name = "presigned-session"
+				}
+				t.Run(name, func(t *testing.T) {
+					r := request(t, "/edge/v1/items/Type/example%2Fhistory", body)
+					presign(t, r, body, selected)
+					original := r.URL.RawQuery
+					event := send(t, r, http.StatusOK)
+					assertIAM(t, event, selected.AccessKeyID)
+					require.Equal(t, base64.StdEncoding.EncodeToString(body), event["body"])
+					require.Equal(t, true, event["isBase64Encoded"])
+					if version == "2.0" {
+						require.Equal(t, "/items/Type/example%2Fhistory", event["rawPath"])
+						require.Equal(t, "/items/Type/example%2Fhistory", event["requestContext"].(map[string]any)["http"].(map[string]any)["path"])
+						require.Equal(t, original, event["rawQueryString"], "native event must preserve the actual application and authentication query bytes")
+						require.Equal(t, "two,one", event["queryStringParameters"].(map[string]any)["repeat"])
+					} else {
+						require.Equal(t, []any{"two", "one"}, event["multiValueQueryStringParameters"].(map[string]any)["repeat"])
+						require.Equal(t, r.URL.Query().Get("X-Amz-Signature"), event["queryStringParameters"].(map[string]any)["X-Amz-Signature"])
+					}
+				})
+			}
+			t.Run("presigned-tampering-stops-before-native-invocation", func(t *testing.T) {
+				for _, scenario := range []struct {
+					name   string
+					mutate func(*http.Request)
+				}{
+					{"query", func(r *http.Request) { r.URL.RawQuery += "&changed=value" }},
+					{"body", func(r *http.Request) {
+						changed := bytes.Clone(body)
+						changed[0] = 1
+						r.Body = io.NopCloser(bytes.NewReader(changed))
+					}},
+					{"path", func(r *http.Request) {
+						r.URL.Path = "/edge/v1/items/Type/changed/history"
+						r.URL.RawPath = "/edge/v1/items/Type/changed%2Fhistory"
+					}},
+					{"token", func(r *http.Request) {
+						query := r.URL.Query()
+						query.Set("X-Amz-Security-Token", "tampered-token")
+						r.URL.RawQuery = query.Encode()
+					}},
+					{"signature", func(r *http.Request) {
+						query := r.URL.Query()
+						signature := query.Get("X-Amz-Signature")
+						first := "0"
+						if signature[0] == '0' {
+							first = "1"
+						}
+						query.Set("X-Amz-Signature", first+signature[1:])
+						r.URL.RawQuery = query.Encode()
+					}},
+					{"mixed-auth", func(r *http.Request) { r.Header.Set("Authorization", "Bearer owned") }},
+				} {
+					t.Run(scenario.name, func(t *testing.T) {
+						r := request(t, "/edge/v1/items/Type/example%2Fhistory", body)
+						presign(t, r, body, temporary)
+						scenario.mutate(r)
+						before := invocations(t)
+						send(t, r, http.StatusForbidden)
+						require.Equal(t, before, invocations(t), "invalid presigned auth must not invoke either native function")
+					})
+				}
+			})
+			t.Run("valid-signature-effective-policy-denial", func(t *testing.T) {
+				r := request(t, "/edge/v1/policy/allowed", body)
+				sign(t, r, body, scoped, time.Now())
+				assertIAM(t, send(t, r, http.StatusOK), scoped.AccessKeyID)
+				r = request(t, "/edge/v1/policy/blocked", body)
+				sign(t, r, body, scoped, time.Now())
+				before := invocations(t)
+				send(t, r, http.StatusForbidden)
+				require.Equal(t, before, invocations(t), "a correctly signed denied resource must not reach the application")
 			})
 			t.Run("verified-session-and-spoofed-body", func(t *testing.T) {
 				payload := []byte(`{"requestContext":{"authorizer":{"iam":{"userArn":"arn:aws:iam::999999999999:user/spoof"}}}}`)

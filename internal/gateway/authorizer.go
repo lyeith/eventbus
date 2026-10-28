@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -73,12 +72,6 @@ type authorizerResponse struct {
 	Statements       []policyStatement
 }
 
-// A parsed policy owns its immutable matchers; every request still evaluates
-// the current ARN. No pattern state is shared through a global cache.
-type policyStatement struct {
-	Effect             string
-	actions, resources []*regexp.Regexp
-}
 type cachedAuthorization struct {
 	response authorizerResponse
 	expires  time.Time
@@ -496,7 +489,7 @@ func policyStatements(data []byte) ([]policyStatement, error) {
 			statement.actions = append(statement.actions, compileIAMGlob(strings.ToLower(action)))
 		}
 		for _, resource := range resources {
-			statement.resources = append(statement.resources, compileIAMGlob(resource))
+			statement.resources = append(statement.resources, policyPattern{compiled: compileIAMGlob(resource)})
 		}
 		statements = append(statements, statement)
 	}
@@ -537,45 +530,8 @@ func policyStatus(response authorizerResponse, arn string) int {
 		}
 		return http.StatusForbidden
 	}
-	allowed := false
-	for _, statement := range response.Statements {
-		if matchesIAM(statement.actions, "execute-api:invoke") && matchesIAM(statement.resources, arn) {
-			if statement.Effect == "Deny" {
-				return http.StatusForbidden
-			}
-			allowed = true
-		}
-	}
-	if !allowed {
+	if !(invokePolicy{statements: response.Statements}).permits(arn, nil) {
 		return http.StatusForbidden
 	}
 	return 0
-}
-func matchesIAM(patterns []*regexp.Regexp, value string) bool {
-	for _, pattern := range patterns {
-		if pattern != nil && pattern.MatchString(value) {
-			return true
-		}
-	}
-	return false
-}
-
-func compileIAMGlob(pattern string) *regexp.Regexp {
-	var expression strings.Builder
-	expression.WriteString("(?s)^")
-	for _, character := range pattern {
-		switch character {
-		case '*':
-			expression.WriteString(".*")
-		case '?':
-			expression.WriteByte('.')
-		default:
-			expression.WriteString(regexp.QuoteMeta(string(character)))
-		}
-	}
-	expression.WriteByte('$')
-	// A compiler limit previously made iamGlob return false. Retain that
-	// never-matching pattern policy instead of rejecting the native response.
-	compiled, _ := regexp.Compile(expression.String())
-	return compiled
 }

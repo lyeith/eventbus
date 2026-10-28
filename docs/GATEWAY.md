@@ -215,8 +215,8 @@ Invoke requests/results are capped at 6 MiB including JSON/base64 overhead.
 
 Set a route's native `authorization_type: AWS_IAM` and bind explicit local
 credentials to a caller identity. The gateway verifies the real incoming SigV4
-request; the registry is a local fixture, with no IAM/STS provisioning or policy
-evaluation. Every registered credential is allowed on this gateway's IAM routes.
+request; the registry is a local fixture, with no IAM/STS provisioning. Native
+effective Invoke permissions are supplied by explicit fixture policies.
 
 ```yaml
 region: us-east-1
@@ -240,17 +240,24 @@ routes:
       invoke_url: http://localhost:14100/2015-03-31/functions/application/invocations
 ```
 
-Use an ordinary SDK SigV4 signer with service `execute-api`, the configured
+Use an ordinary SDK SigV4 signer or presigner with service `execute-api`, the configured
 region and these local credentials. Sign the full listener URL, including any
 API mapping, original headers and actual body bytes. No identity header/body
 field or separate ingress verifier is needed. Principal ARNs must match their
 explicit caller account; optional user/caller IDs remain fixture facts.
 
-The supported form is header `AWS4-HMAC-SHA256` with signed host and
-`x-amz-date`, matching date/region/service scope and a timestamp within five
-minutes of gateway UTC. A configured session token must match and be signed.
-The verifier hashes the actual payload. Ambiguous duplicate auth headers,
-malformed queries and missing/invalid credentials return 403 before integration.
+Header `AWS4-HMAC-SHA256` signing requires signed host and the selected date
+header: `x-amz-date` takes precedence, with `Date` (ISO UTC or UTC HTTP-date)
+as fallback. Scope must match date/region/`execute-api`. Timestamp freshness is
+bounded to five minutes. A configured session token must match and be signed.
+
+Query signing uses `X-Amz-Algorithm/Credential/Date/SignedHeaders/Signature` and
+optional `X-Amz-Security-Token`. It shares the same verifier and actual-body hash;
+only `X-Amz-Signature` is omitted from its own canonical query. Optional positive
+`X-Amz-Expires` may shorten the five-minute bound. Longer execute-api lifetimes
+remain unqualified; S3's seven-day behavior is not assumed. Mixed header/query
+authentication, duplicate controls and invalid credentials return 403 before
+integration. Malformed auth metadata is refused before reading the body.
 Body read errors return 400; IAM hashing caps bodies at 10 MiB with 413 on overflow.
 AWS_PROXY retains its smaller 6 MiB encoded Invoke budget. IAM HTTP_PROXY reuses
 verified bytes; other proxy routes retain streaming.
@@ -268,17 +275,85 @@ are validated. IAM cannot also select a REQUEST authorizer. `-no-auth` bypasses
 authentication and emits no verified IAM identity. Anonymous and REQUEST routes
 never parse IAM credentials.
 
-Query verification uses strict URI encoding and sorted parameter pairs; wire
-query order/spelling is preserved for integrations. Go SDK signing and the frozen
-botocore serialized-query control are covered. Direct raw-URL botocore signatures
-using noncanonical escapes or plus encoding are not qualified against live AWS;
-there is no alternate-canonicalization fallback.
+Query verification percent-decodes/URI-encodes names and values, then sorts
+encoded pairs. Literal `+` stays plus, rather than form-decoding to space. Wire
+query bytes remain untouched for integration. Frozen botocore Date/query vectors,
+the maintained Smithy signer (including literal plus/semicolon/noncanonical
+escapes), and Go SDK signed/presigned controls cover this one canonicalization.
+Raw-URL botocore signatures can differ; live service acceptance still needs
+observation. There is no fallback verifier.
 
-Presigned queries, SigV4a, streaming/unsigned payload signing, credential refresh,
-STS and IAM policy evaluation remain core gaps. See
-[AWS IAM route authorization](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-access-control-iam.html),
-[SigV4](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv.html)
-and [native event types](https://github.com/aws/aws-lambda-go/blob/main/events/apigw.go).
+### Effective permissions and credential lifetime
+
+Supply an AWS identity-policy document under a credential's `policy` field.
+Explicit policies use implicit deny and explicit Deny precedence, evaluated
+against the current component-safe execution ARN with the API owner's account.
+For v0.21 fixture compatibility, omitted/null `policy` becomes an explicit local
+allow-all Invoke grant; `policy: {Statement: []}` denies all.
+
+```yaml
+    policy:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Allow
+          Action: execute-api:Invoke
+          Resource: arn:aws:execute-api:us-east-1:111111111111:local/dev/GET/items/allowed
+          Condition:
+            StringEquals:
+              aws:PrincipalAccount: "222222222222"
+```
+
+The shared native evaluator owns Action/NotAction, Resource/NotResource,
+wildcards, standard condition families/set qualifiers and policy variables.
+REQUEST outputs reuse its matching/deny owner while retaining their own parser,
+512-character resource limit, simple responses and context/cache contracts.
+Malformed, duplicate or unknown native policy elements reject the entire
+candidate. Effective Invoke policies do not resolve organization SCPs, role trust,
+permission boundaries or account resource policies.
+
+Condition facts come from the verified principal and original ingress:
+account/ARN/type/explicit user ID, IAM username, optional `principal_tags`, source
+IP, TLS, current time, region, user agent and referer. Optional `issued_at` and
+`mfa_present` supply explicit token/MFA fixture facts. Assumed-role fixtures can
+supply `policy_principal_arn` (the IAM role ARN for `aws:PrincipalArn`); role
+paths are not guessed from STS session ARNs. Unsupplied facts stay absent.
+As AWS specifies, ordinary variable/tag wildcard characters affect Resource/
+Like matching; fixed escape variables remain literal and Equals stays exact.
+
+Optional RFC3339 `expires_at` is independent of signature freshness. Credentials
+must remain current/unexpired after hashing and at authorization admission.
+`DevReplaceIAMCredentials` validates and detaches a whole candidate before
+atomically publishing it. Removal, expiry and same-key replacement fence pending
+old authentications; already-admitted work retains its normal native lifetime.
+
+The CLI's explicit local `SIGHUP` control reloads only IAM credential fixtures
+from `--config`. Invalid candidates retain the active generation. Routes,
+listeners and integrations keep their existing owners. Overlap old/new keys,
+then remove old keys; an empty registry is a valid deny-all generation.
+SDK refresh and credential issuance belong to the caller/IAM/STS.
+
+### Remaining qualification
+
+Combined set-qualifier+IfExists operators and non-string-family variables remain
+unsupported. ARN condition patterns must have six fields; malformed/lone-star
+patterns are rejected pending qualification. Numeric/date/JSON compilation is
+bounded (256 numeric characters, exponent ±1024, ISO fractions ≤9 digits,
+JSON nesting ≤64).
+
+Unsigned payloads and AWS chunk-signature framing remain rejected: generic/S3
+signer support does not establish execute-api acceptance. Ordinary HTTP chunked
+transport with an actual payload hash is supported. AWS HTTP APIs do not
+officially support SigV4a; REST SigV4a is a separate request expansion.
+Live encoded-route/raw-query normalization and longer presign lifetimes remain
+unverified. The [opt-in AWS observer](../tests/sdk/README.md#optional-live-aws-gateway-observations)
+uses explicitly selected existing echo fixtures and writes private sanitized
+evidence; offline passes do not attest live parity.
+
+See [AWS IAM route authorization](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-access-control-iam.html),
+[Date fallback](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-signing-elements.html),
+[AWS CRT query canonicalization](https://github.com/awslabs/aws-c-auth/blob/main/source/aws_signing.c),
+[AWS HTTP API limitations](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-known-issues.html)
+and [principal-tag variable behavior](https://docs.aws.amazon.com/cognito/latest/developerguide/attributes-for-access-control.html).
 
 ## Integration and development controls
 

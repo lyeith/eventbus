@@ -29,25 +29,20 @@ type iamIdentity struct {
 	UserID    string `json:"userId,omitempty"`
 }
 
-type iamCredential struct {
-	secretAccessKey string
-	sessionToken    string
-	identity        iamIdentity
-}
-
 type iamVerifier struct {
 	region      string
-	credentials map[string]iamCredential
+	credentials *iamCredentialStore
 	now         func() time.Time
 }
 
+type iamAuthentication struct {
+	identity   iamIdentity
+	body       []byte
+	credential *iamCredential
+}
+
 func newIAMVerifier(region string, credentials map[string]iamCredential) *iamVerifier {
-	owned := make(map[string]iamCredential, len(credentials))
-	for accessKey, credential := range credentials {
-		credential.identity.AccessKey = accessKey
-		owned[accessKey] = credential
-	}
-	return &iamVerifier{region: region, credentials: owned, now: time.Now}
+	return &iamVerifier{region: region, credentials: newIAMCredentialStore(credentials), now: time.Now}
 }
 
 type iamAuthorization struct {
@@ -59,8 +54,8 @@ type iamAuthorization struct {
 // authenticate consumes the original request body only after validating its
 // authentication metadata. The caller owns body closure and reuses the returned
 // bytes for integration. Headers, URL and native request metadata are untouched.
-func (verifier *iamVerifier) authenticate(request *http.Request) (iamIdentity, []byte, int) {
-	denied := func() (iamIdentity, []byte, int) { return iamIdentity{}, nil, http.StatusForbidden }
+func (verifier *iamVerifier) authenticate(request *http.Request) (iamAuthentication, int) {
+	denied := func() (iamAuthentication, int) { return iamAuthentication{}, http.StatusForbidden }
 	if verifier == nil || request == nil || request.URL == nil || request.URL.Opaque != "" {
 		return denied()
 	}
@@ -68,50 +63,24 @@ func (verifier *iamVerifier) authenticate(request *http.Request) (iamIdentity, [
 	if !ok {
 		return denied()
 	}
-	authorization, ok := iamSingleHeader(headers, "authorization", true)
-	if !ok {
+	signing, ok := parseIAMSigningRequest(headers, request.URL.RawQuery)
+	if !ok || signing.authorization.region != verifier.region {
 		return denied()
 	}
-	parsed, ok := parseIAMAuthorization(authorization)
-	if !ok || parsed.region != verifier.region {
-		return denied()
-	}
-	credential, ok := verifier.credentials[parsed.accessKey]
-	if !ok || credential.secretAccessKey == "" {
-		return denied()
-	}
-	date, ok := iamSingleHeader(headers, "x-amz-date", true)
-	if !ok {
-		return denied()
-	}
-	signedAt, err := time.Parse(iamTimeFormat, date)
-	if err != nil || parsed.date != signedAt.UTC().Format("20060102") {
-		return denied()
-	}
+	parsed := signing.authorization
 	now := verifier.now()
-	if signedAt.Before(now.Add(-5*time.Minute)) || signedAt.After(now.Add(5*time.Minute)) {
+	if parsed.date != signing.signedAt.UTC().Format("20060102") ||
+		signing.signedAt.Before(now.Add(-signing.validity)) || signing.signedAt.After(now.Add(5*time.Minute)) {
 		return denied()
 	}
-	token, ok := iamSingleHeader(headers, "x-amz-security-token", false)
-	if !ok || !hmac.Equal([]byte(token), []byte(credential.sessionToken)) {
+	credential, ok := verifier.credentials.lookup(parsed.accessKey, now)
+	if !ok || credential.secretAccessKey == "" ||
+		!hmac.Equal([]byte(signing.token), []byte(credential.sessionToken)) {
 		return denied()
 	}
 	payloadHash, ok := iamSingleHeader(headers, "x-amz-content-sha256", false)
 	if !ok || payloadHash != "" && !iamSHA256Text(payloadHash) {
 		return denied()
-	}
-	query, err := url.ParseQuery(request.URL.RawQuery)
-	if err != nil {
-		return denied()
-	}
-	// Header authentication is the supported contract. Mixed/presigned control
-	// parameters must never be interpreted as application credential overrides.
-	for name := range query {
-		switch strings.ToLower(name) {
-		case "x-amz-algorithm", "x-amz-credential", "x-amz-date", "x-amz-expires",
-			"x-amz-signedheaders", "x-amz-signature", "x-amz-security-token":
-			return denied()
-		}
 	}
 	path := request.URL.EscapedPath()
 	if path == "" {
@@ -126,25 +95,27 @@ func (verifier *iamVerifier) authenticate(request *http.Request) (iamIdentity, [
 			return denied()
 		}
 	}
-	canonicalHeaders, ok := iamCanonicalHeaders(request, headers, parsed.signedHeaders, credential.sessionToken != "")
+	canonicalHeaders, ok := iamCanonicalHeaders(request, headers, parsed.signedHeaders,
+		signing.dateHeader, !signing.presigned && credential.sessionToken != "")
 	if !ok {
 		return denied()
 	}
 	if request.ContentLength > maxIAMRequestBody {
-		return iamIdentity{}, nil, http.StatusRequestEntityTooLarge
+		return iamAuthentication{}, http.StatusRequestEntityTooLarge
 	}
 	var body []byte
 	if request.Body != nil {
+		var err error
 		body, err = io.ReadAll(io.LimitReader(request.Body, maxIAMRequestBody+1))
 		if err != nil {
-			return iamIdentity{}, nil, http.StatusBadRequest
+			return iamAuthentication{}, http.StatusBadRequest
 		}
 	}
 	if len(body) > maxIAMRequestBody {
-		return iamIdentity{}, nil, http.StatusRequestEntityTooLarge
+		return iamAuthentication{}, http.StatusRequestEntityTooLarge
 	}
 	if request.ContentLength >= 0 && int64(len(body)) != request.ContentLength {
-		return iamIdentity{}, nil, http.StatusBadRequest
+		return iamAuthentication{}, http.StatusBadRequest
 	}
 	digest := sha256.Sum256(body)
 	actualHash := hex.EncodeToString(digest[:])
@@ -154,22 +125,23 @@ func (verifier *iamVerifier) authenticate(request *http.Request) (iamIdentity, [
 	canonicalRequest := strings.Join([]string{
 		request.Method,
 		httpbinding.EscapePath(path, false),
-		iamCanonicalQuery(query),
+		iamCanonicalQuery(signing.query),
 		canonicalHeaders,
 		strings.Join(parsed.signedHeaders, ";"),
 		actualHash,
 	}, "\n")
 	canonicalHash := sha256.Sum256([]byte(canonicalRequest))
 	scope := parsed.date + "/" + parsed.region + "/execute-api/aws4_request"
-	stringToSign := iamSigningAlgorithm + "\n" + date + "\n" + scope + "\n" + hex.EncodeToString(canonicalHash[:])
+	stringToSign := iamSigningAlgorithm + "\n" + signing.signedAt.UTC().Format(iamTimeFormat) + "\n" + scope + "\n" + hex.EncodeToString(canonicalHash[:])
 	key := iamHMAC([]byte("AWS4"+credential.secretAccessKey), parsed.date)
 	key = iamHMAC(key, parsed.region)
 	key = iamHMAC(key, "execute-api")
 	key = iamHMAC(key, "aws4_request")
-	if !hmac.Equal(parsed.signature, iamHMAC(key, stringToSign)) {
+	if !hmac.Equal(parsed.signature, iamHMAC(key, stringToSign)) ||
+		!verifier.credentials.current(credential, verifier.now()) {
 		return denied()
 	}
-	return credential.identity, body, 0
+	return iamAuthentication{identity: credential.identity, body: body, credential: credential}, 0
 }
 
 func parseIAMAuthorization(value string) (iamAuthorization, bool) {
@@ -195,22 +167,27 @@ func parseIAMAuthorization(value string) (iamAuthorization, bool) {
 			return result, false
 		}
 	}
-	scope := strings.Split(values["Credential"], "/")
+	return parseIAMCredentialFields(values["Credential"], values["SignedHeaders"], values["Signature"])
+}
+
+func parseIAMCredentialFields(credential, signedHeaders, signature string) (iamAuthorization, bool) {
+	var result iamAuthorization
+	scope := strings.Split(credential, "/")
 	if len(scope) != 5 || scope[0] == "" || len(scope[1]) != 8 || scope[3] != "execute-api" || scope[4] != "aws4_request" {
 		return result, false
 	}
 	result.accessKey, result.date, result.region = scope[0], scope[1], scope[2]
-	for index, name := range strings.Split(values["SignedHeaders"], ";") {
+	for index, name := range strings.Split(signedHeaders, ";") {
 		if !validHeaderName(name) || strings.ToLower(name) != name || name == "authorization" ||
 			index > 0 && name <= result.signedHeaders[index-1] {
 			return iamAuthorization{}, false
 		}
 		result.signedHeaders = append(result.signedHeaders, name)
 	}
-	if !iamSHA256Text(values["Signature"]) {
+	if !iamSHA256Text(signature) {
 		return iamAuthorization{}, false
 	}
-	result.signature, _ = hex.DecodeString(values["Signature"])
+	result.signature, _ = hex.DecodeString(signature)
 	return result, true
 }
 
@@ -248,9 +225,9 @@ func iamSingleHeader(headers map[string][]string, name string, required bool) (s
 	return values[0], true
 }
 
-func iamCanonicalHeaders(request *http.Request, headers map[string][]string, names []string, session bool) (string, bool) {
+func iamCanonicalHeaders(request *http.Request, headers map[string][]string, names []string, dateHeader string, session bool) (string, bool) {
 	var result strings.Builder
-	host, date, token := false, false, false
+	host, date, token := false, dateHeader == "", false
 	for _, name := range names {
 		var values []string
 		switch name {
@@ -286,7 +263,7 @@ func iamCanonicalHeaders(request *http.Request, headers map[string][]string, nam
 				return "", false
 			}
 		}
-		date = date || name == "x-amz-date"
+		date = date || name == dateHeader
 		token = token || name == "x-amz-security-token"
 		result.WriteString(name)
 		result.WriteByte(':')

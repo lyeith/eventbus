@@ -104,9 +104,12 @@ separate work. The Go/Python dev recipe consumer retains harness policy.
 
 Request gateway contracts are covered in GATEWAY.md. API Gateway management/deployment
 APIs and TOKEN/Cognito/JWT authorizers are separate features. HTTP API REQUEST
-authorizers, local header-SigV4 AWS_IAM identities, Lambda proxy 1.0/2.0 and Lambda
+authorizers, local header/query-SigV4 AWS_IAM identities, Lambda proxy 1.0/2.0 and Lambda
 Event invocation are implemented in the bounded request/runtime scope.
-IAM query presigning, SigV4a, streaming/unsigned payloads, credential refresh,
-STS and policy evaluation remain core gaps. Exact encoded-separator routing
+Effective Invoke policies, credential expiry and atomic local rotation are
+implemented. IAM/STS issuance and SCP/role-trust/boundary resolution remain
+separate service scope. REST SigV4a is an expansion (AWS HTTP APIs exclude it).
+Unsigned/AWS-chunked signing, long execute-api presign lifetimes and policy
+dialect bounds remain qualified in the gateway guide. Exact encoded-separator routing
 and noncanonical direct-URL signing forms still lack live AWS comparison.
 Warm Python/Node reuse and read-only registered GetFunction metadata are implemented; other Lambda management/provisioning APIs remain separate work.

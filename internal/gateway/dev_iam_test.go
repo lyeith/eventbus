@@ -39,7 +39,6 @@ func TestLocalIAMConfigurationRejectsAmbiguousAuthority(t *testing.T) {
 		name string
 		edit func(*Config)
 	}{
-		{"missing credentials", func(cfg *Config) { cfg.IAMCredentials = nil }},
 		{"missing secret", func(cfg *Config) {
 			value := cfg.IAMCredentials["LOCAL_SERVICE"]
 			value.SecretAccessKey = ""
@@ -90,6 +89,16 @@ func TestLocalIAMConfigurationRejectsAmbiguousAuthority(t *testing.T) {
 		require.NoError(t, cfg.Validate())
 		require.Equal(t, tc.resolved, routeAuthorizationType(cfg.Routes[0]))
 	}
+}
+
+func TestLocalIAMEmptyRegistryIsAValidDenyAllFixture(t *testing.T) {
+	cfg := localIAMFixtureConfig()
+	cfg.IAMCredentials = nil
+	require.NoError(t, cfg.Validate())
+	edge := newTestGateway(t, cfg, Options{})
+	response := httptest.NewRecorder()
+	edge.ServeHTTP(response, httptest.NewRequest("POST", "/items/denied", nil))
+	require.Equal(t, http.StatusForbidden, response.Code)
 }
 
 func TestLocalIAMYAMLRecipeLoadsNativeRouteAndExplicitCaller(t *testing.T) {

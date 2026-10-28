@@ -115,8 +115,12 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   Store bootstrap owns one transaction for schema/identity/verification setup;
   the `dev_seed_store.go` adapter uses the native credential owner.
 - `gateway` consumes REQUEST authorizers through AWS Lambda Invoke HTTP.
-  `iam.go` owns native SigV4 verification and immutable verified identities;
-  `dev_iam.go` binds explicit local credentials to fixture principals.
+  `iam.go` owns one native SigV4 verifier; `iam_signing.go` parses header/query
+  metadata. `iam_credentials.go` publishes immutable signing/identity/permission
+  generations and expiry fences. `invoke_policy*.go` owns shared compiled
+  Invoke/condition evaluation for credentials and REQUEST outputs; adapters keep
+  their separate parsers/limits. `dev_iam.go` binds local credential/principal/
+  policy fixtures; the CLI dev adapter reloads bindings on SIGHUP without routes.
   `routes.go` preserves original component boundaries; `mapping.go` retains
   raw capture provenance. `events.go` projects IAM separately from REQUEST
   context. One request-owned verified body is reused by Lambda/HTTP integrations.

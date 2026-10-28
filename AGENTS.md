@@ -54,8 +54,12 @@ before configuring endpoints or cleaning fixtures.
   Selected trigger source reload uses the named Cognito dev port and Lambda's
   existing generation retirement; it never resets Cognito state or drains peers.
 - `internal/gateway` owns native REQUEST/SigV4 authentication and HTTP/Lambda
-  proxy contracts. `iam.go` verifies original requests; `dev_iam.go` owns static
-  local identity bindings. Preserve wire component boundaries through routing,
+  proxy contracts. `iam.go` verifies original requests; `iam_signing.go` parses
+  signing metadata. `iam_credentials.go` owns immutable identity/permission
+  generations and expiry fences; `invoke_policy*.go` owns shared native matching
+  for IAM and REQUEST. `dev_iam.go` binds local credential/policy fixtures; the
+  CLI's named dev adapter reloads bindings on SIGHUP. Preserve wire component
+  boundaries through routing,
   policy identity and HTTP mapping. Applications own REQUEST handlers and
   integration mappings; no consuming application package/store is imported.
 - `internal/lambda` owns Invoke, language execution and child lifetime. Warm

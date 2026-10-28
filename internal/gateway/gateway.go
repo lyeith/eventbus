@@ -63,6 +63,10 @@ func New(cfg Config, options Options) (*Gateway, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	credentials, err := compileDevIAMCredentials(cfg.IAMCredentials)
+	if err != nil {
+		return nil, err
+	}
 	var retained *retainedGateway
 	if cfg.RetainedOwnerControlURL != "" {
 		var err error
@@ -80,7 +84,7 @@ func New(cfg Config, options Options) (*Gateway, error) {
 	result := &Gateway{config: cfg, options: options, transport: transport, connections: connections, authorizers: make(map[string]*lambdaAuthorizer), retained: retained}
 	invokeClient := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	result.invokeClient = invokeClient
-	result.iam = newIAMVerifier(cfg.Region, cfg.devIAMCredentials())
+	result.iam = newIAMVerifier(cfg.Region, credentials)
 	for _, redaction := range cfg.LogRedactions {
 		template, _ := parseTemplate(redaction) // Validated before allocating owners.
 		result.redactions = append(result.redactions, template)
@@ -251,17 +255,24 @@ func (gateway *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	event := newRequestEvent(gateway.config, route.config, r, parameters, requestID)
 	response := authorizerResponse{Context: make(map[string]string)}
 	if routeAuthorizationType(route.config) == "AWS_IAM" && !gateway.options.NoAuth {
-		identity, body, status := gateway.iam.authenticate(originalRequest)
+		authentication, status := gateway.iam.authenticate(originalRequest)
 		if status != 0 {
 			writeGatewayError(w, status)
 			return
 		}
-		event.iam, event.verifiedBody = &identity, body
+		credential := authentication.credential
+		now := gateway.iam.now()
+		if !credential.policy.permits(event.MethodARN, iamRequestFacts(originalRequest, credential, gateway.config.Region, now)) ||
+			!gateway.iam.credentials.current(credential, gateway.iam.now()) {
+			writeGatewayError(w, http.StatusForbidden)
+			return
+		}
+		event.iam, event.verifiedBody = &authentication.identity, authentication.body
 		if route.config.Integration.Type == "HTTP_PROXY" {
 			// The original reader remains owned by the incoming HTTP server. The
 			// proxy consumes these exact already-verified bytes through its clone.
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			r.ContentLength = int64(len(body))
+			r.Body = io.NopCloser(bytes.NewReader(authentication.body))
+			r.ContentLength = int64(len(authentication.body))
 		}
 	}
 	if route.config.Authorizer != "" && !gateway.options.NoAuth {

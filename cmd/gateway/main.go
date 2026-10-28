@@ -54,6 +54,8 @@ func run() error {
 	if err != nil {
 		return errors.Join(err, application.Close())
 	}
+	reload, stopReload := watchIAMFixtureReload()
+	defer stopReload()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	failure := make(chan error, len(listeners))
@@ -65,11 +67,23 @@ func run() error {
 	logger.Info().Int("port", cfg.Port).Int("retained_owner_continuation_port", cfg.RetainedOwnerContinuationPort).Bool("no_auth", options.noAuth).Msg("EventBus gateway ready")
 	remaining := len(servers)
 	var serveErr error
-	select {
-	case serveErr = <-failure:
-		remaining--
-	case <-ctx.Done():
-	case <-application.RetainedShutdownSignal():
+serving:
+	for {
+		select {
+		case serveErr = <-failure:
+			remaining--
+			break serving
+		case <-ctx.Done():
+			break serving
+		case <-application.RetainedShutdownSignal():
+			break serving
+		case <-reload:
+			if err := reloadIAMFixture(options.configuration, application); err != nil {
+				logger.Warn().Msg("IAM credential fixture reload rejected; active generation retained")
+			} else {
+				logger.Info().Msg("IAM credential fixtures reloaded")
+			}
+		}
 	}
 	drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

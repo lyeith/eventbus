@@ -198,3 +198,14 @@ the consuming SDK's credentials and do not read ambient AWS configuration.
 
 Use the application's tests for end-to-end behavior. When changing EventBus,
 follow [AGENTS.md](../AGENTS.md) and [SDK verification](../tests/README.md).
+
+
+Gateway IAM verification uses original signed/presigned HTTP, never an injected
+identity header. Local credential fixtures can carry effective Invoke policies,
+expiry and explicit principal facts; test admit and refuse paths. SIGHUP atomically
+reloads only those fixtures, including a deny-all empty registry. Work already
+admitted retains its native lifetime. See [gateway contracts](GATEWAY.md#local-iam-caller-authentication).
+
+Use the [opt-in AWS observer](../tests/sdk/README.md#optional-live-aws-gateway-observations)
+only with explicitly selected existing echo fixtures/profile. Its offline tests
+prove request/evidence handling; they do not attest live AWS route normalization.

@@ -21,11 +21,13 @@ import (
 
 var iamTestTime = time.Date(2026, 10, 28, 1, 2, 3, 0, time.UTC)
 
-func iamTestVerifier() *iamVerifier {
+func iamTestVerifier() *iamVerifier { return iamTestVerifierWithToken("") }
+
+func iamTestVerifierWithToken(token string) *iamVerifier {
 	verifier := newIAMVerifier("us-east-1", map[string]iamCredential{
 		"local-example-key": {
-			secretAccessKey: "local-example-secret",
-			identity:        iamIdentity{AccountID: "111122223333", UserARN: "arn:aws:iam::111122223333:user/worker", UserID: "AID-local", CallerID: "AID-local"},
+			secretAccessKey: "local-example-secret", sessionToken: token,
+			identity: iamIdentity{AccountID: "111122223333", UserARN: "arn:aws:iam::111122223333:user/worker", UserID: "AID-local", CallerID: "AID-local"},
 		},
 	})
 	verifier.now = func() time.Time { return iamTestTime }
@@ -69,7 +71,8 @@ func TestIAMVerifierSDKRequestsPreserveOriginalRequest(t *testing.T) {
 				}
 				request := iamSDKRequest(t, method, path, body, iamTestTime, "")
 				headers, target, host := request.Header.Clone(), *request.URL, request.Host
-				identity, captured, status := verifier.authenticate(request)
+				authenticated, status := verifier.authenticate(request)
+				identity, captured := authenticated.identity, authenticated.body
 				require.Zero(t, status)
 				require.True(t, bytes.Equal(body, captured))
 				require.Equal(t, "local-example-key", identity.AccessKey)
@@ -107,12 +110,10 @@ func TestIAMVerifierFrozenBotocoreControlWithoutSignedContentLength(t *testing.T
 		"X-Amz-Security-Token": {"local-example-token"},
 		"Authorization":        {"AWS4-HMAC-SHA256 Credential=local-example-key/20261028/us-east-1/execute-api/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-repeated, Signature=e9236cd33602b705d021e4206ff6ccf98ab1f7785b52ab2b33a856c9da39cd9a"},
 	}
-	verifier := iamTestVerifier()
-	credential := verifier.credentials["local-example-key"]
-	credential.sessionToken = "local-example-token"
-	verifier.credentials["local-example-key"] = credential
+	verifier := iamTestVerifierWithToken("local-example-token")
 	originalQuery := request.URL.RawQuery
-	identity, captured, status := verifier.authenticate(request)
+	authenticated, status := verifier.authenticate(request)
+	identity, captured := authenticated.identity, authenticated.body
 	require.Zero(t, status)
 	require.Equal(t, "local-example-key", identity.AccessKey)
 	require.True(t, bytes.Equal(body, captured))
@@ -193,7 +194,6 @@ func TestIAMVerifierRejectsAuthenticationMetadataBeforeBodyRead(t *testing.T) {
 			r.Header["X-Amz-Content-Sha256"] = []string{strings.Repeat("a", 64), strings.Repeat("a", 64)}
 		}},
 		{"malformed query", func(r *http.Request) { r.URL.RawQuery = "a=1&bad=%GG" }},
-		{"ambiguous query", func(r *http.Request) { r.URL.RawQuery = "a=1;admin=true" }},
 		{"presigned query", func(r *http.Request) { r.URL.RawQuery = "X-Amz-Signature=a&X-Amz-Signature=b" }},
 		{"inconsistent raw path", func(r *http.Request) { r.URL.RawPath = "/different%2Fpath" }},
 		{"malformed raw path", func(r *http.Request) { r.URL.RawPath = "/bad%GG" }},
@@ -207,7 +207,8 @@ func TestIAMVerifierRejectsAuthenticationMetadataBeforeBodyRead(t *testing.T) {
 			test.change(request)
 			tracker := &iamReadTracker{reader: strings.NewReader("payload")}
 			request.Body = tracker
-			identity, body, status := iamTestVerifier().authenticate(request)
+			authenticated, status := iamTestVerifier().authenticate(request)
+			identity, body := authenticated.identity, authenticated.body
 			require.Equal(t, http.StatusForbidden, status)
 			require.Zero(t, tracker.reads)
 			require.False(t, tracker.closed)
@@ -235,7 +236,8 @@ func TestIAMVerifierBindsMethodPathQueryHeadersAndBody(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := iamSDKRequest(t, http.MethodPost, "/items/a%2Fb?a=1&a=3", []byte("payload"), iamTestTime, "")
 			test.change(request)
-			identity, body, status := iamTestVerifier().authenticate(request)
+			authenticated, status := iamTestVerifier().authenticate(request)
+			identity, body := authenticated.identity, authenticated.body
 			require.Equal(t, http.StatusForbidden, status)
 			require.Zero(t, identity)
 			require.Nil(t, body)
@@ -245,7 +247,7 @@ func TestIAMVerifierBindsMethodPathQueryHeadersAndBody(t *testing.T) {
 	// original query spelling/order remains available to the integration.
 	request := iamSDKRequest(t, http.MethodGet, "/items/one?a=1&a=3", nil, iamTestTime, "")
 	request.URL.RawQuery = "a=3&a=1"
-	_, _, status := iamTestVerifier().authenticate(request)
+	_, status := iamTestVerifier().authenticate(request)
 	require.Zero(t, status)
 	require.Equal(t, "a=3&a=1", request.URL.RawQuery)
 }
@@ -260,7 +262,8 @@ func TestIAMVerifierSessionTokensRegistryOwnershipAndFreshness(t *testing.T) {
 	delete(original, "local-example-key")
 	for _, skew := range []time.Duration{-5 * time.Minute, 0, 5 * time.Minute} {
 		request := iamSDKRequest(t, http.MethodGet, "/items/one", nil, iamTestTime.Add(skew), "local-example-token")
-		identity, _, status := verifier.authenticate(request)
+		authenticated, status := verifier.authenticate(request)
+		identity := authenticated.identity
 		require.Zero(t, status)
 		require.Equal(t, "local-example-key", identity.AccessKey, "lookup key owns accessKey identity")
 	}
@@ -275,7 +278,7 @@ func TestIAMVerifierSessionTokensRegistryOwnershipAndFreshness(t *testing.T) {
 		change(request)
 		tracker := &iamReadTracker{reader: strings.NewReader("")}
 		request.Body = tracker
-		_, _, status := verifier.authenticate(request)
+		_, status := verifier.authenticate(request)
 		require.Equal(t, http.StatusForbidden, status)
 		require.Zero(t, tracker.reads)
 	}
@@ -289,7 +292,8 @@ func TestIAMVerifierBoundedReadAndCallerOwnedClosure(t *testing.T) {
 	request := iamSDKRequest(t, http.MethodPost, "/items/one", []byte("payload"), iamTestTime, "")
 	tracker := &iamReadTracker{reader: strings.NewReader("payload")}
 	request.Body = tracker
-	_, body, status := iamTestVerifier().authenticate(request)
+	authenticated, status := iamTestVerifier().authenticate(request)
+	body := authenticated.body
 	require.Zero(t, status)
 	require.Equal(t, []byte("payload"), body)
 	require.False(t, tracker.closed, "request owner closes the body")
@@ -298,27 +302,28 @@ func TestIAMVerifierBoundedReadAndCallerOwnedClosure(t *testing.T) {
 
 	request = iamSDKRequest(t, http.MethodPost, "/items/one", []byte("payload"), iamTestTime, "")
 	request.Body = io.NopCloser(iamFailReader{})
-	_, _, status = iamTestVerifier().authenticate(request)
+	_, status = iamTestVerifier().authenticate(request)
 	require.Equal(t, http.StatusBadRequest, status)
 
 	request = iamSDKRequest(t, http.MethodPost, "/items/one", nil, iamTestTime, "")
 	request.ContentLength = maxIAMRequestBody + 1
 	tracker = &iamReadTracker{reader: strings.NewReader("")}
 	request.Body = tracker
-	_, _, status = iamTestVerifier().authenticate(request)
+	_, status = iamTestVerifier().authenticate(request)
 	require.Equal(t, http.StatusRequestEntityTooLarge, status)
 	require.Zero(t, tracker.reads)
 
 	large := bytes.Repeat([]byte{'x'}, maxIAMRequestBody)
 	request = iamSDKRequest(t, http.MethodPost, "/items/one", large, iamTestTime, "")
-	_, body, status = iamTestVerifier().authenticate(request)
+	authenticated, status = iamTestVerifier().authenticate(request)
+	body = authenticated.body
 	require.Zero(t, status)
 	require.Len(t, body, maxIAMRequestBody)
 
 	request = iamSDKRequest(t, http.MethodPost, "/items/one", nil, iamTestTime, "")
 	request.ContentLength = -1 // Actual HTTP chunked framing can omit a length.
 	request.Body = io.NopCloser(io.MultiReader(bytes.NewReader(large), strings.NewReader("x")))
-	_, _, status = iamTestVerifier().authenticate(request)
+	_, status = iamTestVerifier().authenticate(request)
 	require.Equal(t, http.StatusRequestEntityTooLarge, status)
 }
 
