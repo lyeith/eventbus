@@ -7,9 +7,16 @@ It does not import later EventBus main changes or replace a shared runtime.
 Cognito now admits at most 1 MiB of complete JSON before typed decoding and
 operation effects, using the existing bounded byte reader and native envelope.
 The documented aggregate policy preserves empty-body and capability behavior.
-Twenty owner controls cover bytes, length hints, read failure and wire behavior;
-old-source baseline, affected owner/SDK checks and release verification are pending.
-Plans source/native pins stay at v0.14.0 until a verified release is available.
+Twenty admission controls passed on 76537d0; test-only a308328 first reproduced
+the released reader's unbounded read and pool creation. Both originals are retained.
+The initial final-source race hit Go's default 10-minute alarm; the corrected
+original used README's existing 15-minute budget and passed 457 Cognito leaves.
+Together with the three retained owner packages: 613 leaf and 61 container passes.
+Scoped vet, five frozen Python helper tests and all six frozen Cognito SDK lanes
+passed (10 SDK leaves, three containers), with clean source after every stage.
+Proof job cdfcc65d and documented-budget-original-review.json record the results.
+Next: eight release artifacts/checksums and packaged Linux proof; publication
+awaits artifact review. Plans pins stay at v0.14.0 until verified downloads exist.
 
 ## Historical v0.14.0 preparation snapshot
 

@@ -6,11 +6,18 @@ The isolated sp1/r887-cognito-json-20261117 branch starts at product pin 0cd0c48
 Only the Cognito receiving owner, its tests and directly related docs change.
 JSON admission reads at most the 1 MiB budget plus one sentinel byte; it refuses
 overflow/read failure before effects and retains typed envelopes.
-The previous release's unbounded reader has a separate test-only baseline commit.
-Next: collect that baseline, validate the changed owner and frozen Cognito SDK
-lanes, build/verify all release artifacts, publish a separate v0.14.1 maintenance
-release without moving latest, and verify downloads before updating both Plans pins.
-No shared runtime replacement is included. Preserve the historical record below.
+Test-only a308328 and job_12251ab6 reproduced the old reader's excess read and
+pool creation. Retain that baseline and the initial final-source 10-minute timeout
+(job_3e1230d9); the current README already specifies a 15-minute race budget.
+On unchanged 76537d0, corrected job_cdfcc65d completed the Cognito race package
+and remaining scoped vet/frozen SDK stages. Combined owner proof: 613 leaf plus
+61 container passes, including all 20 admission controls; Python helpers 5/5;
+all six Cognito SDK lanes passed (10 leaves, three containers), without skips.
+documented-budget-original-review.json retains full output, hashes and clean source.
+Next: build eight binaries and SHA256SUMS with scripts/build-release.sh, then run
+the documented Linux packaged trigger-reload SDK proof using EVENTBUS_SMOKE_BINARY.
+Recheck v0.14.1 absence; publish only after artifact review, without moving latest.
+Verify downloads before both Plans pins. Keep shared runtimes and history below.
 
 ## Historical v0.14.0 preparation handoff
 
