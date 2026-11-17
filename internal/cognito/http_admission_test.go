@@ -187,3 +187,43 @@ func TestCognitoJSONAdmissionPreservesHTTPWireBehavior(t *testing.T) {
 		})
 	}
 }
+
+func TestCognitoJSONAdmissionContentLengthIsOnlyAHint(t *testing.T) {
+	const payload = `{"PoolName":"length-hint"}`
+	for _, scenario := range []struct {
+		name   string
+		length int64
+	}{
+		{"unknown_length", -1},
+		{"zero_length_hint", 0},
+		{"underreported_length", 1},
+		{"overreported_length", 1 << 40},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			store, _ := newCognitoTestStore(t)
+			handler := NewHandler(store, Options{})
+			body := &cognitoAdmissionBody{reader: strings.NewReader(payload)}
+			request := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(t.Context())
+			request.Header.Set("X-Amz-Target", cognitoTargetPrefix+"CreateUserPool")
+			request.Body = body
+			request.ContentLength = scenario.length
+			response := httptest.NewRecorder()
+
+			handler.ServeAction(response, request, Action(request.Header.Get("X-Amz-Target")))
+
+			require.Equal(t, http.StatusOK, response.Code, "body=%s", response.Body.String())
+			assert.Equal(t, len(payload), body.read)
+			assert.True(t, body.closed)
+			assert.Equal(t, 1, cognitoAdmissionPoolCount(t, store))
+			var envelope struct {
+				UserPool struct{ Id, Name string }
+			}
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &envelope))
+			require.NotEmpty(t, envelope.UserPool.Id)
+			stored, err := store.LookupPool(t.Context(), envelope.UserPool.Id)
+			require.NoError(t, err)
+			assert.True(t, stored.Native)
+			assert.Equal(t, "length-hint", stored.Name)
+		})
+	}
+}

@@ -7,7 +7,7 @@ It does not import later EventBus main changes or replace a shared runtime.
 Cognito now admits at most 1 MiB of complete JSON before typed decoding and
 operation effects, using the existing bounded byte reader and native envelope.
 The documented aggregate policy preserves empty-body and capability behavior.
-Sixteen owner controls cover bytes, length hints, read failure and wire behavior;
+Twenty owner controls cover bytes, length hints, read failure and wire behavior;
 old-source baseline, affected owner/SDK checks and release verification are pending.
 Plans source/native pins stay at v0.14.0 until a verified release is available.
 
