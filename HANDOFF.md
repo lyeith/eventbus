@@ -4,8 +4,8 @@
 
 The isolated sp1/r887-cognito-json-20261117 branch starts at product pin 0cd0c486.
 Only the Cognito receiving owner, its tests and directly related docs change.
-The new 1 MiB aggregate JSON budget reads at most one sentinel byte beyond the
-limit, refuses overflow/read failure before effects and retains typed envelopes.
+JSON admission reads at most the 1 MiB budget plus one sentinel byte; it refuses
+overflow/read failure before effects and retains typed envelopes.
 The previous release's unbounded reader has a separate test-only baseline commit.
 Next: collect that baseline, validate the changed owner and frozen Cognito SDK
 lanes, build/verify all release artifacts, publish a separate v0.14.1 maintenance

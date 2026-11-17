@@ -55,13 +55,15 @@ of Query admission and is not an AWS-wide request-size guarantee. Large metadata
 maps, many fields or JSON escaping can exceed this budget even when individual
 values satisfy their own limits; the complete encoded request must fit.
 
-The service reads at most the budget plus one byte from the actual stream;
-`Content-Length` is only an allocation hint. Overflow is refused before decoding
-or operation effects with HTTP 400 `InvalidParameterException`, JSON1.1 content
-type, `__type` and lowercase `message`. Read failures are also refused before
-operation effects. A valid prefix never admits an over-budget suffix. Admitted
-input still requires complete JSON, preserves typed capability errors, and lets
-existing operation validation handle empty bodies.
+The JSON admission reader reads at most the budget plus one byte from the
+request body; `Content-Length` is only an allocation hint. HTTP body closure can
+separately drain remaining input under the server's transport cleanup policy.
+Overflow is refused before decoding or operation effects with HTTP 400
+`InvalidParameterException`, JSON1.1 content type, `__type` and lowercase
+`message`. Read failures are also refused before operation effects. A valid
+prefix never admits an over-budget suffix. Admitted input still requires complete
+JSON, preserves typed capability errors, and lets existing operation validation
+handle empty bodies.
 
 ## Pool and client inventory
 
