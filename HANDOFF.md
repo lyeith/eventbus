@@ -1,5 +1,19 @@
 # Handoff
 
+## Current maintenance work — Plans row 887
+
+The isolated sp1/r887-cognito-json-20261117 branch starts at product pin 0cd0c486.
+Only the Cognito receiving owner, its tests and directly related docs change.
+The new 1 MiB aggregate JSON budget reads at most one sentinel byte beyond the
+limit, refuses overflow/read failure before effects and retains typed envelopes.
+The previous release's unbounded reader has a separate test-only baseline commit.
+Next: collect that baseline, validate the changed owner and frozen Cognito SDK
+lanes, build/verify all release artifacts, publish a separate v0.14.1 maintenance
+release without moving latest, and verify downloads before updating both Plans pins.
+No shared runtime replacement is included. Preserve the historical record below.
+
+## Historical v0.14.0 preparation handoff
+
 Canonical SSD /home/spite/Projects/eventbus, main. #33–#36 source work complete.
 Preparing v0.14.0; latest public binaries remain v0.13.0 until publication.
 

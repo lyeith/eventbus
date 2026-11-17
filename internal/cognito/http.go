@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -14,6 +13,11 @@ import (
 )
 
 const cognitoTargetPrefix = "AWSCognitoIdentityProviderService."
+
+// maxCognitoJSONBodyBytes is this emulator's receiving budget for Cognito JSON
+// control requests, including token, attribute, metadata and configuration input.
+// It is a local aggregate admission policy, not an AWS per-operation size limit.
+const maxCognitoJSONBodyBytes int64 = 1 << 20
 
 // IsTarget reports whether the X-Amz-Target header is a Cognito IDP op.
 func IsTarget(target string) bool {
@@ -153,16 +157,20 @@ func cognitoJSONResponse(w http.ResponseWriter, statusCode int, body interface{}
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// readCognitoJSON decodes the request body into `dst`. On malformed JSON or
-// read failure it writes an InvalidParameterException response and returns
-// false so the caller bails out.
+// readCognitoJSON decodes the complete admitted request body into dst. Overflow,
+// malformed JSON and read failures produce InvalidParameterException before the
+// caller performs its operation.
 func readCognitoJSON(w http.ResponseWriter, r *http.Request, dst interface{}) bool {
-	body, err := io.ReadAll(r.Body)
+	defer func() { _ = r.Body.Close() }()
+	body, err := awsprotocol.ReadBoundedBody(r.Body, r.ContentLength, maxCognitoJSONBodyBytes)
 	if err != nil {
 		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", "failed to read request body")
 		return false
 	}
-	defer func() { _ = r.Body.Close() }()
+	if int64(len(body)) > maxCognitoJSONBodyBytes {
+		cognitoJSONError(w, http.StatusBadRequest, "InvalidParameterException", fmt.Sprintf("request body exceeds %d bytes", maxCognitoJSONBodyBytes))
+		return false
+	}
 	if len(body) == 0 {
 		// Cognito accepts empty body for some ops; let the caller validate
 		// required fields against the zero value.

@@ -1,5 +1,18 @@
 # EventBus state
 
+## v0.14.1 maintenance candidate — 17 November 2026
+
+Plans row 887 uses an isolated branch from the exact product pin 0cd0c486.
+It does not import later EventBus main changes or replace a shared runtime.
+Cognito now admits at most 1 MiB of complete JSON before typed decoding and
+operation effects, using the existing bounded byte reader and native envelope.
+The documented aggregate policy preserves empty-body and capability behavior.
+Sixteen owner controls cover bytes, length hints, read failure and wire behavior;
+old-source baseline, affected owner/SDK checks and release verification are pending.
+Plans source/native pins stay at v0.14.0 until a verified release is available.
+
+## Historical v0.14.0 preparation snapshot
+
 Canonical SSD /home/spite/Projects/eventbus, main; public MIT AWS emulator
 and agent development harness. Tickets #33–#36 implemented.
 Release v0.14.0 is being prepared; published latest remains v0.13.0 at b97996f.

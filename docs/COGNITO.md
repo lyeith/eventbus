@@ -44,6 +44,25 @@ proofs and [agent workflow](AGENT-HARNESS.md) for application-owned scenarios.
 Unknown operations return `InvalidAction`; optional settings are limited to
 the supported subset below.
 
+## JSON request admission
+
+Cognito JSON requests have a 1 MiB (1,048,576-byte) receiving budget. The
+supported operations carry authentication, attribute, metadata and pool/client
+configuration JSON rather than binary uploads. This local aggregate policy leaves
+headroom around the existing 131,072-byte pagination-token and 2,048-character
+attribute limits while bounding input before typed decoding. It is independent
+of Query admission and is not an AWS-wide request-size guarantee. Large metadata
+maps, many fields or JSON escaping can exceed this budget even when individual
+values satisfy their own limits; the complete encoded request must fit.
+
+The service reads at most the budget plus one byte from the actual stream;
+`Content-Length` is only an allocation hint. Overflow is refused before decoding
+or operation effects with HTTP 400 `InvalidParameterException`, JSON1.1 content
+type, `__type` and lowercase `message`. Read failures are also refused before
+operation effects. A valid prefix never admits an over-budget suffix. Admitted
+input still requires complete JSON, preserves typed capability errors, and lets
+existing operation validation handle empty bodies.
+
 ## Pool and client inventory
 
 [ListUserPools](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_ListUserPools.html)
