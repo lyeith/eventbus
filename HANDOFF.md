@@ -1,57 +1,26 @@
 # Handoff
 
-Canonical SSD /home/spite/Projects/eventbus, main. v0.21.0 published/latest:
-https://github.com/lyeith/eventbus/releases/tag/v0.21.0
-Tag4276a0685328f1dea2164b23df3b64cb9b21439f; CI40661265617 success.
-All8 target binaries/9 downloads verified; actual Linux/Mac gateway SDK proof,
-clean metadata, checksums and help. Release cleanup complete.
+v0.22.0 is public and latest. Tag source 616f89a, CI 45553342666, all nine
+public assets verified. Proof: /tmp/eventbus-sqs-partial-final-race.log and
+/tmp/eventbus-v0.22.0-package.log. The latter uses the real packaged Linux
+service, boto3 and a local Python Lambda with delivery capture. All outputs
+and release worktree removed. Live AWS was not used.
 
-User then requested remaining gateway parity gaps closed. Follow-up source
-bd1ec41e0b3f7466c16799edc03c131c45c00b4c pushed; CI40667518696 passed
-full Go race/vet, frozen SDKs, offline observer and unchanged Swagger. Evidence:
-/tmp/eventbus-gateway-parity-source-ci-20261028.log. Post-release owners:
-- f9fd37e protects HTTPv2 context path/identity escaped separators/percent,
-  with AWS-maintained fixture evidence; opt-in live AWS observation seam.
-- iam.go one verifier; iam_signing.go one header/Date/query metadata parser and
-  RFC3986 query canonicalization, actual payload hashing, conservative5min cap.
-- invoke_policy*.go owns shared compiled Invoke/condition matching; native
-  iam_policy.go parser separate from REQUEST output parser/512 limit.
-- iam_credentials.go owns immutable signing/identity/permission generations;
-  dev_iam.go validates/detaches principal/policy/lifetime facts.
-- Gateway builds facts from original ingress and same verified credential,
-  evaluates current API-owner execution ARN, then rechecks expiry/generation.
-- CLI dev_iam_reload.go uses SIGHUP through existing serving owner; reload only
-  credential fixtures, invalid candidate unchanged, empty valid deny-all.
-- No new verifier, application dependency, IAM/STS service or background owner.
+The first local mapping coverage change on main adds paginated List,
+Update and mapping tags with AWS SDK request and response shapes. Native
+Update returns after the old workers have joined their accepted work and
+original receipt processing. It preserves the bound queue and UUID, and
+restarts only when enabled. Concurrent tag changes survive the join.
+The release tag does not contain this follow-up.
 
-Evidence under /tmp:
-- eventbus-gateway-parity-final-race-v2-20261028.log: affected gateway17.054s,
-  cmd3.342s/tests1.058s. final-vet-v2: all tags passed.
-- eventbus-gateway-parity-native-sdk-20261028.log:1.994s real SDK header/presign
-  HTTP -> native provided Go Lambda, both formats/static/session, binary body,
-  path/query/identity, explicit policy refusal and tamper invocation counts.
-- eventbus-gateway-parity-swagger-20261028.log: unchanged handlers9.005s.
-- eventbus-aws-parity-signer-modes-offline-20261028.log + botocore-offline:
-  race passes; optional existing pinned1.40.76 interpreter exercised against
-  fake transport, no cloud. CI step repeats offline contracts only.
-- botocore Date/query and official Smithy vector generation saved as
-  eventbus-gateway-parity-*-vectors-20261028.log / *-vector-20261028.log.
-- Independent review found/fixed last-key revocation, tested CLI empty/recovery;
-  tests also cover same-key replacement/expiry during blocked body, token
-  rotation, detached ownership, concurrent snapshots and policy conditions.
-- Initial fixture compile/cleanup failures fixed; final gates above passed.
+Local verification: /tmp/eventbus-sqs-management-sdk.log (real boto3
+pagination/filter, tag CRUD, enable/disable/reset, and full prior SQS batch
+scenario); /tmp/eventbus-sqs-management-race.log (app, server, retained
+admission); /tmp/eventbus-sqs-management-final-v2.log (final mapping race and
+tagged vet, after updating stale unsupported-feature assertions).
 
-Qualifications:
-No live AWS evidence yet; user was asked for existing echo URL/profile/region.
-Observer requires explicit dedicated marked HTTPS fixtures and creates none.
-Presign>5min, unsigned/AWS-chunked forms unqualified; HTTP APIs exclude SigV4a.
-Combined set+IfExists/nonstring variables and malformed static ARN conditions
-are rejected; exact native policy bounds documented. IAM/STS/SCP/trust/boundary
-resolution is separate scope. v0.21.0 binaries do not include this follow-up.
-
-Source follow-up and validation complete. Remaining live qualification awaits
-explicit fixture/profile input. No additional release was requested for the
-post-publication follow-up; published binaries remain v0.21.0. All owned author scratch/empty failed
-managed scratch cleaned after quiescent inspection; success scratch auto-removed.
-No processes/worktrees/envs/deps/live-stack/cache-policy/laptop Plans changes.
-Evidence follows existing host retention, no pins.
+Remaining application-facing gaps are in docs/BACKLOG.md. The SQS queue owns
+leases, exact payload admission, FIFO and redrive. Eventsource owns filtering
+policy and joined mapping generations. SNS owns admission retry and webhooks,
+Lambda owns execution retry and destinations. No live or default stack was
+changed. No dependencies added.
