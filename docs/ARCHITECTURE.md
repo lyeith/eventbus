@@ -78,8 +78,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   SES/SNS/Cognito notification and Lambda evidence wrappers use `devcapture` for durable output mechanics.
   Publication, subscriptions and queue settlement
   need the same broker. Queue collections remain private to that owner.
-- `eventsource` declares queue/function ports and owns native Create/Get/Delete
-  mappings and poller lifetime. App binds the original broker queue instance and
+- `eventsource` declares queue/function ports and owns native mapping CRUD, tags and worker lifetime.
+  Update joins accepted work before publishing replacement settings. App binds the original broker queue instance and
   adapts completion-based Lambda Execute; SQS alone owns visibility/FIFO/redrive.
   The mapping validates partial batch responses before any ACK. Native mapping
   ACK delegates to messaging's receipt-settlement operation:

@@ -112,8 +112,10 @@ def run():
         return url, arn
 
     def mapping(arn, owner="A", batch=5, concurrency=2, enabled=True, function="batch-handler:live",
-                report_batch_item_failures=False):
+                report_batch_item_failures=False, tags=None):
         kwargs = dict(EventSourceArn=arn, FunctionName=function, Enabled=enabled, MaximumBatchingWindowInSeconds=0)
+        if tags is not None:
+            kwargs["Tags"] = tags
         if batch is not None:
             kwargs["BatchSize"] = batch
         if concurrency is not None:
@@ -387,17 +389,37 @@ def run():
         private_url, private_arn = queue("private", owner="B")
         error("ResourceNotFoundException", functions.create_event_source_mapping,
               EventSourceArn=private_arn, FunctionName="batch-handler:live", BatchSize=5)
-        ident = mapping(private_arn, owner="B", enabled=False)
+        ident = mapping(private_arn, owner="B", enabled=False, tags={"before": "update"})
         send_backlog(private_url, "disabled", 5, owner="B")
         assert counts(private_url, "B") == (5, 0) and not rows("disabled", owner="B")
         error("ResourceNotFoundException", functions.get_event_source_mapping, UUID=ident)
-        delete_mapping(ident, "B")
-        ident = mapping(private_arn, owner="B")
+        functions_b = clients["B"][1]
+        mapping_arn = functions_b.get_event_source_mapping(UUID=ident)["EventSourceMappingArn"]
+        assert functions_b.list_tags(Resource=mapping_arn)["Tags"] == {"before": "update"}
+        functions_b.tag_resource(Resource=mapping_arn, Tags={"after": "update"})
+        functions_b.untag_resource(Resource=mapping_arn, TagKeys=["before"])
+        other = mapping(private_arn, owner="B", enabled=False, function="batch-handler:short")
+        pages = list(functions_b.get_paginator("list_event_source_mappings").paginate(
+            EventSourceArn=private_arn, PaginationConfig={"PageSize": 1}))
+        assert len(pages) == 2 and all(len(page["EventSourceMappings"]) == 1 for page in pages), pages
+        assert {page["EventSourceMappings"][0]["UUID"] for page in pages} == {ident, other}
+        delete_mapping(other, "B")
+        error("InvalidParameterValueException", functions_b.update_event_source_mapping, UUID=ident, BatchSize=11)
+        assert functions_b.get_event_source_mapping(UUID=ident)["State"] == "Disabled"
+        updated = functions_b.update_event_source_mapping(UUID=ident, Enabled=True, BatchSize=5,
+            FunctionResponseTypes=["ReportBatchItemFailures"])
+        assert updated["UUID"] == ident and updated["State"] == "Enabled", updated
+        assert updated["FunctionResponseTypes"] == ["ReportBatchItemFailures"]
+        assert functions_b.list_tags(Resource=mapping_arn)["Tags"] == {"after": "update"}
         wait(lambda: rows("disabled", "completed", "B"), "isolated owner's batch")
         assert not rows("disabled") and rows("disabled", "completed", "B")[0]["owner"] == "B"
         wait_empty(private_url, "B")
+        updated = functions_b.update_event_source_mapping(
+            UUID=ident, Enabled=False, FunctionResponseTypes=[], ScalingConfig={})
+        assert updated["State"] == "Disabled" and not updated["FunctionResponseTypes"], updated
+        assert not updated.get("ScalingConfig", {}).get("MaximumConcurrency"), updated
         delete_mapping(ident, "B")
-        print("disabled mapping preserved backlog; owner isolation and unknown/deleted mapping errors verified")
+        print("SDK List paginator/filter, tags and Update enabled/disabled/clear settings; original owner and mapping retained")
 
         # Delete and Close each cancel/join two real pending handler children.
         # Gate release after joining cannot complete either child or settle its

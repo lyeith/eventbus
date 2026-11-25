@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
 	"strings"
@@ -24,13 +25,14 @@ type ScalingConfig struct {
 }
 
 type CreateInput struct {
-	EventSourceARN                 string         `json:"EventSourceArn"`
-	FunctionName                   string         `json:"FunctionName"`
-	BatchSize                      *int           `json:"BatchSize,omitempty"`
-	Enabled                        *bool          `json:"Enabled,omitempty"`
-	MaximumBatchingWindowInSeconds *int           `json:"MaximumBatchingWindowInSeconds,omitempty"`
-	FunctionResponseTypes          []string       `json:"FunctionResponseTypes,omitempty"`
-	ScalingConfig                  *ScalingConfig `json:"ScalingConfig,omitempty"`
+	Tags                           map[string]string `json:"Tags,omitempty"`
+	EventSourceARN                 string            `json:"EventSourceArn"`
+	FunctionName                   string            `json:"FunctionName"`
+	BatchSize                      *int              `json:"BatchSize,omitempty"`
+	Enabled                        *bool             `json:"Enabled,omitempty"`
+	MaximumBatchingWindowInSeconds *int              `json:"MaximumBatchingWindowInSeconds,omitempty"`
+	FunctionResponseTypes          []string          `json:"FunctionResponseTypes,omitempty"`
+	ScalingConfig                  *ScalingConfig    `json:"ScalingConfig,omitempty"`
 }
 
 type Mapping struct {
@@ -65,6 +67,9 @@ func unavailable() error {
 }
 
 type entry struct {
+	tags                map[string]string
+	updateTarget        string // Nonempty while Update owns this entry.
+	stopIntake          context.CancelFunc
 	mapping             Mapping
 	queue               Queue
 	cancel              context.CancelFunc
@@ -159,10 +164,20 @@ func (s *Service) functionARN(value string) (string, error) {
 	return "arn:aws:lambda:" + s.region + ":" + s.account + ":function:" + value, nil
 }
 
-func (s *Service) validate(input CreateInput) (string, error) {
-	parts := queuePattern.FindStringSubmatch(input.EventSourceARN)
+func (s *Service) validateSourceARN(value string) error {
+	parts := queuePattern.FindStringSubmatch(value)
 	if parts == nil || parts[1] != s.region || parts[2] != s.account || len(parts[3]) > 80 {
-		return "", invalid("EventSourceArn must identify an owned local SQS queue")
+		return invalid("EventSourceArn must identify an owned local SQS queue")
+	}
+	return nil
+}
+
+func (s *Service) validate(input CreateInput) (string, error) {
+	if err := s.validateSourceARN(input.EventSourceARN); err != nil {
+		return "", err
+	}
+	if err := validateMappingTags(input.Tags); err != nil {
+		return "", err
 	}
 	if input.BatchSize != nil && (*input.BatchSize < 1 || *input.BatchSize > 10) {
 		return "", invalid("Only BatchSize values from 1 through 10 are supported")
@@ -206,19 +221,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 		}
 		return Mapping{}, missing("Source queue is not owned by this emulator")
 	}
-	info := queue.Info()
-	if info.ARN != input.EventSourceARN {
-		return Mapping{}, missing("Resolved queue identity does not match EventSourceArn")
-	}
-	timeout, err := s.functions.ValidateTarget(ctx, arn)
-	if err != nil {
-		if ctx.Err() != nil {
-			return Mapping{}, ctx.Err()
-		}
-		return Mapping{}, missing("Target is not a registered local Lambda function or alias")
-	}
-	if timeout <= 0 || timeout > info.VisibilityTimeout {
-		return Mapping{}, invalid("Function timeout must be positive and no greater than the queue visibility timeout")
+	if err := s.validateBinding(ctx, queue, input.EventSourceARN, arn); err != nil {
+		return Mapping{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -228,10 +232,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	if s.closing {
 		return Mapping{}, unavailable()
 	}
-	for _, prior := range s.entries {
-		if prior.mapping.FunctionARN == arn && prior.mapping.EventSourceARN == input.EventSourceARN {
-			return Mapping{}, &APIError{Code: "ResourceConflictException", Status: http.StatusConflict, Message: "A mapping already exists for this source and function"}
-		}
+	if s.hasMappingConflict(nil, input.EventSourceARN, arn) {
+		return Mapping{}, mappingConflict("A mapping already exists for this source and function")
 	}
 	if len(s.entries) >= s.dev.MaxMappings {
 		return Mapping{}, &APIError{Code: "TooManyRequestsException", Status: http.StatusTooManyRequests, Message: "Local mapping capacity is full"}
@@ -245,44 +247,92 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	if input.BatchSize != nil {
 		batchSize = *input.BatchSize
 	}
-	workers := 1 // Local policy when no native concurrency ceiling is selected.
 	scaling := cloneScalingConfig(input.ScalingConfig)
-	if scaling != nil {
-		workers = min(*scaling.MaximumConcurrency, s.dev.MaxWorkersPerMapping)
-	}
 	mapping := Mapping{UUID: id, EventSourceMappingARN: "arn:aws:lambda:" + s.region + ":" + s.account + ":event-source-mapping:" + id, EventSourceARN: input.EventSourceARN, FunctionARN: arn, BatchSize: batchSize, ScalingConfig: scaling, FunctionResponseTypes: append([]string{}, input.FunctionResponseTypes...), State: state, StateTransitionReason: "USER_INITIATED", LastModified: float64(s.dev.Clock().UnixMilli()) / 1000, LastProcessingResult: "No records processed"}
-	workerCtx, cancel := context.WithCancel(s.ctx)
-	item := &entry{mapping: mapping, queue: queue, cancel: cancel, done: make(chan struct{})}
-	if state == "Enabled" && s.deliveryCapture != nil {
+	item, err := s.prepareEntry(mapping, queue, maps.Clone(input.Tags))
+	if err != nil {
+		return Mapping{}, err
+	}
+	s.entries[id] = item
+	s.startEntry(item)
+	return cloneMapping(mapping), nil
+}
+
+func (s *Service) validateBinding(ctx context.Context, queue Queue, source, function string) error {
+	info, err := queue.Info()
+	if err != nil || info.ARN != source {
+		return missing("Original source queue is unavailable")
+	}
+	timeout, err := s.functions.ValidateTarget(ctx, function)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil {
+		return missing("Target is not a registered local Lambda function or alias")
+	}
+	if timeout <= 0 || timeout > info.VisibilityTimeout {
+		return invalid("Function timeout must be positive and no greater than the queue visibility timeout")
+	}
+	return nil
+}
+
+func (s *Service) hasMappingConflict(except *entry, source, function string) bool {
+	for _, prior := range s.entries {
+		if prior != except && prior.mapping.EventSourceARN == source &&
+			(prior.mapping.FunctionARN == function || prior.updateTarget == function) {
+			return true
+		}
+	}
+	return false
+}
+
+func mappingConflict(message string) error {
+	return &APIError{Code: "ResourceConflictException", Status: http.StatusConflict, Message: message}
+}
+
+func (s *Service) prepareEntry(mapping Mapping, queue Queue, tags map[string]string) (*entry, error) {
+	item := &entry{mapping: mapping, queue: queue, tags: tags, done: make(chan struct{})}
+	if mapping.State == "Disabled" {
+		return item, nil
+	}
+	if s.deliveryCapture != nil {
 		receipts, ok := queue.(ReceiptEvidenceQueue)
 		if !ok {
-			cancel()
-			return Mapping{}, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Canonical receipt evidence is unavailable"}
+			return nil, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Canonical receipt evidence is unavailable"}
 		}
 		item.receiptEvidence = receipts
 	}
-	if state == "Enabled" && s.dev.Source != nil {
+	if s.dev.Source != nil {
 		retained, ok := queue.(DevQueue)
 		if !ok {
-			cancel()
-			return Mapping{}, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Retained SQS custody is unavailable"}
+			return nil, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Retained SQS custody is unavailable"}
 		}
 		release, err := retained.RegisterRetained()
 		if err != nil || release == nil {
-			cancel()
-			return Mapping{}, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Cannot register retained SQS custody"}
+			return nil, &APIError{Code: "ServiceException", Status: http.StatusServiceUnavailable, Message: "Cannot register retained SQS custody"}
 		}
 		item.retained, item.releaseRegistration = retained, release
 	}
-	s.entries[id] = item
-	if state == "Enabled" {
-		s.wg.Add(1)
-		go s.run(workerCtx, item, workers)
-	} else {
+	return item, nil
+}
+
+// startEntry publishes the worker owner while holding s.mu. A generation keeps
+// its configuration and original queue handle until every worker has joined.
+func (s *Service) startEntry(item *entry) {
+	execCtx, cancel := context.WithCancel(s.ctx)
+	intakeCtx, stopIntake := context.WithCancel(execCtx)
+	item.cancel, item.stopIntake = cancel, stopIntake
+	if item.mapping.State == "Disabled" {
 		cancel()
 		close(item.done)
+		return
 	}
-	return cloneMapping(mapping), nil
+	workers := 1
+	if scaling := item.mapping.ScalingConfig; scaling != nil {
+		workers = min(*scaling.MaximumConcurrency, s.dev.MaxWorkersPerMapping)
+	}
+	s.wg.Add(1)
+	go s.run(execCtx, intakeCtx, item, workers)
 }
 
 func cloneScalingConfig(scaling *ScalingConfig) *ScalingConfig {
@@ -329,6 +379,10 @@ func (s *Service) Delete(ctx context.Context, id string) (Mapping, error) {
 		s.mu.Unlock()
 		return Mapping{}, missing("Event source mapping not found")
 	}
+	if item.updateTarget != "" {
+		s.mu.Unlock()
+		return Mapping{}, &APIError{Code: "ResourceInUseException", Status: http.StatusBadRequest, Message: "Event source mapping is updating"}
+	}
 	if item.mapping.State == "Deleting" {
 		s.mu.Unlock()
 		return Mapping{}, &APIError{Code: "ResourceConflictException", Status: http.StatusConflict, Message: "Event source mapping is already deleting"}
@@ -352,7 +406,7 @@ func (s *Service) Delete(ctx context.Context, id string) (Mapping, error) {
 
 func (s *Service) setResult(item *entry, result string) {
 	s.mu.Lock()
-	if item.mapping.State == "Enabled" {
+	if item.mapping.State == "Enabled" || item.mapping.State == "Updating" {
 		item.mapping.LastProcessingResult = result
 	}
 	s.mu.Unlock()
@@ -371,7 +425,7 @@ func (s *Service) pause(ctx context.Context) bool {
 
 // run owns a fixed worker set until every receive and execution has joined.
 // A worker never admits a second invocation before its current batch settles.
-func (s *Service) run(ctx context.Context, item *entry, count int) {
+func (s *Service) run(ctx, intakeCtx context.Context, item *entry, count int) {
 	defer s.wg.Done()
 	defer close(item.done)
 	defer item.cancel()
@@ -383,7 +437,7 @@ func (s *Service) run(ctx context.Context, item *entry, count int) {
 	for range count {
 		go func() {
 			defer workers.Done()
-			s.poll(ctx, item)
+			s.poll(ctx, intakeCtx, item)
 		}()
 	}
 	workers.Wait()
@@ -391,7 +445,7 @@ func (s *Service) run(ctx context.Context, item *entry, count int) {
 
 func (s *Service) disableSource(item *entry, result string) {
 	s.mu.Lock()
-	if item.mapping.State != "Deleting" {
+	if item.mapping.State != "Deleting" && item.mapping.State != "Updating" {
 		item.mapping.State = "Disabled"
 		item.mapping.StateTransitionReason = "LAMBDA_INITIATED"
 		item.mapping.LastModified = float64(s.dev.Clock().UnixMilli()) / 1000
@@ -401,31 +455,31 @@ func (s *Service) disableSource(item *entry, result string) {
 	s.mu.Unlock()
 }
 
-func (s *Service) poll(ctx context.Context, item *entry) {
-	for ctx.Err() == nil {
+func (s *Service) poll(ctx, intakeCtx context.Context, item *entry) {
+	for intakeCtx.Err() == nil {
 		if s.deliveryCapture != nil && s.EvidenceErr() != nil {
 			s.disableSource(item, "Delivery evidence unavailable")
 			return // Never lease fresh messages against failed required evidence.
 		}
-		empty, keepPolling := s.pollBatch(ctx, item)
+		empty, keepPolling := s.pollBatch(ctx, intakeCtx, item)
 		if !keepPolling {
 			return
 		}
 		// The lease is complete before this empty-poll guard. Fenced workers
 		// subsequently park on source/queue changes without owning empty retries.
-		if empty && !s.pause(ctx) {
+		if empty && !s.pause(intakeCtx) {
 			return
 		}
 	}
 }
 
-func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPolling bool) {
-	batch, complete, err := s.receive(ctx, item)
+func (s *Service) pollBatch(ctx, intakeCtx context.Context, item *entry) (empty, keepPolling bool) {
+	batch, complete, err := s.receive(intakeCtx, item)
 	var evidenceErr error
 	if complete != nil {
 		defer func() { complete(evidenceErr) }() // Ordinary business failure retains queue custody.
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || intakeCtx.Err() != nil && len(batch.Records) == 0 {
 		return false, false
 	}
 	if err != nil {

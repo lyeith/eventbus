@@ -1,7 +1,8 @@
 # SQS Lambda event-source mappings
 
 EventBus supports native Lambda `CreateEventSourceMapping`,
-`GetEventSourceMapping` and `DeleteEventSourceMapping` for its owned SQS queues
+`GetEventSourceMapping`, `ListEventSourceMappings`, `UpdateEventSourceMapping`
+and `DeleteEventSourceMapping` for its owned SQS queues
 and registered local Lambda functions/aliases. Use the Lambda and SQS SDKs with
 EventBus's endpoint, fake credentials and the configured region. All execution
 stays local; unknown resources never fall back to AWS.
@@ -89,7 +90,20 @@ SQS owns visibility retries, FIFO group ordering, message retention and redrive
 after `maxReceiveCount`. All messages in a leased FIFO batch preserve their order;
 other workers cannot receive that group while its messages remain in flight.
 Different groups can execute concurrently within the mapping's worker limit.
-Disabled mappings do not poll. `LastProcessingResult` reports completion or a
+Disabled mappings do not poll. List supports `EventSourceArn` and exact
+normalized `FunctionName` filters. Pages contain at most 100 mappings with a
+`NextMarker` for continuation. Create accepts `Tags`. Native Lambda tag
+operations read, update and remove tags by exact mapping ARN.
+
+Update supports function, batch size, enable/disable, maximum concurrency and
+partial batch settings. Omitting a field preserves it. An empty
+`FunctionResponseTypes` or `ScalingConfig` clears that setting. EventBus stops
+old workers from receiving new messages, waits for accepted invocations and
+receipt processing, then applies the new settings and returns `202` with the
+same UUID and original queue binding. During the join, Get reports `Updating`.
+The existing mapping stays active if validation rejects the update.
+
+`LastProcessingResult` reports completion or a
 redacted source/invocation/acknowledgment failure. A deleted source disables and
 stops its mapping; recreating the same ARN does not rebind the old queue handle.
 Deleting a mapping cancels and joins every worker's pending receives and handler
@@ -108,7 +122,7 @@ published after cleanup joins and returned consistently to every concurrent call
   unleased for a later batch. If no eligible visible record fits that limit, the
   queue adapter returns a source error without leasing any record; the mapping
   disables itself and cancels/joins its peer workers.
-- List/Update mapping operations, nonzero batching windows, filters,
+- Nonzero batching windows, filters,
   provisioned pollers, stream/Kafka/MQ settings, tags and other selected
   Create options return `InvalidParameterValueException`; they are not ignored.
 - Mappings are in-memory resources and must be provisioned for each owned run.

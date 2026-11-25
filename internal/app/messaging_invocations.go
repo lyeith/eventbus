@@ -64,22 +64,24 @@ func (source sqsMappingSource) ResolveQueue(ctx context.Context, arn string) (ev
 		return nil, messaging.ErrQueueUnavailable
 	}
 	queue := source.broker.GetQueueByARN(arn)
-	info, err := source.broker.QueueInfo(queue)
+	_, err := source.broker.QueueInfo(queue)
 	if err != nil {
 		return nil, err
 	}
-	return &sqsMappingQueue{broker: source.broker, queue: queue, info: eventsource.QueueInfo{ARN: info.ARN, VisibilityTimeout: info.VisibilityTimeout}}, nil
+	return &sqsMappingQueue{broker: source.broker, queue: queue}, nil
 }
 
 type sqsMappingQueue struct {
 	broker *messaging.Broker
 	queue  *messaging.Queue
-	info   eventsource.QueueInfo
 }
 
 var _ eventsource.Queue = (*sqsMappingQueue)(nil)
 
-func (queue *sqsMappingQueue) Info() eventsource.QueueInfo { return queue.info }
+func (queue *sqsMappingQueue) Info() (eventsource.QueueInfo, error) {
+	info, err := queue.broker.QueueInfo(queue.queue)
+	return eventsource.QueueInfo{ARN: info.ARN, VisibilityTimeout: info.VisibilityTimeout}, err
+}
 func (queue *sqsMappingQueue) Receive(ctx context.Context, max int) (eventsource.Batch, error) {
 	return queue.broker.ReceiveSQSLambdaBatchContext(ctx, queue.queue, max, 20*time.Second, eventsource.MaxBatchPayloadBytes)
 }

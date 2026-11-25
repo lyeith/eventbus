@@ -122,7 +122,7 @@ func WriteAdmissionError(writer http.ResponseWriter, request *http.Request, admi
 	path := request.URL.Path
 	restCode := ""
 	switch {
-	case strings.HasPrefix(path, "/2015-03-31/"):
+	case strings.HasPrefix(path, "/2015-03-31/") || awsprotocol.IsLambdaMappingTagPath(path):
 		restCode = "ServiceException"
 	case path == "/schedules" || strings.HasPrefix(path, "/schedules/") || path == "/schedule-groups" || strings.HasPrefix(path, "/schedule-groups/"):
 		restCode = "InternalServerException"

@@ -38,7 +38,7 @@ const MaxBatchPayloadBytes = 6 << 20
 // Non-cancellation receive errors permanently stop this bound source; adapters
 // retain transient waits locally.
 type Queue interface {
-	Info() QueueInfo
+	Info() (QueueInfo, error)
 	Receive(context.Context, int) (Batch, error)
 	Delete(context.Context, string) (bool, error)
 }

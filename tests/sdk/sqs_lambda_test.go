@@ -28,7 +28,6 @@ type sdkMappingSource struct{ broker *messaging.Broker }
 type sdkMappingQueue struct {
 	broker *messaging.Broker
 	queue  *messaging.Queue
-	info   eventsource.QueueInfo
 }
 
 func (source sdkMappingSource) ResolveQueue(ctx context.Context, arn string) (eventsource.Queue, error) {
@@ -36,13 +35,16 @@ func (source sdkMappingSource) ResolveQueue(ctx context.Context, arn string) (ev
 		return nil, err
 	}
 	queue := source.broker.GetQueueByARN(arn)
-	info, err := source.broker.QueueInfo(queue)
+	_, err := source.broker.QueueInfo(queue)
 	if err != nil {
 		return nil, err
 	}
-	return sdkMappingQueue{broker: source.broker, queue: queue, info: eventsource.QueueInfo{ARN: info.ARN, VisibilityTimeout: info.VisibilityTimeout}}, nil
+	return sdkMappingQueue{broker: source.broker, queue: queue}, nil
 }
-func (queue sdkMappingQueue) Info() eventsource.QueueInfo { return queue.info }
+func (queue sdkMappingQueue) Info() (eventsource.QueueInfo, error) {
+	info, err := queue.broker.QueueInfo(queue.queue)
+	return eventsource.QueueInfo{ARN: info.ARN, VisibilityTimeout: info.VisibilityTimeout}, err
+}
 func (queue sdkMappingQueue) Receive(ctx context.Context, max int) (eventsource.Batch, error) {
 	return queue.broker.ReceiveSQSLambdaBatchContext(ctx, queue.queue, max, time.Second, eventsource.MaxBatchPayloadBytes)
 }

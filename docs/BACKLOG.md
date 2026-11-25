@@ -102,19 +102,13 @@ separate work. The Go/Python dev recipe consumer retains harness policy.
 
 ## SQS mapping and SNS delivery coverage
 
-Native SQS mappings support Create/Get/Delete and opt-in partial batch responses.
-Remaining application-facing work, in dependency order:
+Native SQS mappings support Create/Get/List/Update/Delete, tags, and opt-in
+partial batch responses. Remaining local work:
 
-1. Add paginated List and Update, including disabling, enabling, retargeting and
-   clearing settings. Keep mapping identity and the bound queue across joined
-   worker changes. Add mapping tags through Create and Lambda tag operations.
-   [List](https://docs.aws.amazon.com/lambda/latest/api/API_ListEventSourceMappings.html),
-   [Update](https://docs.aws.amazon.com/lambda/latest/api/API_UpdateEventSourceMapping.html),
-   [Tags](https://docs.aws.amazon.com/lambda/latest/dg/tags-esm.html)
-2. Add SQS event filters, including native deletion of unmatched records
+1. Add SQS event filters, including native deletion of unmatched records
    and JSON/plain-text body behavior.
    [AWS SQS filtering](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs-filtering.html)
-3. Support batching windows and larger batches within the existing 6 MiB
+2. Support batching windows and larger batches within the existing 6 MiB
    event budget. Keep lease selection and FIFO group ownership in SQS and
    invocation admission in the mapping. Qualify provisioned poller settings,
    which affect FIFO limits and are exclusive with maximum concurrency.

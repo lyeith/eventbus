@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/lyeith/eventbus/internal/awsprotocol"
@@ -22,42 +23,74 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, missing("Event source mappings are not configured"))
 		return
 	}
-	var mapping Mapping
+	if awsprotocol.IsLambdaMappingTagPath(r.URL.Path) {
+		h.serveMappingTags(w, r)
+		return
+	}
+	var result any
 	var err error
 	status := http.StatusOK
 	switch {
 	// Older native SDK models include the collection's final slash. Both
 	// exact forms reach the same owner without redirecting or normalizing
 	// neighboring routes.
+	case (r.URL.Path == mappingPath || r.URL.Path == mappingPath+"/") && r.Method == http.MethodGet:
+		query := r.URL.Query()
+		input := ListInput{EventSourceARN: query.Get("EventSourceArn"), FunctionName: query.Get("FunctionName"), Marker: query.Get("Marker")}
+		if query.Has("MaxItems") {
+			limit, parseErr := strconv.Atoi(query.Get("MaxItems"))
+			if parseErr != nil {
+				writeError(w, invalid("Invalid MaxItems"))
+				return
+			}
+			input.MaxItems = &limit
+		}
+		result, err = h.service.List(input)
 	case (r.URL.Path == mappingPath || r.URL.Path == mappingPath+"/") && r.Method == http.MethodPost:
 		var input CreateInput
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-		decoder.DisallowUnknownFields()
-		if err = decoder.Decode(&input); err != nil {
-			writeError(w, invalid("Invalid or unsupported CreateEventSourceMapping request"))
+		if err := decodeMappingRequest(w, r, &input); err != nil {
+			writeError(w, err)
 			return
 		}
-		var extra any
-		if decoder.Decode(&extra) != io.EOF {
-			writeError(w, invalid("Request must contain one JSON object"))
+		result, err = h.service.Create(r.Context(), input)
+		status = http.StatusAccepted
+	case strings.HasPrefix(r.URL.Path, mappingPath+"/") && r.Method == http.MethodPut:
+		var input UpdateInput
+		if err := decodeMappingRequest(w, r, &input); err != nil {
+			writeError(w, err)
 			return
 		}
-		mapping, err = h.service.Create(r.Context(), input)
+		result, err = h.service.Update(r.Context(), strings.TrimPrefix(r.URL.Path, mappingPath+"/"), input)
 		status = http.StatusAccepted
 	case strings.HasPrefix(r.URL.Path, mappingPath+"/") && r.Method == http.MethodGet:
-		mapping, err = h.service.Get(strings.TrimPrefix(r.URL.Path, mappingPath+"/"))
+		result, err = h.service.Get(strings.TrimPrefix(r.URL.Path, mappingPath+"/"))
 	case strings.HasPrefix(r.URL.Path, mappingPath+"/") && r.Method == http.MethodDelete:
-		mapping, err = h.service.Delete(r.Context(), strings.TrimPrefix(r.URL.Path, mappingPath+"/"))
+		result, err = h.service.Delete(r.Context(), strings.TrimPrefix(r.URL.Path, mappingPath+"/"))
 		status = http.StatusAccepted
 	default:
-		err = invalid("Only CreateEventSourceMapping, GetEventSourceMapping and DeleteEventSourceMapping are supported")
+		err = invalid("Unsupported event source mapping operation")
 	}
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(mapping)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func decodeMappingRequest[T any](w http.ResponseWriter, r *http.Request, input *T) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	var parsed *T
+	if err := decoder.Decode(&parsed); err != nil || parsed == nil {
+		return invalid("Invalid or unsupported event source mapping request")
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF {
+		return invalid("Request must contain one JSON object")
+	}
+	*input = *parsed
+	return nil
 }
 
 func writeError(w http.ResponseWriter, err error) {

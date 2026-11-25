@@ -105,7 +105,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if r.URL.Path == "/2015-03-31/event-source-mappings" || strings.HasPrefix(r.URL.Path, "/2015-03-31/event-source-mappings/") {
+	if r.URL.Path == "/2015-03-31/event-source-mappings" || strings.HasPrefix(r.URL.Path, "/2015-03-31/event-source-mappings/") ||
+		awsprotocol.IsLambdaMappingTagPath(r.URL.Path) {
 		if s.services.EventSources == nil {
 			writeRESTError(w, http.StatusServiceUnavailable, "ServiceException", "Lambda event-source mappings are not configured")
 		} else {
