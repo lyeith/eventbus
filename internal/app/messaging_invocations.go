@@ -48,7 +48,7 @@ func (invoker eventSourceLambdaInvoker) ValidateTarget(ctx context.Context, arn 
 	}
 	return info.Timeout, nil
 }
-func (invoker eventSourceLambdaInvoker) InvokeTarget(ctx context.Context, arn string, payload []byte) error {
+func (invoker eventSourceLambdaInvoker) InvokeTarget(ctx context.Context, arn string, payload []byte) ([]byte, error) {
 	return executeLambdaTarget(ctx, invoker.runtime, arn, payload)
 }
 

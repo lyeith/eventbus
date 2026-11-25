@@ -100,6 +100,39 @@ records and a configured concurrency ceiling. Nonzero batching windows/larger
 batches, Update/List, filters, partial responses and AWS managed scaling remain
 separate work. The Go/Python dev recipe consumer retains harness policy.
 
+## SQS mapping and SNS delivery coverage
+
+Native SQS mappings support Create/Get/Delete and opt-in partial batch responses.
+Remaining application-facing work, in dependency order:
+
+1. Add paginated List and Update, including disabling, enabling, retargeting and
+   clearing settings. Keep mapping identity and the bound queue across joined
+   worker changes. Add mapping tags through Create and Lambda tag operations.
+   [List](https://docs.aws.amazon.com/lambda/latest/api/API_ListEventSourceMappings.html),
+   [Update](https://docs.aws.amazon.com/lambda/latest/api/API_UpdateEventSourceMapping.html),
+   [Tags](https://docs.aws.amazon.com/lambda/latest/dg/tags-esm.html)
+2. Add SQS event filters, including native deletion of unmatched records
+   and JSON/plain-text body behavior.
+   [AWS SQS filtering](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs-filtering.html)
+3. Support batching windows and larger batches within the existing 6 MiB
+   event budget. Keep lease selection and FIFO group ownership in SQS and
+   invocation admission in the mapping. Qualify provisioned poller settings,
+   which affect FIFO limits and are exclusive with maximum concurrency.
+   [AWS polling and batch behavior](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html)
+
+SNS uses subscriptions. Standard topics push individual events to Lambda. A
+FIFO topic can reach Lambda through SQS and its mapping. Supported SNS API
+operations do not imply all delivery behavior. Follow-ups are transient
+SNS-to-SQS/Lambda admission retries with subscription DLQ routing, Lambda-owned
+async invocation configuration and destinations, and optional local HTTP/S
+delivery with confirmation, effective delivery-policy readback and retry behavior.
+[AWS SNS retries](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html),
+[AWS Lambda async configuration](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async-configuring.html)
+
+AWS-managed autoscaling, CloudWatch metrics, IAM/KMS enforcement and cross-account
+behavior require their own coverage goals. Avoid accepting settings that the
+emulator cannot honor.
+
 ## Separate gateway and Lambda work
 
 Request gateway contracts are covered in GATEWAY.md. API Gateway management/deployment

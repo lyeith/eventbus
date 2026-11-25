@@ -85,6 +85,7 @@ type fakeInvoker struct {
 	timeout  time.Duration
 	validate error
 	invoke   func(context.Context, string, []byte) error
+	result   []byte
 }
 
 func (f fakeInvoker) ValidateTarget(ctx context.Context, arn string) (time.Duration, error) {
@@ -96,11 +97,11 @@ func (f fakeInvoker) ValidateTarget(ctx context.Context, arn string) (time.Durat
 	}
 	return f.timeout, f.validate
 }
-func (f fakeInvoker) InvokeTarget(ctx context.Context, arn string, payload []byte) error {
+func (f fakeInvoker) InvokeTarget(ctx context.Context, arn string, payload []byte) ([]byte, error) {
 	if f.invoke != nil {
-		return f.invoke(ctx, arn, payload)
+		return f.result, f.invoke(ctx, arn, payload)
 	}
-	return nil
+	return f.result, nil
 }
 func createInput() CreateInput {
 	one := 1
@@ -180,7 +181,10 @@ func TestCreateRejectsUnsupportedOrNonlocalSelection(t *testing.T) {
 		{"concurrency zero", func(i *CreateInput) { n := 0; i.ScalingConfig = &ScalingConfig{MaximumConcurrency: &n} }},
 		{"batch zero", func(i *CreateInput) { n := 0; i.BatchSize = &n }},
 		{"window", func(i *CreateInput) { n := 1; i.MaximumBatchingWindowInSeconds = &n }},
-		{"partial", func(i *CreateInput) { i.FunctionResponseTypes = []string{"ReportBatchItemFailures"} }},
+		{"unknown response type", func(i *CreateInput) { i.FunctionResponseTypes = []string{"Unknown"} }},
+		{"duplicate response type", func(i *CreateInput) {
+			i.FunctionResponseTypes = []string{"ReportBatchItemFailures", "ReportBatchItemFailures"}
+		}},
 		{"source region", func(i *CreateInput) { i.EventSourceARN = "arn:aws:sqs:eu-west-1:000000000000:owned" }},
 		{"source account", func(i *CreateInput) { i.EventSourceARN = "arn:aws:sqs:us-east-1:123456789012:owned" }},
 		{"source service", func(i *CreateInput) { i.EventSourceARN = "arn:aws:sns:us-east-1:000000000000:owned" }},

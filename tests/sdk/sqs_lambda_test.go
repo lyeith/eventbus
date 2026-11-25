@@ -62,12 +62,12 @@ func (invoker sdkMappingInvoker) ValidateTarget(ctx context.Context, arn string)
 	info, err := invoker.functions.DescribeTarget(arn, "")
 	return info.Timeout, err
 }
-func (invoker sdkMappingInvoker) InvokeTarget(ctx context.Context, arn string, payload []byte) error {
+func (invoker sdkMappingInvoker) InvokeTarget(ctx context.Context, arn string, payload []byte) ([]byte, error) {
 	result, err := invoker.functions.Execute(ctx, lambda.InvokeInput{FunctionName: arn, Payload: payload})
 	if err == nil && result.FunctionError {
-		return errors.New("Lambda function failed")
+		return nil, errors.New("Lambda function failed")
 	}
-	return err
+	return result.Payload, err
 }
 
 type sqsMappingFixture struct {

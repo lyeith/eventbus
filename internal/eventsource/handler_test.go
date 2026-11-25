@@ -47,7 +47,7 @@ func TestNativeCreateGetDeleteWire(t *testing.T) {
 			client := serving.Client()
 			client.Timeout = 3 * time.Second
 			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-			body := `{"EventSourceArn":"` + sourceARN + `","FunctionName":"worker:live","BatchSize":5,"ScalingConfig":{"MaximumConcurrency":2},"Enabled":false,"MaximumBatchingWindowInSeconds":0,"FunctionResponseTypes":[]}`
+			body := `{"EventSourceArn":"` + sourceARN + `","FunctionName":"worker:live","BatchSize":5,"ScalingConfig":{"MaximumConcurrency":2},"Enabled":false,"MaximumBatchingWindowInSeconds":0,"FunctionResponseTypes":["ReportBatchItemFailures"]}`
 			created, createdBody := nativeMappingRequest(t, client, http.MethodPost, serving.URL+collection, body)
 			require.Equal(t, 202, created.StatusCode, string(createdBody))
 			var mapping Mapping
@@ -55,6 +55,7 @@ func TestNativeCreateGetDeleteWire(t *testing.T) {
 			assert.Equal(t, "Disabled", mapping.State)
 			assert.Equal(t, targetARN, mapping.FunctionARN)
 			assert.Equal(t, 5, mapping.BatchSize)
+			assert.Equal(t, []string{"ReportBatchItemFailures"}, mapping.FunctionResponseTypes)
 			require.NotNil(t, mapping.ScalingConfig)
 			assert.Equal(t, 2, *mapping.ScalingConfig.MaximumConcurrency)
 			assert.Contains(t, string(createdBody), `"MaximumBatchingWindowInSeconds":0`)

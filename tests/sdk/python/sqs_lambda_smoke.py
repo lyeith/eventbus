@@ -135,7 +135,6 @@ def run():
         error("InvalidParameterValueException", functions.create_event_source_mapping, EventSourceArn=fifo_arn.replace("us-east-1", "eu-west-1"), FunctionName="sqs-handler", BatchSize=1)
         error("InvalidParameterValueException", functions.create_event_source_mapping, EventSourceArn=fifo_arn, FunctionName="arn:aws:lambda:us-east-1:123456789012:function:sqs-handler", BatchSize=1)
         for extra in ({"BatchSize": 11}, {"BatchSize": 1, "MaximumBatchingWindowInSeconds": 1},
-                      {"BatchSize": 1, "FunctionResponseTypes": ["ReportBatchItemFailures"]},
                       {"BatchSize": 1, "FilterCriteria": {"Filters": [{"Pattern": "{}"}]}},
                       {"BatchSize": 1, "ScalingConfig": {"MaximumConcurrency": 1001}}):
             error("InvalidParameterValueException", functions.create_event_source_mapping, EventSourceArn=fifo_arn, FunctionName="sqs-handler", **extra)

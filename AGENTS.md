@@ -32,8 +32,9 @@ before configuring endpoints or cleaning fixtures.
   and FirehoseDelivery ports; external
   delivery uses versioned JSONL capture. Keep registry/entity locks independent.
 - `internal/eventsource` owns native SQS mappings through queue and function ports;
-  batch/concurrency limits are enforced by joined workers; only successful whole-
-  batch execution and its confirmed completion boundary permit native ACK.
+  batch/concurrency limits are enforced by joined workers; successful
+  execution and its confirmed completion boundary permit native ACK of eligible
+  records. The mapping owns native partial batch response validation.
   Fresh execution joins the process; opt-in warm execution joins the managed
   response/log boundary and retains a separately leased worker until retirement.
   Messaging accepts a

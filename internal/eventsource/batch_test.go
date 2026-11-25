@@ -51,31 +51,40 @@ func TestBatchConfigurationNativeDefaultsAndSnapshotOwnership(t *testing.T) {
 	q := newFakeQueue()
 	s := newTestService(t, q, fakeInvoker{})
 	input := batchInput(5, 2)
+	input.FunctionResponseTypes = []string{"ReportBatchItemFailures"}
 	disabled := false
 	input.Enabled = &disabled
 	created, err := s.Create(t.Context(), input)
 	require.NoError(t, err)
 	assert.Equal(t, 5, created.BatchSize)
+	assert.Equal(t, []string{"ReportBatchItemFailures"}, created.FunctionResponseTypes)
 	require.NotNil(t, created.ScalingConfig)
 	assert.Equal(t, 2, *created.ScalingConfig.MaximumConcurrency)
 	// Input, Create and Get snapshots must not mutate the native selection or
 	// the worker limit used by the owner after admission.
 	*input.ScalingConfig.MaximumConcurrency = 1000
 	*created.ScalingConfig.MaximumConcurrency = 3
+	input.FunctionResponseTypes[0] = "input mutation"
+	created.FunctionResponseTypes[0] = "create mutation"
 	got, err := s.Get(created.UUID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, *got.ScalingConfig.MaximumConcurrency)
+	assert.Equal(t, []string{"ReportBatchItemFailures"}, got.FunctionResponseTypes)
 	*got.ScalingConfig.MaximumConcurrency = 4
+	got.FunctionResponseTypes[0] = "get mutation"
 	got, err = s.Get(created.UUID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, *got.ScalingConfig.MaximumConcurrency)
+	assert.Equal(t, []string{"ReportBatchItemFailures"}, got.FunctionResponseTypes)
 	_, err = s.Delete(t.Context(), created.UUID)
 	require.NoError(t, err)
 	input.BatchSize = nil
+	input.FunctionResponseTypes = nil
 	input.ScalingConfig = &ScalingConfig{}
 	defaults, err := s.Create(t.Context(), input)
 	require.NoError(t, err)
 	assert.Equal(t, 10, defaults.BatchSize)
+	assert.Empty(t, defaults.FunctionResponseTypes)
 	assert.Nil(t, defaults.ScalingConfig, "empty native scaling selects no ceiling")
 }
 

@@ -63,19 +63,23 @@ func (invoker rotationLambdaInvoker) InvokeRotation(ctx context.Context, arn str
 	if err != nil {
 		return errLambdaInvocation
 	}
-	return executeLambdaTarget(ctx, invoker.runtime, arn, payload)
+	_, err = executeLambdaTarget(ctx, invoker.runtime, arn, payload)
+	return err
 }
 
 // Completion and error redaction have one owner across synchronous callers.
-func executeLambdaTarget(ctx context.Context, runtime lambdaExecution, arn string, payload []byte) error {
+func executeLambdaTarget(ctx context.Context, runtime lambdaExecution, arn string, payload []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if runtime == nil {
-		return errLambdaInvocation
+		return nil, errLambdaInvocation
 	}
 	result, err := runtime.Execute(ctx, lambdaservice.InvokeInput{FunctionName: arn, Payload: payload})
-	return redactLambdaExecution(result, err)
+	if err := redactLambdaExecution(result, err); err != nil {
+		return nil, err
+	}
+	return result.Payload, nil
 }
 
 // Every synchronous consumer shares the same native result classification and

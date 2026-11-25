@@ -176,8 +176,8 @@ func (s *Service) validate(input CreateInput) (string, error) {
 	if input.MaximumBatchingWindowInSeconds != nil && *input.MaximumBatchingWindowInSeconds != 0 {
 		return "", invalid("Only MaximumBatchingWindowInSeconds=0 is supported")
 	}
-	if len(input.FunctionResponseTypes) != 0 {
-		return "", invalid("Partial batch response types are not supported")
+	if len(input.FunctionResponseTypes) > 1 || len(input.FunctionResponseTypes) == 1 && input.FunctionResponseTypes[0] != reportBatchItemFailures {
+		return "", invalid("FunctionResponseTypes must be empty or contain only ReportBatchItemFailures")
 	}
 	return s.functionARN(input.FunctionName)
 }
@@ -250,7 +250,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	if scaling != nil {
 		workers = min(*scaling.MaximumConcurrency, s.dev.MaxWorkersPerMapping)
 	}
-	mapping := Mapping{UUID: id, EventSourceMappingARN: "arn:aws:lambda:" + s.region + ":" + s.account + ":event-source-mapping:" + id, EventSourceARN: input.EventSourceARN, FunctionARN: arn, BatchSize: batchSize, ScalingConfig: scaling, FunctionResponseTypes: []string{}, State: state, StateTransitionReason: "USER_INITIATED", LastModified: float64(s.dev.Clock().UnixMilli()) / 1000, LastProcessingResult: "No records processed"}
+	mapping := Mapping{UUID: id, EventSourceMappingARN: "arn:aws:lambda:" + s.region + ":" + s.account + ":event-source-mapping:" + id, EventSourceARN: input.EventSourceARN, FunctionARN: arn, BatchSize: batchSize, ScalingConfig: scaling, FunctionResponseTypes: append([]string{}, input.FunctionResponseTypes...), State: state, StateTransitionReason: "USER_INITIATED", LastModified: float64(s.dev.Clock().UnixMilli()) / 1000, LastProcessingResult: "No records processed"}
 	workerCtx, cancel := context.WithCancel(s.ctx)
 	item := &entry{mapping: mapping, queue: queue, cancel: cancel, done: make(chan struct{})}
 	if state == "Enabled" && s.deliveryCapture != nil {
@@ -445,7 +445,7 @@ func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPollin
 		keepPolling, evidenceErr = s.deliverObserved(ctx, item, records, payload)
 		return false, keepPolling
 	}
-	err = s.functions.InvokeTarget(ctx, item.mapping.FunctionARN, payload)
+	response, err := s.functions.InvokeTarget(ctx, item.mapping.FunctionARN, payload)
 	if ctx.Err() != nil {
 		return false, false
 	}
@@ -453,8 +453,16 @@ func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPollin
 		s.setResult(item, "Function invocation failed")
 		return false, true // Queue visibility/redrive remain the sole retry owner.
 	}
+	failures, err := batchFailures(item.mapping.FunctionResponseTypes, records, response)
+	if err != nil {
+		s.setResult(item, "Invalid batch response")
+		return false, true
+	}
 	acknowledged := true
 	for _, record := range records {
+		if failures.includes(record) {
+			continue
+		}
 		settled, err := item.queue.Delete(ctx, record.ReceiptHandle)
 		if err != nil || !settled {
 			acknowledged = false
@@ -463,11 +471,7 @@ func (s *Service) pollBatch(ctx context.Context, item *entry) (empty, keepPollin
 			return false, false
 		}
 	}
-	if acknowledged {
-		s.setResult(item, "OK")
-	} else {
-		s.setResult(item, "Source acknowledgment failed")
-	}
+	s.setResult(item, batchProcessingResult(failures, acknowledged))
 	return false, true
 }
 

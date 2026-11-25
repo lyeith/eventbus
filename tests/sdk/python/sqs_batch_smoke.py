@@ -39,11 +39,16 @@ def handler(event, context):
             for body, record in zip(bodies, records)):
         append_row("failed", event, context)
         raise RuntimeError("owned full-batch failure")
-    if any(body["mode"] == "gate" for body in bodies):
+    failures = [{"itemIdentifier": record["messageId"]}
+                for body, record in zip(bodies, records)
+                if body["mode"] == "partial" and record["attributes"]["ApproximateReceiveCount"] == "1"]
+    if failures or any(body["mode"] == "gate" for body in bodies):
         gate = Path(os.environ["SQS_BATCH_ROOT"]) / ("release-" + context.aws_request_id)
         while not gate.exists():
             time.sleep(0.01)
     append_row("completed", event, context)
+    if any(body["mode"] == "partial" for body in bodies):
+        return {"batchItemFailures": failures}
     return {"ok": True}
 
 
@@ -106,13 +111,19 @@ def run():
         resources.append((owner, "queue", url))
         return url, arn
 
-    def mapping(arn, owner="A", batch=5, concurrency=2, enabled=True, function="batch-handler:live"):
+    def mapping(arn, owner="A", batch=5, concurrency=2, enabled=True, function="batch-handler:live",
+                report_batch_item_failures=False):
         kwargs = dict(EventSourceArn=arn, FunctionName=function, Enabled=enabled, MaximumBatchingWindowInSeconds=0)
         if batch is not None:
             kwargs["BatchSize"] = batch
         if concurrency is not None:
             kwargs["ScalingConfig"] = {"MaximumConcurrency": concurrency}
+        response_types = ["ReportBatchItemFailures"] if report_batch_item_failures else []
+        if response_types:
+            kwargs["FunctionResponseTypes"] = response_types
         result = clients[owner][1].create_event_source_mapping(**kwargs)
+        resources.append((owner, "mapping", result["UUID"]))
+        assert result.get("FunctionResponseTypes", []) == response_types, result
         expected_batch = 10 if batch is None else batch
         assert result["ResponseMetadata"]["HTTPStatusCode"] == 202
         assert result["EventSourceArn"] == arn and result["FunctionArn"].endswith(":function:" + function)
@@ -123,11 +134,11 @@ def run():
             result["ScalingConfig"]["MaximumConcurrency"] = 99
         got = clients[owner][1].get_event_source_mapping(UUID=result["UUID"])
         assert got["BatchSize"] == expected_batch and got["State"] == result["State"]
+        assert got.get("FunctionResponseTypes", []) == response_types, got
         if concurrency is not None:
             assert got["ScalingConfig"] == {"MaximumConcurrency": concurrency}, got
         else:
             assert not got.get("ScalingConfig", {}).get("MaximumConcurrency"), got
-        resources.append((owner, "mapping", result["UUID"]))
         return result["UUID"]
 
     def delete_mapping(ident, owner="A"):
@@ -193,8 +204,7 @@ def run():
             delete_mapping(ident)
         ident = mapping(settings_arn, batch=10, concurrency=1000, enabled=False)
         delete_mapping(ident)
-        for extra in ({"BatchSize": 11}, {"BatchSize": 1, "MaximumBatchingWindowInSeconds": 1},
-                      {"BatchSize": 1, "FunctionResponseTypes": ["ReportBatchItemFailures"]}):
+        for extra in ({"BatchSize": 11}, {"BatchSize": 1, "MaximumBatchingWindowInSeconds": 1}):
             error("InvalidParameterValueException", functions.create_event_source_mapping,
                   EventSourceArn=settings_arn, FunctionName="batch-handler:live", **extra)
         error("ResourceNotFoundException", functions.create_event_source_mapping,
@@ -290,6 +300,34 @@ def run():
         wait_empty(url)
         delete_mapping(ident)
         print("one record failed the full five-record batch; visibility retry preserved IDs and renewed receipts")
+
+        # The same handler return value changes settlement only when the SDK
+        # enables ReportBatchItemFailures on the mapping.
+        for enabled in (False, True):
+            label = "partial-enabled" if enabled else "partial-disabled"
+            url, arn = queue(label)
+            sent = send_backlog(url, label, 5, overrides={1: "partial", 3: "partial"})
+            failed_ids = {sent[index]["MessageId"] for index in (1, 3)}
+            ident = mapping(arn, report_batch_item_failures=enabled)
+            first_row = wait(lambda: rows(label, "started"), label + " first invocation")[0]
+            first = {record["messageId"]: record for record in native_records(first_row, arn)}
+            assert set(first) == {message["MessageId"] for message in sent}
+            assert {r["attributes"]["ApproximateReceiveCount"] for r in first.values()} == {"1"}
+            assert counts(url) == (0, 5) and not rows(label, "completed"), label
+            release(first_row)
+            if enabled:
+                wait(lambda: counts(url) == (0, 2), "three successful receipts acknowledged, two still leased")
+                wait(lambda: len(rows(label, "completed")) == 2, "only reported IDs retried")
+            wait_empty(url)
+            attempts = [native_records(row, arn) for row in rows(label, "started")]
+            assert len(attempts) == (2 if enabled else 1), attempts
+            if enabled:
+                retry = attempts[1]
+                assert len(retry) == 2 and {r["messageId"] for r in retry} == failed_ids, retry
+                assert {r["attributes"]["ApproximateReceiveCount"] for r in retry} == {"2"}
+                assert all(r["receiptHandle"] != first[r["messageId"]]["receiptHandle"] for r in retry)
+            delete_mapping(ident)
+        print("ReportBatchItemFailures Create/Get roundtrip; two reported IDs retried with new leases; omitted option acknowledged all five")
 
         dlq_url, dlq_arn = queue("dlq", visibility=1)
         url, arn = queue("timeout", visibility=1, redrive=dlq_arn)

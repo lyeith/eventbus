@@ -45,10 +45,10 @@ type Queue interface {
 
 // FunctionInvoker delegates to the registered Lambda runner. InvokeTarget must
 // join actual execution and child cleanup, returning an error on function
-// failure/timeout. Asynchronous admission does not satisfy this contract.
+// failure/timeout and the response payload on success. Asynchronous admission does not satisfy this contract.
 type FunctionInvoker interface {
 	ValidateTarget(context.Context, string) (time.Duration, error)
-	InvokeTarget(context.Context, string, []byte) error
+	InvokeTarget(context.Context, string, []byte) ([]byte, error)
 }
 
 // Native SQS event records have one shared wire owner. Messaging projects queue

@@ -34,9 +34,11 @@ type InvocationMetadata struct {
 	FunctionARN string
 }
 
-// InvocationOutcome contains supervisory facts, never handler-controlled output.
+// InvocationOutcome carries the response internally for native settlement.
+// Evidence records only supervisory facts and the resulting receipt decisions.
 // OwnershipErr is private uncertainty about cleanup, distinct from handler failure.
 type InvocationOutcome struct {
+	Payload         []byte
 	Metadata        InvocationMetadata
 	State           InvocationState
 	CompletionScope string // process or invocation; warm workers remain separately owned
@@ -81,6 +83,7 @@ type DeliveryMessage struct {
 	ReceiveCount         int            `json:"receive_count"`
 	Settlement           ReceiptOutcome `json:"settlement,omitempty"`
 	AcknowledgeAttempted bool           `json:"acknowledge_attempted,omitempty"`
+	RetryReported        bool           `json:"retry_reported,omitempty"`
 	EvidenceError        bool           `json:"evidence_error,omitempty"`
 }
 
@@ -224,7 +227,13 @@ func (s *Service) deliverObserved(ctx context.Context, item *entry, records []Re
 	record.CompletionScope = outcome.CompletionScope
 	record.Joined = admitted && observationValid && outcome.OwnershipErr == nil
 	acknowledge := record.Joined && outcome.State == InvocationSucceeded && invokeErr == nil && ctx.Err() == nil
-	allSettled, receiptErr := s.finishReceiptEvidence(ctx, item, records, record.Messages, acknowledge)
+	var failures failedBatchItems
+	var responseErr error
+	if acknowledge {
+		failures, responseErr = batchFailures(item.mapping.FunctionResponseTypes, records, outcome.Payload)
+		acknowledge = responseErr == nil
+	}
+	allSettled, receiptErr := s.finishReceiptEvidence(ctx, item, records, record.Messages, acknowledge, failures)
 	evidenceErr = errors.Join(evidenceErr, receiptErr)
 	record.State = string(outcome.State)
 	switch {
@@ -232,10 +241,12 @@ func (s *Service) deliverObserved(ctx context.Context, item *entry, records []Re
 		record.State = "uncertain"
 	case ctx.Err() != nil:
 		record.State = "canceled"
-	case invokeErr != nil && outcome.State == InvocationSucceeded:
+	case responseErr != nil || invokeErr != nil && outcome.State == InvocationSucceeded:
 		record.State = "failed"
 	case outcome.State == InvocationSucceeded && !allSettled:
 		record.State = "ack_failed"
+	case len(failures) != 0:
+		record.State = "partial_failure"
 	}
 	evidenceErr = errors.Join(evidenceErr, s.appendDelivery(record))
 	if evidenceErr != nil {
@@ -247,22 +258,23 @@ func (s *Service) deliverObserved(ctx context.Context, item *entry, records []Re
 	}
 	if invokeErr != nil || outcome.State != InvocationSucceeded {
 		s.setResult(item, "Function invocation failed")
-	} else if allSettled {
-		s.setResult(item, "OK")
+	} else if responseErr != nil {
+		s.setResult(item, "Invalid batch response")
 	} else {
-		s.setResult(item, "Source acknowledgment failed")
+		s.setResult(item, batchProcessingResult(failures, allSettled))
 	}
 	return true, evidenceErr
 }
 
 // ACK retains the mapping lifetime. Only after admitted mutations return does a
 // separate bounded inspection phase collect failed/canceled receipt facts.
-func (s *Service) finishReceiptEvidence(ctx context.Context, item *entry, records []Record, messages []DeliveryMessage, acknowledge bool) (allSettled bool, evidenceErr error) {
+func (s *Service) finishReceiptEvidence(ctx context.Context, item *entry, records []Record, messages []DeliveryMessage, acknowledge bool, failures failedBatchItems) (allSettled bool, evidenceErr error) {
 	inspect := make([]bool, len(records))
 	receiptErrors := make([]error, len(records))
 	allSettled = acknowledge
 	for index, message := range records {
-		if acknowledge && ctx.Err() == nil {
+		messages[index].RetryReported = failures.includes(message)
+		if acknowledge && !messages[index].RetryReported && ctx.Err() == nil {
 			messages[index].AcknowledgeAttempted = true
 			messages[index].Settlement, receiptErrors[index] = item.receiptEvidence.AcknowledgeReceipt(ctx, message.ReceiptHandle)
 			if receiptErrors[index] != nil {
@@ -289,7 +301,7 @@ func (s *Service) finishReceiptEvidence(ctx context.Context, item *entry, record
 			messages[index].EvidenceError = true
 			evidenceErr = errors.Join(evidenceErr, s.retainDeliveryError(err))
 		}
-		if err != nil || !settledReceipt(result) {
+		if !messages[index].RetryReported && (err != nil || !settledReceipt(result)) {
 			allSettled = false
 		}
 	}

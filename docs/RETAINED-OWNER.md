@@ -193,7 +193,7 @@ retry policies continue to apply to retained resources.
 | Owner | Joined work and retained state |
 | --- | --- |
 | HTTP and Lambda | Envelopes from before parsing/capture through handler return; whole queued/running/retrying Event tasks; independent synchronous invocations through child join |
-| Enabled SQS mappings | Accepted batches plus message custody through delay, visibility, whole-batch retry, acknowledgment and redrive; callback/cleanup sends to mapped queues transfer custody |
+| Enabled SQS mappings | Accepted batches plus message custody through delay, visibility, batch or per-record retry, acknowledgment and redrive; callback/cleanup sends to mapped queues transfer custody |
 | Scheduler | Accepted due target admissions and their retry waits; unclaimed schedules remain paused native resource state |
 | EventBridge Rules | Accepted scheduled events and admission retries; unclaimed recurring fires pause without changing rule state; held callback cleanup permits DisableRule/RemoveTargets/DeleteRule |
 | Cognito runners | Actual trigger execution, owned children and accepted callback chains |

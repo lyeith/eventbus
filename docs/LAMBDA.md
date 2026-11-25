@@ -527,7 +527,7 @@ then select the actual active Lambda request ID from the snapshot or the
 execution with `attempt: 1`; redelivery keeps the SQS message ID, increases
 `receive_count`, and admits a new Lambda request ID. A SQS message ID cannot arm
 a not-yet-admitted invocation. Batch selection crashes the entire invocation;
-the existing whole-batch ACK policy applies.
+the mapping leaves all still-unsettled records for native SQS retry.
 
 ```sh
 curl -X PUT \

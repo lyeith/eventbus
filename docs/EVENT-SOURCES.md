@@ -53,7 +53,7 @@ metadata and JSON escaping. A batch may therefore contain fewer records than
 BatchSize; remaining records stay unleased in queue order. With batching window
 zero, polling invokes available records without waiting to fill the batch.
 
-Handler return values are ignored for this whole-batch contract. A function error
+By default, the mapping ignores handler return values and settles the batch as a whole. A function error
 or timeout skips mapping ACK; still-unsettled records retain native visibility
 and redrive behavior. Handler-issued native deletes remain effective. Successful
 completion of the actual Lambda runner and its child cleanup permits ACK of each
@@ -61,6 +61,19 @@ current, unexpired receipt or proven original receipt already settled by native
 deletion. A stale successful HTTP delete no-op is not that proof. See
 [receipt settlement](MESSAGING.md#native-mapping-receipt-settlement).
 Asynchronous Lambda `Event` admission is never used for SQS settlement.
+
+Set `FunctionResponseTypes=["ReportBatchItemFailures"]` on
+`CreateEventSourceMapping` for selective retry. Create, Get and Delete return
+the configured setting. After the invocation joins successfully, a response
+such as `{"batchItemFailures":[{"itemIdentifier":"<SQS messageId>"}]}` leaves
+the reported records for native visibility retry or redrive. The mapping
+acknowledges the other records using their original receipts. An empty/null
+response or failure list acknowledges the entire batch. Invalid JSON, a malformed
+failure entry or an ID outside the current batch leaves the entire batch
+unacknowledged by the mapping. A function error or timeout takes precedence over
+the response. For FIFO, stop processing at the first failure and include failed
+and unprocessed IDs to preserve order.
+[AWS SQS batch response behavior](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html)
 The optional [worker-crash control](LAMBDA.md#one-shot-worker-crash) selects an
 already admitted active Lambda request ID with attempt 1. Redelivery retains
 the message ID and increments its receive count, with a new Lambda request ID.
@@ -89,14 +102,14 @@ published after cleanup joins and returned consistently to every concurrent call
 ## Explicit limits
 
 - Only standard/FIFO SQS sources, `BatchSize` 1–10, batching window zero,
-  `ScalingConfig.MaximumConcurrency` and whole-batch responses are supported.
+  `ScalingConfig.MaximumConcurrency` and optional partial batch responses are supported.
   Standard queue batches above ten remain an explicit capability gap.
 - Records excluded by the cumulative 6 MiB payload budget stay visible and
   unleased for a later batch. If no eligible visible record fits that limit, the
   queue adapter returns a source error without leasing any record; the mapping
   disables itself and cancels/joins its peer workers.
-- List/Update mapping operations, nonzero batching windows, filters, partial batch
-  responses, provisioned pollers, stream/Kafka/MQ settings, tags and other selected
+- List/Update mapping operations, nonzero batching windows, filters,
+  provisioned pollers, stream/Kafka/MQ settings, tags and other selected
   Create options return `InvalidParameterValueException`; they are not ignored.
 - Mappings are in-memory resources and must be provisioned for each owned run.
   Cross-account/region mappings and IAM/KMS policy evaluation are unsupported.
@@ -132,12 +145,15 @@ Records use `schema_version: eventbus.sqs.delivery.v1`:
 | `request_id`, `invoked_function_arn` | Actual Lambda identity when admitted; not a generated correlation substitute |
 | `state`, `invocation_state`, `joined` | Delivery result, native execution result and confirmed invocation completion at its declared scope |
 | `completion_scope` | `process` means launched process/listener/children joined; `invocation` means a successful warm response/log boundary, with the worker still separately owned |
-| `messages[]` | `message_id`, `receive_count`; terminal `settlement` plus optional `acknowledge_attempted` and `evidence_error` |
+| `messages[]` | `message_id`, `receive_count`; terminal `settlement` plus optional `acknowledge_attempted`, `retry_reported` and `evidence_error` |
 
 An `admitted` record precedes child launch and has `joined: false`. Its terminal
 follows the declared invocation completion boundary and receipt processing. Warm workers can remain alive after `completion_scope: invocation`; retire them through retained-owner quiescence, reload or service shutdown before asserting whole-worker/child cleanup. Terminal `state` is `succeeded`,
-`failed`, `timed_out`, `canceled`, `not_started`, `ack_failed` or `uncertain`;
-`invocation_state` uses the first five execution states. Required evidence excludes
+`failed`, `timed_out`, `canceled`, `not_started`, `partial_failure`, `ack_failed` or `uncertain`;
+`invocation_state` uses the first five execution states. `partial_failure`
+means the invocation succeeded, reported retries, and all eligible acknowledgments
+settled. `retry_reported` identifies those messages. An invalid response is a
+delivery failure even when the invocation succeeded. Required evidence excludes
 bodies, attributes, receipt handles, credentials, logs and arbitrary error text.
 
 | Receipt `settlement` | Meaning for the original receipt |
