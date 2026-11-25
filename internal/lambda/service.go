@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lyeith/eventbus/internal/awsprotocol"
 	"github.com/lyeith/eventbus/internal/devcapture"
 	"github.com/lyeith/eventbus/internal/localexec"
 )
@@ -59,6 +60,9 @@ type Service struct {
 	// Async transitions take asyncTransitionMu before mu. Capture I/O may
 	// hold only the transition mutex; admission fences/cancellation use mu.
 	asyncTransitionMu                                  sync.Mutex
+	asyncIdentity                                      AsyncIdentity
+	asyncDestinations                                  AsyncDestinationSink
+	eventInvokeConfigs                                 map[string]EventInvokeConfig
 	asyncAdmissions                                    sync.WaitGroup
 	asyncQueue                                         []*asyncTask
 	asyncTasks                                         map[string]*asyncTask
@@ -124,6 +128,15 @@ func NewService(config *Config, workDir string) (*Service, error) {
 	}
 	service := &Service{functions: make(map[string]executableFunction), initTimeout: initialInitTimeout, devActivity: config.DevActivity, processCleanup: localexec.Cleanup, active: make(map[uint64]invocationOwner), done: make(chan struct{})}
 	service.root = root
+	service.asyncIdentity = config.AsyncIdentity
+	if service.asyncIdentity.Region == "" {
+		service.asyncIdentity.Region = "us-east-1"
+	}
+	if service.asyncIdentity.AccountID == "" {
+		service.asyncIdentity.AccountID = "000000000000"
+	}
+	service.asyncDestinations = config.AsyncDestinations
+	service.eventInvokeConfigs = make(map[string]EventInvokeConfig)
 	service.workerCrashEnabled = config.DevWorkerCrash != nil && config.DevWorkerCrash.Enabled
 	if config.ExecutionPolicy != nil {
 		copied := *config.ExecutionPolicy
@@ -156,12 +169,16 @@ func requestFunctionName(request *http.Request) string {
 }
 
 func (service *Service) Match(request *http.Request) bool {
-	return strings.HasPrefix(request.URL.Path, invokePrefix)
+	return strings.HasPrefix(request.URL.Path, invokePrefix) || awsprotocol.IsLambdaEventInvokeConfigPath(request.URL.Path)
 }
 
 func (service *Service) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Amzn-RequestId", uuid.NewString())
 	writer.Header().Set("Content-Type", "application/json")
+	if reference, list, ok := awsprotocol.LambdaEventInvokeConfigPath(request.URL.Path); ok {
+		service.serveEventInvokeConfig(writer, request, reference, list)
+		return
+	}
 	if getFunctionPath(request) {
 		service.serveGetFunction(writer, request)
 		return

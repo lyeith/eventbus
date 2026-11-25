@@ -3,13 +3,10 @@ package firehose
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"reflect"
 	"slices"
@@ -17,9 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/google/uuid"
+	"github.com/lyeith/eventbus/internal/s3delivery"
 )
 
 const maxRecordBytes = 1000 * 1024
@@ -84,20 +80,20 @@ type StreamSnapshot struct {
 }
 
 type FirehoseManager struct {
-	streams                       map[string]*DeliveryStream
-	mu                            sync.RWMutex
-	region, accountID, s3Endpoint string
-	s3Credentials                 S3Credentials
-	metadata                      MetadataExtractor
-	buildObject                   objectBuilder
-	dev                           *devDelivery
-	bufferLimit                   int
-	now                           func() time.Time
-	logDelivery                   func(deliveryLogEvent)
-	httpClient                    *http.Client
-	stopping                      bool
-	done                          chan struct{}
-	shutdownErr                   error
+	streams           map[string]*DeliveryStream
+	mu                sync.RWMutex
+	region, accountID string
+	s3                s3delivery.Target
+	metadata          MetadataExtractor
+	buildObject       objectBuilder
+	dev               *devDelivery
+	bufferLimit       int
+	now               func() time.Time
+	logDelivery       func(deliveryLogEvent)
+	httpClient        *http.Client
+	stopping          bool
+	done              chan struct{}
+	shutdownErr       error
 }
 
 // NewFirehoseManager preserves the static-credential construction contract.
@@ -117,22 +113,16 @@ func NewFirehoseManagerWithS3Credentials(region, accountID, s3Endpoint string, c
 		accountID = "000000000000"
 	}
 	return &FirehoseManager{
-		streams:       make(map[string]*DeliveryStream),
-		region:        region,
-		accountID:     accountID,
-		s3Endpoint:    s3Endpoint,
-		s3Credentials: credentials,
-		bufferLimit:   maxBufferedBytes,
-		now:           time.Now,
-		logDelivery:   writeDeliveryLog,
-		buildObject:   makeObject,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-			// Delivery credentials and body belong only to the configured endpoint.
-			// A redirect needs a separately signed request and cannot confirm this PUT.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-		done: make(chan struct{}),
+		streams:     make(map[string]*DeliveryStream),
+		region:      region,
+		accountID:   accountID,
+		s3:          s3delivery.NewTarget(s3Endpoint, region, credentials),
+		bufferLimit: maxBufferedBytes,
+		now:         time.Now,
+		logDelivery: writeDeliveryLog,
+		buildObject: makeObject,
+		httpClient:  s3delivery.NewHTTPClient(nil),
+		done:        make(chan struct{}),
 	}
 }
 
@@ -555,32 +545,8 @@ func (fm *FirehoseManager) flush(ctx context.Context, ds *DeliveryStream, option
 }
 
 func (fm *FirehoseManager) putS3Object(ctx context.Context, bucket, key string, data []byte) error {
-	endpoint, err := s3ObjectURL(fm.s3Endpoint, bucket, key)
-	if err != nil {
-		return err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint.String(), bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("create Firehose delivery request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/octet-stream")
-	hash := sha256.Sum256(data)
-	payloadHash := hex.EncodeToString(hash[:])
-	request.Header.Set("X-Amz-Content-Sha256", payloadHash)
-	if err := v4.NewSigner().SignHTTP(ctx, aws.Credentials{AccessKeyID: fm.s3Credentials.AccessKeyID, SecretAccessKey: fm.s3Credentials.SecretAccessKey, SessionToken: fm.s3Credentials.SessionToken}, request, payloadHash, "s3", fm.region, time.Now(), func(options *v4.SignerOptions) { options.DisableURIPathEscaping = true }); err != nil {
-		return fmt.Errorf("sign Firehose delivery: %w", err)
-	}
-	response, err := fm.httpClient.Do(request)
-	if err != nil {
-		return fmt.Errorf("send Firehose delivery: %w", err)
-	}
-	_, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-	closeErr := response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return errors.Join(&destinationStatusError{status: response.StatusCode}, readErr, closeErr)
-	}
-	if err := errors.Join(readErr, closeErr); err != nil {
-		return fmt.Errorf("complete Firehose destination response: %w", err)
+	if err := fm.s3.PutObject(ctx, fm.httpClient, bucket, key, "application/octet-stream", data); err != nil {
+		return fmt.Errorf("Firehose %w", err)
 	}
 	return nil
 }

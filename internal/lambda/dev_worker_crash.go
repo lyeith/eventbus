@@ -238,7 +238,7 @@ func (service *Service) changeWorkerCrash(ctx context.Context, function, request
 		return result, err
 	}
 	task := service.asyncTasks[requestID]
-	if task == nil || task.record.FunctionName != name {
+	if task == nil || task.finishing || task.record.FunctionName != name {
 		return result, workerCrashError(404, "native_invocation_not_found")
 	}
 	expected := task.record.Attempts + 1

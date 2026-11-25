@@ -26,7 +26,18 @@ type backgroundDrainer interface {
 	Close(context.Context) error
 }
 
+type snsDeliveryOwner interface {
+	DrainSNSDeliveries(context.Context) error
+	CloseSNSDeliveries(context.Context) error
+	SNSDeliveriesIdle() bool
+	DevDiscardPendingSNSDeliveries()
+}
+type asyncIdleOwner interface {
+	WaitAsyncIdle(context.Context) error
+}
+
 type eventBusLifecycle struct {
+	snsDelivery   snsDeliveryOwner
 	store         *cognito.CognitoStore
 	firehose      *firehose.FirehoseManager
 	ses           io.Closer
@@ -121,6 +132,9 @@ func (owned *eventBusLifecycle) quiesce(ctx context.Context) error {
 			failures = append(failures, fmt.Errorf("drain Secrets rotations; resources retained: %w", err))
 		}
 	}
+	if err := owned.waitDeliveryGraph(ctx); err != nil {
+		failures = append(failures, fmt.Errorf("drain SNS and Lambda destinations: %w", err))
+	}
 	if functions, ok := owned.functions.(interface{ DrainAsync(context.Context) error }); ok {
 		if err := functions.DrainAsync(ctx); err != nil {
 			failures = append(failures, fmt.Errorf("drain Lambda events; resources retained: %w", err))
@@ -129,12 +143,40 @@ func (owned *eventBusLifecycle) quiesce(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
+// Destinations can submit more SNS or Lambda work while a peer is draining.
+// Wait for both owners before sealing Lambda admission, with callbacks live.
+func (owned *eventBusLifecycle) waitDeliveryGraph(ctx context.Context) error {
+	sns := owned.snsDelivery
+	if sns == nil {
+		return nil
+	}
+	lambda, _ := owned.functions.(asyncIdleOwner)
+	for {
+		err := sns.DrainSNSDeliveries(ctx)
+		if err == nil && lambda != nil {
+			err = lambda.WaitAsyncIdle(ctx)
+		}
+		if err != nil {
+			sns.DevDiscardPendingSNSDeliveries()
+			return errors.Join(err, sns.CloseSNSDeliveries(ctx))
+		}
+		if sns.SNSDeliveriesIdle() {
+			return nil
+		}
+	}
+}
+
 func (owned *eventBusLifecycle) close(ctx context.Context) error {
 	if err := owned.Quiesce(ctx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("resource cleanup not started: %w", err)
+	}
+	if owned.snsDelivery != nil {
+		if err := owned.snsDelivery.CloseSNSDeliveries(ctx); err != nil {
+			return fmt.Errorf("join SNS deliveries; resources retained: %w", err)
+		}
 	}
 	if owned.rotation != nil {
 		if err := owned.rotation.Close(ctx); err != nil {

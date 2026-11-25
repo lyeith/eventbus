@@ -164,13 +164,61 @@ func run(ctx context.Context, cfg config) (resultErr error) {
 	if projectRoot == "" {
 		projectRoot = findProjectRoot(".")
 	}
+	if err := broker.SetSNSRetryOptions(messaging.SNSRetryOptions{
+		Activity: retainedActivity, RetryDelayScale: cfg.snsRetryDelayScale,
+	}); err != nil {
+		return fmt.Errorf("configure SNS delivery ownership: %w", err)
+	}
+	owned.snsDelivery = broker
+	var destinations *lambdaDestinations
+	if cfg.snsHTTPEndpoints != "" || cfg.lambdaEventBridgeEndpoint != "" {
+		client, err := newFixtureHTTPClient(cfg.fixtureTLSCA)
+		if err != nil {
+			return err
+		}
+		defer client.CloseIdleConnections()
+		if cfg.snsHTTPEndpoints != "" {
+			transport, err := newSNSFixtureHTTP(cfg.snsHTTPEndpoints, client)
+			if err != nil {
+				return err
+			}
+			broker.SetSNSHTTPTransport(transport)
+			if cfg.retainedCallbackPort != 0 {
+				broker.SetSNSHTTPCallbackOrigin(fmt.Sprintf("http://127.0.0.1:%d", cfg.retainedCallbackPort))
+			}
+		}
+		if cfg.lambdaEventBridgeEndpoint != "" {
+			endpoint, err := fixtureHTTPURL(cfg.lambdaEventBridgeEndpoint)
+			if err != nil {
+				return err
+			}
+			destinations = &lambdaDestinations{eventsEndpoint: endpoint, client: client}
+		}
+	}
 	var functionHandler http.Handler
 	if cfg.lambdaFunctions != "" {
-		runner, configureErr := loadRetainedFunctions(cfg.lambdaFunctions, projectRoot, retained)
+		if destinations == nil {
+			destinations = &lambdaDestinations{}
+		}
+		destinations.broker, destinations.region = broker, cfg.region
+		if destinations.region == "" {
+			destinations.region = "us-east-1"
+		}
+		storage, storageErr := newLambdaDestinationS3(cfg)
+		if storageErr != nil {
+			return storageErr
+		}
+		destinations.storage = storage
+		if storage != nil {
+			defer storage.CloseIdleConnections()
+		}
+		runner, configureErr := loadRetainedFunctions(cfg.lambdaFunctions, projectRoot, retained,
+			lambdaservice.AsyncIdentity{Region: cfg.region, AccountID: cfg.accountID}, destinations)
 		functions, err = runner, configureErr
 		if err != nil {
 			return fmt.Errorf("failed to configure Lambda functions: %w", err)
 		}
+		destinations.functions = runner
 		owned.functions = runner
 		functionHandler = runner
 	}

@@ -3,41 +3,46 @@ package app
 import (
 	"flag"
 	"fmt"
+	"math"
 	"time"
 )
 
 type config struct {
-	port                     int
-	shutdownPolicy           devShutdownPolicy
-	shutdownTimeout          time.Duration
-	retainedCallbackPort     int
-	retainedCleanupFunctions string
-	region                   string
-	accountID                string
-	s3Endpoint               string
-	s3AccessKey              string
-	s3SecretKey              string
-	s3SessionToken           string
-	consumersFile            string
-	lambdaFunctions          string
-	workDir                  string
-	issuerBase               string
-	jwksBase                 string
-	cognitoPools             string
-	cognitoTriggers          string
-	cognitoDB                string
-	cognitoProfile           string
-	cognitoLog               string
-	schedulerGroups          string
-	schedulerExactSeconds    bool
-	accessTokenTTL           time.Duration
-	refreshTokenTTL          time.Duration
-	snsLog                   string
-	sqsDeliveryLog           string
-	sesLog                   string
-	sesConfig                string
-	sesTracking              bool
-	debug                    bool
+	port                      int
+	shutdownPolicy            devShutdownPolicy
+	shutdownTimeout           time.Duration
+	retainedCallbackPort      int
+	retainedCleanupFunctions  string
+	region                    string
+	accountID                 string
+	s3Endpoint                string
+	s3AccessKey               string
+	s3SecretKey               string
+	s3SessionToken            string
+	consumersFile             string
+	lambdaFunctions           string
+	workDir                   string
+	issuerBase                string
+	jwksBase                  string
+	cognitoPools              string
+	cognitoTriggers           string
+	cognitoDB                 string
+	cognitoProfile            string
+	cognitoLog                string
+	schedulerGroups           string
+	schedulerExactSeconds     bool
+	accessTokenTTL            time.Duration
+	refreshTokenTTL           time.Duration
+	snsLog                    string
+	snsHTTPEndpoints          string
+	snsRetryDelayScale        float64
+	fixtureTLSCA              string
+	lambdaEventBridgeEndpoint string
+	sqsDeliveryLog            string
+	sesLog                    string
+	sesConfig                 string
+	sesTracking               bool
+	debug                     bool
 }
 
 // readConfig accepts an owned FlagSet so CLI parsing does not mutate Go's
@@ -75,6 +80,11 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	accessTokenTTL := flags.Duration("access-token-ttl", time.Hour, "Legacy seeded-client access/ID token TTL (native app clients own token validity)")
 	refreshTokenTTL := flags.Duration("refresh-token-ttl", 24*time.Hour, "Legacy seeded-client refresh TTL (native app clients own token validity)")
 	snsLog := flags.String("sns-log", "-", "SNS JSON Lines capture path (external deliveries stay local)")
+	snsHTTPEndpoints := flags.String("sns-http-endpoints", "", "Comma-separated exact loopback HTTP/S SNS fixture URLs")
+	snsRetryDelayScale := flags.Float64("sns-retry-delay-scale", 1, "Development scale for SNS retry delays, greater than zero through one")
+	fixtureTLSCA := flags.String("fixture-tls-ca", "", "Optional PEM CA for explicitly selected local HTTPS fixtures")
+	lambdaEventBridgeEndpoint := flags.String("lambda-eventbridge-endpoint", "", "Optional loopback EventBridge-compatible endpoint for Lambda async destinations")
+
 	sqsDeliveryLog := flags.String("sqs-delivery-log", "", "Optional private JSON Lines evidence path for native SQS delivery and joined completion (requires --lambda-functions)")
 	sesLog := flags.String("ses-log", "-", "SES JSON Lines capture path ('-' for stdout; no email delivery)")
 	sesConfig := flags.String("ses-config", "", "Optional SES sending fixtures (templates, identities, configuration sets, received messages)")
@@ -99,38 +109,46 @@ func readConfig(flags *flag.FlagSet, args []string) (config, error) {
 	if *cognitoProfile != "" && *cognitoProfile != "legacy-fixtures" {
 		return config{}, fmt.Errorf("unknown Cognito fixture profile %q", *cognitoProfile)
 	}
+	if math.IsNaN(*snsRetryDelayScale) || *snsRetryDelayScale <= 0 || *snsRetryDelayScale > 1 {
+		return config{}, fmt.Errorf("sns-retry-delay-scale must be greater than zero and at most one")
+	}
+
 	cfg := config{
-		retainedCallbackPort:     *retainedCallbackPort,
-		retainedCleanupFunctions: *retainedCleanupFunctions,
-		port:                     *port,
-		shutdownPolicy:           devShutdownPolicy(*shutdownPolicy),
-		shutdownTimeout:          *shutdownTimeout,
-		region:                   *region,
-		accountID:                *accountID,
-		s3Endpoint:               *s3Endpoint,
-		s3AccessKey:              *s3AccessKey,
-		s3SecretKey:              *s3SecretKey,
-		s3SessionToken:           *s3SessionToken,
-		consumersFile:            *consumersFile,
-		lambdaFunctions:          *lambdaFunctions,
-		workDir:                  *workDir,
-		issuerBase:               *issuerBase,
-		jwksBase:                 *jwksBase,
-		cognitoPools:             *cognitoPools,
-		cognitoTriggers:          *cognitoTriggers,
-		cognitoDB:                *cognitoDB,
-		cognitoProfile:           *cognitoProfile,
-		cognitoLog:               *cognitoLog,
-		schedulerGroups:          *schedulerGroups,
-		schedulerExactSeconds:    *schedulerExactSeconds,
-		accessTokenTTL:           *accessTokenTTL,
-		refreshTokenTTL:          *refreshTokenTTL,
-		snsLog:                   *snsLog,
-		sqsDeliveryLog:           *sqsDeliveryLog,
-		sesLog:                   *sesLog,
-		sesConfig:                *sesConfig,
-		sesTracking:              *sesTracking,
-		debug:                    *debug,
+		retainedCallbackPort:      *retainedCallbackPort,
+		retainedCleanupFunctions:  *retainedCleanupFunctions,
+		port:                      *port,
+		shutdownPolicy:            devShutdownPolicy(*shutdownPolicy),
+		shutdownTimeout:           *shutdownTimeout,
+		region:                    *region,
+		accountID:                 *accountID,
+		s3Endpoint:                *s3Endpoint,
+		s3AccessKey:               *s3AccessKey,
+		s3SecretKey:               *s3SecretKey,
+		s3SessionToken:            *s3SessionToken,
+		consumersFile:             *consumersFile,
+		lambdaFunctions:           *lambdaFunctions,
+		workDir:                   *workDir,
+		issuerBase:                *issuerBase,
+		jwksBase:                  *jwksBase,
+		cognitoPools:              *cognitoPools,
+		cognitoTriggers:           *cognitoTriggers,
+		cognitoDB:                 *cognitoDB,
+		cognitoProfile:            *cognitoProfile,
+		cognitoLog:                *cognitoLog,
+		schedulerGroups:           *schedulerGroups,
+		schedulerExactSeconds:     *schedulerExactSeconds,
+		accessTokenTTL:            *accessTokenTTL,
+		refreshTokenTTL:           *refreshTokenTTL,
+		snsLog:                    *snsLog,
+		snsHTTPEndpoints:          *snsHTTPEndpoints,
+		snsRetryDelayScale:        *snsRetryDelayScale,
+		fixtureTLSCA:              *fixtureTLSCA,
+		lambdaEventBridgeEndpoint: *lambdaEventBridgeEndpoint,
+		sqsDeliveryLog:            *sqsDeliveryLog,
+		sesLog:                    *sesLog,
+		sesConfig:                 *sesConfig,
+		sesTracking:               *sesTracking,
+		debug:                     *debug,
 	}
 	if err := validateDevEvidenceConfig(cfg); err != nil {
 		return config{}, err

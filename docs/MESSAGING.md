@@ -51,8 +51,9 @@ after filtering and raw/envelope selection; admission failures use the existing
 DeliveryFailure/DLQ policy, and accepted-record S3 retries belong to Firehose.
 See [Firehose configuration and SDK example](FIREHOSE.md) for processing,
 buffering, limits and shutdown behavior. Lambda subscriptions use the registered
-local asynchronous runtime described below. HTTP/S, email, SMS and mobile-push
-delivery requests are captured without contacting their endpoints.
+local asynchronous runtime described below. Selected local HTTP/S endpoints
+receive real notifications. Other HTTP/S, email, SMS and mobile-push requests
+are captured in JSONL.
 The SMS sandbox starts enabled;
 read the captured OTP and call VerifySMSSandboxPhoneNumber before sending.
 Origination numbers and opted-out numbers start empty; there is no provider
@@ -102,22 +103,46 @@ publication acceptance, including when an individual subscription fails delivery
 `eventbus.lambda.async.v1` evidence and check its terminal state plus the handler's
 business side effect. Admission and capture do not claim completed execution.
 
-SNS makes one bounded local admission attempt; it does not reproduce production
-SNS's multi-hour admission retries. Once admitted, Lambda owns execution,
-deadlines and the two retries for function/runtime failure. Retries retain the
-same SNS message ID and invocation request ID and can duplicate application
-side effects. Eventual handler failure/timeout appears in Lambda execution
-evidence, rather than SNS's admission DLQ. Handlers must be idempotent.
+SNS retries transient SQS and Lambda admission failures under the managed
+endpoint retry policy. Terminal client errors and exhausted retries use the
+subscription `RedrivePolicy`. Once accepted, the target owns execution or queue
+custody and SNS will not repeat that admission. The SNS message ID and delivery
+payload survive every attempt. FIFO retry lanes keep order per subscription and
+message group. Confirmed SQS/Lambda subscriptions make the first admission
+inline when their lane is free. Subsequent attempts use the joined SNS scheduler.
+Its local capacity is 4,096 admitted deliveries and 128 MiB. Four background
+workers execute scheduled attempts with bounded request time. Final drain and
+discard follow the service's shutdown controls.
 
-During shutdown, Lambda stops asynchronous admission and joins admitted work
-while the AWS listener remains usable by accepted handlers. A shutdown deadline
-cancels retries, joins child processes and reports cancellation. SNS introduces
-no extra worker or child owner. Messaging resources and admitted event payloads
-are in memory: restart requires reprovisioning, loses pending events and does
-not replay append-only evidence files. There is no durable or exactly-once
-execution guarantee. The contract follows the
-[AWS SNS Lambda event shape](https://docs.aws.amazon.com/lambda/latest/dg/with-sns.html)
-and [Lambda attribute conversion](https://docs.aws.amazon.com/sns/latest/dg/sns-message-attributes.html).
+Successful retried SQS and HTTP/S deliveries emit `DeliverySuccess`.
+Terminal failures emit `DeliveryFailure`, and shutdown cancellations emit
+`DeliveryCanceled`. Terminal delivery evidence includes `details.attempts`.
+After Lambda admission, Lambda owns handler retries and final invocation
+destinations. Its failures do not go to the SNS subscription DLQ.
+[AWS SNS retries](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html)
+
+## Local SNS HTTP/S
+
+Start EventBus with `--sns-http-endpoints=http://127.0.0.1:9400/hook` to
+allow delivery to that exact fixture URL. Use a comma-separated list for
+multiple endpoints. TLS fixtures can supply a trusted PEM CA with
+`--fixture-tls-ca`. Delivery stays on loopback and follows no redirects.
+An unselected endpoint is capture-only.
+
+Subscribe through the SNS SDK. The fixture receives a confirmation POST and can
+call `ConfirmSubscription` with its token or follow the local `SubscribeURL`.
+An accepted notification retains its SNS ID across transport failures, HTTP 429
+and 5xx responses. Other unsuccessful statuses are terminal. Raw subscriptions
+receive the original message body. Enveloped subscriptions receive the native
+SNS envelope and notification headers. Unsubscribe confirmation uses the same
+local delivery owner. Fixture notifications omit AWS-managed signing certificates
+and signatures.
+
+Topic and subscription `DeliveryPolicy` values resolve to the subscription's
+`EffectiveDeliveryPolicy`. Retry phases, throttling, content type and disabled
+subscription overrides all affect local deliveries. `--sns-retry-delay-scale`
+is an explicit fixture control for shortening waits. The default is 1.
+[AWS delivery policy](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html)
 
 ## Live notification capture
 

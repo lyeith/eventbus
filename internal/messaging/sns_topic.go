@@ -46,6 +46,7 @@ type Subscription struct {
 	Token                             string
 	TokenExpires                      time.Time
 	Paused                            bool
+	httpThrottle                      *snsHTTPThrottle
 }
 
 type snsDeduplication struct {
@@ -136,9 +137,8 @@ func validateSNSTopicAttribute(name, value string, fifo, creating bool) error {
 			return snsInvalid("Policy must contain Statement")
 		}
 	case "DeliveryPolicy":
-		var object map[string]any
-		if json.Unmarshal([]byte(value), &object) != nil || object == nil {
-			return snsInvalid("DeliveryPolicy must be a JSON object")
+		if _, _, err := effectiveSNSHTTPPolicy(value, "", false); err != nil {
+			return err
 		}
 	case "TracingConfig":
 		if fifo || value != "PassThrough" && value != "Active" {
@@ -269,13 +269,7 @@ func (b *Broker) topicAttributes(topic *Topic) map[string]string {
 	attributes["SubscriptionsConfirmed"] = strconv.Itoa(confirmed)
 	attributes["SubscriptionsPending"] = strconv.Itoa(pending)
 	attributes["SubscriptionsDeleted"] = "0"
-	if _, exists := attributes["EffectiveDeliveryPolicy"]; !exists {
-		if policy := attributes["DeliveryPolicy"]; policy != "" {
-			attributes["EffectiveDeliveryPolicy"] = policy
-		} else {
-			attributes["EffectiveDeliveryPolicy"] = `{"http":{"defaultHealthyRetryPolicy":{"minDelayTarget":20,"maxDelayTarget":20,"numRetries":3,"numMaxDelayRetries":0,"numNoDelayRetries":0,"numMinDelayRetries":0,"backoffFunction":"linear"},"disableSubscriptionOverrides":false}}`
-		}
-	}
+	attributes["EffectiveDeliveryPolicy"] = snsHTTPTopicEffectiveJSON(attributes["DeliveryPolicy"])
 	return attributes
 }
 
@@ -352,7 +346,7 @@ func (b *Broker) validateSNSRedrivePolicy(topicARN, raw string) error {
 	return nil
 }
 
-func validateSNSSubscriptionAttributes(attributes map[string]string, protocol string) (*FilterPolicy, error) {
+func validateSNSSubscriptionAttributes(attributes map[string]string, protocol, topicPolicy string) (*FilterPolicy, error) {
 	scope := attributes["FilterPolicyScope"]
 	if scope == "" {
 		scope = "MessageAttributes"
@@ -380,9 +374,8 @@ func validateSNSSubscriptionAttributes(attributes map[string]string, protocol st
 				return nil, snsInvalid("RawMessageDelivery is unsupported for this protocol")
 			}
 		case "DeliveryPolicy":
-			var policy map[string]any
-			if protocol != "http" && protocol != "https" || json.Unmarshal([]byte(value), &policy) != nil || policy == nil {
-				return nil, snsInvalid("DeliveryPolicy requires HTTP/S and valid JSON")
+			if !isSNSHTTP(protocol) {
+				return nil, snsInvalid("DeliveryPolicy requires HTTP/S")
 			}
 		case "RedrivePolicy":
 			// Broker validates the policy and its topic/resource relationship.
@@ -396,6 +389,11 @@ func validateSNSSubscriptionAttributes(attributes map[string]string, protocol st
 			}
 		default:
 			return nil, snsInvalid("Invalid subscription attribute: " + name)
+		}
+	}
+	if isSNSHTTP(protocol) {
+		if _, _, err := effectiveSNSHTTPPolicy(topicPolicy, attributes["DeliveryPolicy"], attributes["RawMessageDelivery"] == "true"); err != nil {
+			return nil, err
 		}
 	}
 	if protocol == "firehose" && attributes["SubscriptionRoleArn"] == "" {
@@ -418,10 +416,6 @@ func (b *Broker) subscribeSNS(topicARN, protocol, endpoint string, attributes ma
 	if err := b.validateSNSSubscriptionEndpoint(protocol, endpoint); err != nil {
 		return nil, err
 	}
-	filter, err := validateSNSSubscriptionAttributes(attributes, protocol)
-	if err != nil {
-		return nil, err
-	}
 	if err := b.validateSNSRedrivePolicy(topicARN, attributes["RedrivePolicy"]); err != nil {
 		return nil, err
 	}
@@ -437,6 +431,13 @@ func (b *Broker) subscribeSNS(topicARN, protocol, endpoint string, attributes ma
 	}
 	topic.controlMu.Lock()
 	defer topic.controlMu.Unlock()
+	topic.mu.RLock()
+	topicPolicy := topic.Attributes["DeliveryPolicy"]
+	topic.mu.RUnlock()
+	filter, err := validateSNSSubscriptionAttributes(normalized, protocol, topicPolicy)
+	if err != nil {
+		return nil, err
+	}
 	topic.mu.RLock()
 	for _, existing := range topic.Subscriptions {
 		if existing.Protocol == protocol && existing.Endpoint == endpoint {
@@ -467,15 +468,22 @@ func (b *Broker) subscribeSNS(topicARN, protocol, endpoint string, attributes ma
 	if normalized["ReplayPolicy"] != "" && !fifo {
 		return nil, snsInvalid("ReplayPolicy requires a FIFO topic")
 	}
-	pending := protocol == "http" || protocol == "https" || protocol == "email" || protocol == "email-json"
+	httpDelivery := isSNSHTTP(protocol)
+	pending := httpDelivery || protocol == "email" || protocol == "email-json"
 	subscription := &Subscription{ARN: topicARN + ":" + uuid.NewString(), TopicARN: topicARN, Protocol: protocol, Endpoint: endpoint, Attributes: normalized, FilterPolicy: filter, Pending: pending}
+	if httpDelivery {
+		subscription.httpThrottle = &snsHTTPThrottle{}
+	}
+	var submitConfirmation func()
 	if pending {
 		subscription.Token = uuid.NewString()
 		subscription.TokenExpires = time.Now().Add(48 * time.Hour)
-		message, _ := json.Marshal(map[string]string{"Type": "SubscriptionConfirmation", "Token": subscription.Token, "TopicArn": topicARN, "Message": "Confirm the subscription using this token", "SubscribeURL": fmt.Sprintf("http://localhost:%d/?Action=ConfirmSubscription&TopicArn=%s&Token=%s", b.port, url.QueryEscape(topicARN), subscription.Token)})
-		if err := b.CaptureSNS(SNSCaptureRecord{Operation: "Subscribe", RequestID: requestID, TargetARN: topicARN, Message: string(message), Deliveries: []SNSCaptureDelivery{{Protocol: protocol, Endpoint: endpoint, Status: "captured"}}, Details: map[string]any{"token": subscription.Token, "subscription_arn": subscription.ARN}}); err != nil {
-			return nil, snsInternal("Unable to capture subscription confirmation")
+		commit, cancel, err := b.prepareSNSConfirmation("Subscribe", requestID, "SubscriptionConfirmation", subscription, subscription.Token, topicPolicy)
+		if err != nil {
+			return nil, err
 		}
+		defer cancel()
+		submitConfirmation = commit
 	}
 	if policy := normalized["ReplayPolicy"]; policy != "" {
 		topic.publishMu.Lock()
@@ -489,8 +497,12 @@ func (b *Broker) subscribeSNS(topicARN, protocol, endpoint string, attributes ma
 	}
 	topic.mu.Lock()
 	topic.Subscriptions = append(topic.Subscriptions, subscription)
+	snapshot := cloneSNSSubscription(subscription)
 	topic.mu.Unlock()
-	return cloneSNSSubscription(subscription), nil
+	if submitConfirmation != nil {
+		submitConfirmation()
+	}
+	return snapshot, nil
 }
 
 func cloneSNSSubscription(subscription *Subscription) *Subscription {
@@ -637,8 +649,19 @@ func (b *Broker) PublishSNS(input SNSPublishInput) (SNSPublishResult, error) {
 	if fifo {
 		result.SequenceNumber = strconv.FormatUint(topic.sequence+1, 10)
 	}
-	plans, deliveries := b.snsPlanDeliveries(input, result, subscriptions, now, false)
+	plans, deliveries := b.snsPlanDeliveries(input, result, subscriptions, attributes, now, false)
+	var owner *snsRetryOwner
+	tasks := snsDeliveryTasks(input, result, plans, dedupID)
+	if len(tasks) != 0 {
+		owner = b.snsRetryOwner()
+		if err := owner.reserve(tasks); err != nil {
+			return SNSPublishResult{}, err
+		}
+	}
 	if err := b.CaptureSNS(snsCapturePublication(input, result, deliveries, nil)); err != nil {
+		if owner != nil {
+			owner.abandon(tasks)
+		}
 		return SNSPublishResult{}, snsInternal("Unable to capture publication")
 	}
 	if fifo {
@@ -650,7 +673,7 @@ func (b *Broker) PublishSNS(input SNSPublishInput) (SNSPublishResult, error) {
 	if retention > 0 {
 		snsCommitArchive(topic, input, result, now)
 	}
-	if err := b.snsSendDeliveries(input, result, plans, dedupID, false); err != nil {
+	if owner != nil && owner.send(tasks) != nil {
 		// The publication is already accepted. Reporting a retryable refusal
 		// here would duplicate deliveries on a standard topic. Capture's
 		// terminal failure rejects the next request before any acceptance.

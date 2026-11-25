@@ -123,7 +123,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, "/2015-03-31/functions/") {
+	if strings.HasPrefix(r.URL.Path, "/2015-03-31/functions/") || awsprotocol.IsLambdaEventInvokeConfigPath(r.URL.Path) {
 		if s.services.Lambda == nil {
 			writeRESTError(w, http.StatusNotFound, "ResourceNotFoundException", "Lambda function is not configured")
 		} else {
@@ -189,7 +189,14 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodPost {
+	// SNS's generated confirmation and unsubscribe URLs use the Query protocol.
+	// Keep the GET exception limited to the two native link actions.
+	query := r.URL.Query()
+	action := query.Get("Action")
+	snsLink := r.Method == http.MethodGet && r.URL.Path == "/" && query.Get("Version") == "2010-03-31" &&
+		(action == "ConfirmSubscription" || action == "Unsubscribe")
+
+	if r.Method != http.MethodPost && !snsLink {
 		namespace, _ := awsprotocol.QueryNamespace(r.URL.Query().Get("Version"))
 		awsprotocol.QueryError(w, http.StatusMethodNotAllowed, namespace, "InvalidMethod", "Only POST is supported")
 		return
@@ -198,7 +205,7 @@ func (s *Server) handleAWSAction(w http.ResponseWriter, r *http.Request) {
 	// independently, so permit its transport encoding before service selection.
 	r.Body = http.MaxBytesReader(w, r.Body, s.services.QueryBodyLimit)
 	parseErr := r.ParseForm()
-	action := r.FormValue("Action")
+	action = r.FormValue("Action")
 	if s.services.SES != nil && s.services.SES.MatchQuery(r, action) {
 		s.services.SES.ServeQuery(w, r, action, parseErr)
 		return

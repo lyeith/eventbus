@@ -16,19 +16,22 @@ const (
 )
 
 type Broker struct {
-	topics     map[string]*Topic // ARN → Topic
-	queues     map[string]*Queue // name → Queue
-	arnIndex   map[string]*Queue // ARN → Queue
-	mu         sync.RWMutex
-	region     string
-	accountID  string
-	port       int
-	sns        *snsState
-	sqs        *sqsBrokerState
-	capture    *SNSCapture
-	firehose   FirehoseDelivery
-	lambda     LambdaDelivery
-	devCustody *devBrokerCustody
+	topics                map[string]*Topic // ARN → Topic
+	queues                map[string]*Queue // name → Queue
+	arnIndex              map[string]*Queue // ARN → Queue
+	mu                    sync.RWMutex
+	region                string
+	accountID             string
+	port                  int
+	sns                   *snsState
+	sqs                   *sqsBrokerState
+	capture               *SNSCapture
+	firehose              FirehoseDelivery
+	lambda                LambdaDelivery
+	snsRetry              *snsRetryOwner
+	devCustody            *devBrokerCustody
+	snsHTTPTransport      SNSHTTPTransport
+	snsHTTPCallbackOrigin string
 }
 
 func NewBroker(region, accountID string, port int) *Broker {

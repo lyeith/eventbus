@@ -73,8 +73,9 @@ Publish acceptance and `DeliveryAdmission` evidence do not prove execution;
 correlate the invocation request ID with Lambda completion evidence and the
 application side effect. [Messaging](MESSAGING.md) states filtering/retry limits.
 
-For SQS, create a native mapping through the Lambda SDK with `BatchSize` from
-1–10 (default 10) and optional `ScalingConfig={"MaximumConcurrency": 2}`. [Mappings](EVENT-SOURCES.md) shows provisioning and limits.
+For SQS, create a native mapping through the Lambda SDK. Use filtering, batching
+windows or partial batch responses when the application uses those settings.
+[Mappings](EVENT-SOURCES.md) shows the supported options and limits.
 Mapping ACK waits for successful execution and actual child join; handler-issued
 native deletes remain effective independently.
 Queue visibility, FIFO and redrive settings govern retries. Delete the mapping

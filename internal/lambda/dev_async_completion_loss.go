@@ -76,7 +76,7 @@ func (service *Service) devChangeAsyncCompletionLoss(ctx context.Context, functi
 		return DevAsyncCompletionLoss{}, err
 	}
 	task := service.asyncTasks[requestID]
-	if task == nil || task.record.FunctionName != name {
+	if task == nil || task.finishing || task.record.FunctionName != name {
 		return DevAsyncCompletionLoss{}, devAsyncControlError(http.StatusNotFound, "async_event_not_found")
 	}
 	result := DevAsyncCompletionLoss{RequestID: requestID, FunctionName: name, Attempt: attempt}

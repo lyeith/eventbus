@@ -74,7 +74,10 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   `sqs_*` owns queues, typed operations and both JSON/Query adapters; `sns_*` owns
   topics, subscriptions, SMS/mobile state and Query adapters. SNS delivers to SQS
   through `SendQueueMessage`; Lambda delivery uses its `LambdaDelivery` port.
-  Capture records, filtering and admission policy stay with SNS.
+  Capture records, filtering and admission policy stay with SNS. Its retry owner
+  holds bounded accepted work and FIFO admission order through terminal settlement.
+  Native HTTP/S projection and effective policies stay with SNS. App attaches a
+  transport for explicitly configured loopback fixture endpoints.
   SES/SNS/Cognito notification and Lambda evidence wrappers use `devcapture` for durable output mechanics.
   Publication, subscriptions and queue settlement
   need the same broker. Queue collections remain private to that owner.
@@ -84,8 +87,9 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   The mapping validates partial batch responses before any ACK. Native mapping
   ACK delegates to messaging's receipt-settlement operation:
   current deletion or proven original-lease settlement, never stale HTTP success.
-  Mapping workers enforce configured batch/concurrency limits and join as one owner.
-  Messaging applies the Lambda event byte budget before leasing queue records.
+  Mapping workers enforce batch/concurrency settings and join as one owner.
+  Eventsource compiles the filter; messaging removes rejects and accumulates
+  eligible receipts within the byte/time budget under queue ownership.
   Optional `dev_delivery.go` correlates observed native Lambda identity with
   queue-owned receipt classifications; it cannot infer a join or business success.
 - `sqsevent` owns shared SQS Lambda wire types and immutable encoded batches.
@@ -173,7 +177,8 @@ and [ticket ownership](ISSUE-TRIAGE.md).
   SigV4 signer consumes the immutable access/secret/optional-token value.
   Its owned HTTP client refuses redirects; no provider chain or second delivery
   owner is introduced. `s3_path.go` owns strict wire-path construction without
-  changing decoded key identity. `delivery_retry.go` keeps per-object backoff
+  changing decoded key identity. Shared `s3delivery` owns signed PUT for
+  Firehose and Lambda failure destinations. `delivery_retry.go` keeps per-object backoff
   and coalesced redacted diagnostics in the existing flush owner. Retained
   force-readiness honors retries; final cleanup explicitly bypasses cooldown.
 - `awsprotocol` holds reusable wire helpers, without service state. Callers own

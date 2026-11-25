@@ -12,17 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lyeith/eventbus/internal/s3delivery"
 	"github.com/rs/zerolog/log"
 )
 
 const maxDeliveryRetryDelay = time.Minute
 const duplicateDeliveryLogInterval = time.Minute
-
-type destinationStatusError struct{ status int }
-
-func (e *destinationStatusError) Error() string {
-	return fmt.Sprintf("Firehose destination returned status %d", e.status)
-}
 
 func deliveryRetryDelay(failures int) time.Duration {
 	if failures < 1 {
@@ -32,9 +27,9 @@ func deliveryRetryDelay(failures int) time.Duration {
 }
 
 func deliveryFailureCode(err error) string {
-	var status *destinationStatusError
+	var status *s3delivery.StatusError
 	if errors.As(err, &status) {
-		return fmt.Sprintf("destination_http_%d", status.status)
+		return fmt.Sprintf("destination_http_%d", status.Status)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "destination_timeout"

@@ -2,8 +2,8 @@ package messaging
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -186,6 +186,7 @@ func (b *Broker) snsReplay(topic *Topic, subscription *Subscription, policy, ope
 	topic.mu.RLock()
 	fifo := topic.Attributes["FifoTopic"] == "true"
 	archivePolicy := topic.Attributes["ArchivePolicy"]
+	topicAttributes := maps.Clone(topic.Attributes)
 	topic.mu.RUnlock()
 	if !fifo {
 		return snsInvalid("ReplayPolicy requires a FIFO topic")
@@ -196,18 +197,15 @@ func (b *Broker) snsReplay(topic *Topic, subscription *Subscription, policy, ope
 	}
 	now := time.Now().UTC()
 	snsPruneArchive(topic, retention, now)
-	type replayPublication struct {
-		publication snsArchivedPublication
-		plans       []snsPlannedDelivery
-	}
-	selected := make([]replayPublication, 0)
+	subscription = cloneSNSSubscription(subscription)
+	var tasks []*snsDeliveryTask
 	deliveries := make([]SNSCaptureDelivery, 0)
 	records := make([]SNSCaptureRecord, 0)
 	for _, publication := range topic.archive {
 		if publication.PublishedAt.Before(start) || !end.IsZero() && publication.PublishedAt.After(end) || publication.PublishedAt.After(now) {
 			continue
 		}
-		plans, plannedDeliveries := b.snsPlanDeliveries(publication.Input, publication.Result, []*Subscription{subscription}, publication.PublishedAt, true)
+		plans, plannedDeliveries := b.snsPlanDeliveries(publication.Input, publication.Result, []*Subscription{subscription}, topicAttributes, publication.PublishedAt, true)
 		for index := range plannedDeliveries {
 			plannedDeliveries[index].MessageID = publication.Result.MessageID
 		}
@@ -217,25 +215,31 @@ func (b *Broker) snsReplay(topic *Topic, subscription *Subscription, policy, ope
 		record.CapturedAt = now
 		records = append(records, record)
 		deliveries = append(deliveries, plannedDeliveries...)
-		selected = append(selected, replayPublication{publication: publication, plans: plans})
+		input := publication.Input
+		input.RequestID = requestID
+		tasks = append(tasks, snsDeliveryTasks(input, publication.Result, plans, "replay-"+uuid.NewString())...)
 	}
 	details := map[string]any{"source_operation": operation, "subscription_arn": subscription.ARN, "starting_point": start, "replayed": true, "publications": records}
 	if !end.IsZero() {
 		details["ending_point"] = end
 	}
+	var owner *snsRetryOwner
+	if len(tasks) != 0 {
+		owner = b.snsRetryOwner()
+		if err := owner.reserve(tasks); err != nil {
+			return err
+		}
+	}
 	if err := b.CaptureSNS(SNSCaptureRecord{Operation: "Replay", RequestID: requestID, TargetARN: topic.ARN, Deliveries: deliveries, Details: details}); err != nil {
+		if owner != nil {
+			owner.abandon(tasks)
+		}
 		return snsInternal("Unable to capture SNS replay intent")
 	}
-	for _, replay := range selected {
-		input := replay.publication.Input
-		input.RequestID = requestID
-		input.Operation = "Replay"
-		// Queue deduplication must not suppress a deliberate replay immediately
-		// after the original publication, or a second replay of that message.
-		dedupID := "replay-" + uuid.NewString()
-		if err := b.snsSendDeliveries(input, replay.publication.Result, replay.plans, dedupID, true); err != nil {
-			return fmt.Errorf("SNS replay delivery: %w", err)
-		}
+	if owner != nil {
+		// Intent has committed. A capture error after admission cannot turn
+		// replay into a retryable response that repeats a delivered message.
+		_ = owner.send(tasks)
 	}
 	return nil
 }

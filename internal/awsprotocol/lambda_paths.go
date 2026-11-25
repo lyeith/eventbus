@@ -16,3 +16,26 @@ func IsLambdaMappingTagPath(path string) bool {
 	resource, ok := strings.CutPrefix(path, LambdaTagsPathPrefix)
 	return ok && lambdaMappingARN.MatchString(resource)
 }
+
+// LambdaEventInvokeConfigPath parses the versioned Lambda configuration
+// collection and member. The Lambda handler validates the function reference.
+func LambdaEventInvokeConfigPath(path string) (function string, list, ok bool) {
+	resource, prefix := strings.CutPrefix(path, "/2019-09-25/functions/")
+	function, operation, slash := strings.Cut(resource, "/")
+	if !prefix || !slash || function == "" {
+		return "", false, false
+	}
+	switch operation {
+	case "event-invoke-config":
+		return function, false, true
+	case "event-invoke-config/list":
+		return function, true, true
+	default:
+		return "", false, false
+	}
+}
+
+func IsLambdaEventInvokeConfigPath(path string) bool {
+	_, _, ok := LambdaEventInvokeConfigPath(path)
+	return ok
+}

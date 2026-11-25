@@ -43,7 +43,7 @@ func validateRetainedConfig(cfg config) error {
 	return nil
 }
 
-func loadRetainedFunctions(filename, workDir string, retained *devquiescence.Coordinator) (*lambdaservice.Service, error) {
+func loadRetainedFunctions(filename, workDir string, retained *devquiescence.Coordinator, identity lambdaservice.AsyncIdentity, destinations lambdaservice.AsyncDestinationSink) (*lambdaservice.Service, error) {
 	if !filepath.IsAbs(filename) {
 		filename = filepath.Join(workDir, filename)
 	}
@@ -54,6 +54,7 @@ func loadRetainedFunctions(filename, workDir string, retained *devquiescence.Coo
 	if retained != nil {
 		recipe.DevActivity = retained
 	}
+	recipe.AsyncIdentity, recipe.AsyncDestinations = identity, destinations
 	return lambdaservice.NewService(recipe, workDir)
 }
 
@@ -206,6 +207,12 @@ func (listener *eventBusListener) abortRetainedOwners(ctx context.Context) error
 		return nil
 	}
 	var failures []error
+	if sns := listener.owned.snsDelivery; sns != nil {
+		sns.DevDiscardPendingSNSDeliveries()
+		if err := sns.CloseSNSDeliveries(ctx); err != nil {
+			failures = append(failures, fmt.Errorf("abort/join SNS: %w", err))
+		}
+	}
 	for _, item := range []struct {
 		name  string
 		owner contextCloser

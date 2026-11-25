@@ -323,13 +323,43 @@ package metadata; dependency modules use ordinary Python import/bytecode rules.
 Explicit aliases are independent registrations; reloading an alias
 reloads that entry, while `name:$LATEST` resolves the unqualified entry.
 
+## Native asynchronous invocation configuration
+
+Use the AWS SDK's Put, Get, List, Update and DeleteFunctionEventInvokeConfig
+operations for a registered function, version or alias. Put replaces the
+configuration. Update preserves omitted fields. Supply an empty destination
+side to clear it. List supports pagination. Accepted Events keep the
+configuration selected at admission.
+
+`MaximumRetryAttempts` is 0–2 (default 2) for function/runtime errors.
+`MaximumEventAgeInSeconds` is 60–21,600 (default six hours) and limits when the
+next attempt can start. Throttling and pre-execution service errors use the age
+budget rather than spending a handler attempt.
+
+Configure `DestinationConfig.OnSuccess` and `OnFailure` with destination ARNs.
+The full native invocation record goes to a local standard SQS queue, standard
+SNS topic, registered Lambda, or to a selected compatible loopback EventBridge
+peer via `--lambda-eventbridge-endpoint`. S3 buckets work for OnFailure through
+the existing `--s3-endpoint` and static fixture credentials. EventBridge uses
+native `PutEvents`. Its event-bus routing belongs to the selected peer. Lambda
+uses the configured target ARN and refuses direct self-destinations. AWS IAM,
+KMS, cross-account delivery and managed recursion tracing are outside this
+local contract.
+
+Terminal destination admission stays inside the existing async work lifetime.
+A failed destination does not replay a handler. Private metadata adds only
+`destination_status` when delivery was tried. Invocation bodies and function
+results go to the configured destination rather than to private evidence.
+Intentional shutdown cancellation or discard does not send destination records.
+[AWS async destinations](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async-retain-records.html)
+
 ## Async execution evidence
 
 Accepted events execute in an instance-owned, bounded queue. Capacity includes
 running work and events waiting to retry. A full queue returns HTTP 429
 `TooManyRequestsException` before acceptance. Function and runtime failures,
-including timeouts, receive two retries after one and two minutes; a successful
-execution settles once. Queued events older than six hours fail without execution.
+including timeouts, use the native retry and age settings above. A successful
+execution settles once. Expired queued events fail without execution.
 Use the terminal record to distinguish runtime completion from HTTP 202.
 Application business success requires a separate assertion.
 

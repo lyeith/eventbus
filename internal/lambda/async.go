@@ -31,8 +31,11 @@ type AsyncRecord struct {
 	ErrorType              string    `json:"error_type,omitempty"`
 	InjectedWorkerCrash    bool      `json:"injected_worker_crash,omitempty"`
 	InjectedCompletionLoss bool      `json:"injected_completion_loss,omitempty"`
+	DestinationStatus      string    `json:"destination_status,omitempty"`
 }
 type asyncTask struct {
+	policy                    asyncInvokePolicy
+	finishing                 bool
 	entry                     executableFunction
 	input                     invocation
 	record                    AsyncRecord
@@ -99,6 +102,9 @@ func (service *Service) admit(ctx context.Context, input InvokeInput, completion
 		return Admission{}, err
 	}
 	task.release = release
+	if policy, configured := service.eventInvokeConfigs[canonicalAsyncFunction(name)]; configured {
+		task.policy = policy.policy()
+	}
 	// A reservation wins admission against a later Close and counts capacity
 	// and retained work, but is neither executable nor a published queued record.
 	service.asyncOutstanding++
@@ -217,12 +223,17 @@ func (service *Service) finishAsync(task *asyncTask, state, errorType string) {
 }
 func (service *Service) finishAsyncCrash(task *asyncTask, state, errorType string, workerCrash bool) {
 	service.mu.Lock()
-	record := nextAsyncRecord(task.record, state, errorType)
+	record := asyncTerminalRecord(task.record, state, errorType, workerCrash)
+	service.mu.Unlock()
+	service.settleAsyncRecord(task, record)
+}
+
+func asyncTerminalRecord(previous AsyncRecord, state, errorType string, workerCrash bool) AsyncRecord {
+	record := nextAsyncRecord(previous, state, errorType)
 	record.InjectedCompletionLoss = errorType == devCompletionLostError
 	record.InjectedWorkerCrash = workerCrash
 	record.NextAttemptAt = time.Time{}
-	service.mu.Unlock()
-	service.settleAsyncRecord(task, record)
+	return record
 }
 
 // settleAsyncRecord is the sole terminal capture/publication owner. Callers
@@ -273,8 +284,13 @@ func (service *Service) pollAsync() (*asyncTask, <-chan struct{}, time.Time, boo
 	selected := -1
 	var earliest time.Time
 	for index, task := range service.asyncQueue {
-		if earliest.IsZero() || task.readyAt.Before(earliest) {
-			earliest = task.readyAt
+		ready := task.readyAt
+		expires := task.record.QueuedAt.Add(task.policy.maximumAge())
+		if ready.After(expires) {
+			ready = expires
+		}
+		if earliest.IsZero() || ready.Before(earliest) {
+			earliest = ready
 			selected = index
 		}
 	}
@@ -288,9 +304,9 @@ func (service *Service) pollAsync() (*asyncTask, <-chan struct{}, time.Time, boo
 			service.finishAsync(task, "canceled", devAsyncShutdownDiscarded)
 			return nil, nil, time.Time{}, false
 		}
-		if now.Sub(task.record.QueuedAt) >= maxEventAge {
+		if now.Sub(task.record.QueuedAt) >= task.policy.maximumAge() {
 			service.mu.Unlock()
-			service.finishAsync(task, "failed", "EventAgeExceeded")
+			service.finishAsyncDestination(task, "failed", "EventAgeExceeded", "EventAgeExceeded", invocationResult{}, 0)
 			return nil, nil, time.Time{}, false
 		}
 		record := nextAsyncRecord(task.record, "running", "")
@@ -367,7 +383,10 @@ func (service *Service) asyncWorker() {
 // The native attempt has actually joined before its terminal/retry transaction.
 func (service *Service) completeAsync(task *asyncTask, result invocationResult, err error) {
 	var invokeErr *InvokeError
-	throttled := errors.As(err, &invokeErr) && invokeErr.Status == http.StatusTooManyRequests && invokeErr.Code == "TooManyRequestsException"
+	nativeError := errors.As(err, &invokeErr)
+	throttled := nativeError && invokeErr.Status == http.StatusTooManyRequests && invokeErr.Code == "TooManyRequestsException"
+	systemRetry := nativeError && invokeErr.Status >= 500 && !result.admitted
+	retryWithoutAttempt := throttled || systemRetry
 	service.asyncTransitionMu.Lock()
 	defer service.asyncTransitionMu.Unlock()
 	service.mu.Lock()
@@ -375,7 +394,7 @@ func (service *Service) completeAsync(task *asyncTask, result invocationResult, 
 	if result.ownershipErr != nil && service.asyncOwnershipErr == nil {
 		service.asyncOwnershipErr = result.ownershipErr
 	}
-	if throttled {
+	if retryWithoutAttempt {
 		task.throttleRetries++
 	} else {
 		task.throttleRetries = 0
@@ -387,7 +406,7 @@ func (service *Service) completeAsync(task *asyncTask, result invocationResult, 
 	switch {
 	case aborted || errors.Is(err, context.Canceled):
 		service.finishAsync(task, "canceled", "ServiceShutdown")
-	case throttled:
+	case retryWithoutAttempt:
 		// Admission already succeeded, but no handler ran. Retain the original
 		// event and function-error retry budget in the same bounded queue.
 		if record.Attempts > 0 {
@@ -400,15 +419,23 @@ func (service *Service) completeAsync(task *asyncTask, result invocationResult, 
 		if delay > time.Minute {
 			delay = time.Minute
 		}
-		service.retryAsync(task, record, "TooManyRequestsException", delay, false, false)
+		reason := "ServiceError"
+		if throttled {
+			reason = "TooManyRequestsException"
+		}
+		service.retryAsync(task, record, reason, delay, false, false)
 	case err != nil:
-		service.finishAsync(task, "failed", "ServiceError")
+		status := http.StatusInternalServerError
+		if nativeError {
+			status = invokeErr.Status
+		}
+		service.finishAsyncDestination(task, "failed", "ServiceError", "RetriesExhausted", result, status)
 	case !result.functionError && !result.devCompletionLoss:
-		service.finishAsync(task, "succeeded", "")
-	case record.Attempts <= 2:
+		service.finishAsyncDestination(task, "succeeded", "", "Success", result, http.StatusOK)
+	case record.Attempts <= task.policy.maximumRetries():
 		service.retryAsync(task, record, asyncErrorType(result), service.asyncRetryDelays[record.Attempts-1], result.devCompletionLoss, result.devWorkerCrash)
 	default:
-		service.finishAsyncCrash(task, "failed", asyncErrorType(result), result.devWorkerCrash)
+		service.finishAsyncDestination(task, "failed", asyncErrorType(result), "RetriesExhausted", result, http.StatusOK)
 	}
 }
 
@@ -528,4 +555,36 @@ func (service *Service) abortAsyncLocked(reason error) {
 		}
 	}
 	service.wakeAsyncLocked()
+}
+
+// AsyncIdle snapshots the same ownership count used for queue capacity. Native
+// admissions that are still capturing and terminal deliveries both count.
+func (service *Service) AsyncIdle() bool {
+	if service == nil {
+		return true
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return service.asyncOutstanding == 0
+}
+
+// WaitAsyncIdle waits for admitted work to reach zero without fencing Event
+// admission. Hosts can coordinate dependent delivery owners before DrainAsync.
+func (service *Service) WaitAsyncIdle(ctx context.Context) error {
+	if service == nil {
+		return nil
+	}
+	for {
+		service.mu.Lock()
+		idle, wake := service.asyncOutstanding == 0, service.asyncWake
+		service.mu.Unlock()
+		if idle {
+			return service.asyncDrainError()
+		}
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }

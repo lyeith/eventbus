@@ -49,6 +49,9 @@ func (listener *eventBusListener) beginShutdownPolicy() error {
 		return nil
 	}
 	var failures []error
+	if sns := listener.owned.snsDelivery; sns != nil {
+		sns.DevDiscardPendingSNSDeliveries()
+	}
 	if listener.owned.functions != nil {
 		if owner, ok := listener.owned.functions.(devAsyncShutdownOwner); ok {
 			owner.DevDiscardPendingAsync()

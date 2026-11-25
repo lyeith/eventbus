@@ -29,12 +29,14 @@ before configuring endpoints or cleaning fixtures.
   through consumer-owned interfaces. Service packages own stores and operations.
 - `internal/messaging` owns the shared registry and separate SQS/SNS engines;
   adapters use typed operations, SNS fanout uses SendQueueMessage, LambdaDelivery
-  and FirehoseDelivery ports; external
-  delivery uses versioned JSONL capture. Keep registry/entity locks independent.
+  and FirehoseDelivery ports. SNS owns bounded admission retries, FIFO lanes and
+  HTTP/S envelopes/policy. App supplies explicit fixture transport; other external
+  delivery uses JSONL capture. Keep registry/entity locks independent.
 - `internal/eventsource` owns native SQS mappings through queue and function ports;
   batch/concurrency limits are enforced by joined workers; successful
   execution and its confirmed completion boundary permit native ACK of eligible
-  records. The mapping owns native partial batch response validation.
+  records. The mapping owns filter compilation and batch response validation.
+  Messaging owns filtered removal and windowed byte admission before invocation.
   Fresh execution joins the process; opt-in warm execution joins the managed
   response/log boundary and retains a separately leased worker until retirement.
   Messaging accepts a
@@ -73,7 +75,9 @@ before configuring endpoints or cleaning fixtures.
   runner launch/result ownership synchronizes exact existing request/attempt
   selection. Reuse localexec termination/joins and native retry/ACK owners.
   Public controls never expose private Cognito invocations.
-  App handlers are external fixtures; keep their logs separate from function results.
+  Native async configuration is snapshotted at acceptance. Lambda owns terminal
+  destination records and keeps the lease through delivery; app composes target
+  adapters. App handlers own their logs separately from function results.
 - `internal/events` owns native default-bus rate rules, scheduled-event identity,
   target input transformation and recurring/admission lifetimes. It consumes a
   narrow Lambda admission port; app binds the existing async delivery adapter.

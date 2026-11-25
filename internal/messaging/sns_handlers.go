@@ -170,6 +170,16 @@ func (s *Handler) handleSNSTopicControl(w http.ResponseWriter, r *http.Request, 
 			snsWriteError(w, err)
 			return
 		}
+		if name == "DeliveryPolicy" {
+			for _, subscription := range topic.Subscriptions {
+				if isSNSHTTP(subscription.Protocol) {
+					if _, _, err := effectiveSNSHTTPPolicy(value, subscription.Attributes["DeliveryPolicy"], subscription.Attributes["RawMessageDelivery"] == "true"); err != nil {
+						snsWriteError(w, err)
+						return
+					}
+				}
+			}
+		}
 		if name == "MaximumMessageSize" {
 			size, _ := strconv.Atoi(value)
 			if size > 262144 {
@@ -427,6 +437,17 @@ func (s *Handler) handleSNSSubscriptionControl(w http.ResponseWriter, r *http.Re
 		attributes["Endpoint"] = subscription.Endpoint
 		attributes["Owner"] = s.broker.accountID
 		attributes["PendingConfirmation"] = strconv.FormatBool(subscription.Pending)
+		if isSNSHTTP(subscription.Protocol) {
+			policy, _, err := effectiveSNSHTTPPolicy(topic.Attributes["DeliveryPolicy"], attributes["DeliveryPolicy"], attributes["RawMessageDelivery"] == "true")
+			if err != nil {
+				topic.mu.Unlock()
+				snsWriteError(w, snsInternal("Cannot resolve subscription delivery policy"))
+				return
+			}
+			encoded, _ := json.Marshal(policy)
+			attributes["EffectiveDeliveryPolicy"] = string(encoded)
+		}
+
 		if attributes["ConfirmationWasAuthenticated"] == "" {
 			attributes["ConfirmationWasAuthenticated"] = "false"
 		}
@@ -440,7 +461,7 @@ func (s *Handler) handleSNSSubscriptionControl(w http.ResponseWriter, r *http.Re
 		delete(attributes, "ConfirmationWasAuthenticated")
 		delete(attributes, "ReplayStatus")
 		attributes[name] = value
-		filter, err := validateSNSSubscriptionAttributes(attributes, subscription.Protocol)
+		filter, err := validateSNSSubscriptionAttributes(attributes, subscription.Protocol, topic.Attributes["DeliveryPolicy"])
 		if err == nil {
 			err = s.broker.validateSNSRedrivePolicy(topic.ARN, attributes["RedrivePolicy"])
 		}
@@ -483,15 +504,19 @@ func (s *Handler) handleSNSSubscriptionControl(w http.ResponseWriter, r *http.Re
 	}
 	// Control serialization lets capture happen outside the state mutex while
 	// preserving a capture failure's no-delete guarantee.
+	topicPolicy := topic.Attributes["DeliveryPolicy"]
 	topic.mu.Unlock()
 	var token string
-	if snapshot.Protocol == "http" || snapshot.Protocol == "https" || snapshot.Protocol == "email" || snapshot.Protocol == "email-json" {
+	var submitConfirmation func()
+	if isSNSHTTP(snapshot.Protocol) || snapshot.Protocol == "email" || snapshot.Protocol == "email-json" {
 		token = uuid.NewString()
-		message, _ := json.Marshal(map[string]string{"Type": "UnsubscribeConfirmation", "TopicArn": topic.ARN, "Token": token})
-		if err := s.broker.CaptureSNS(SNSCaptureRecord{Operation: "Unsubscribe", RequestID: snsRequestID(w), TargetARN: topic.ARN, Message: string(message), Deliveries: []SNSCaptureDelivery{{Protocol: snapshot.Protocol, Endpoint: snapshot.Endpoint, Status: "captured"}}, Details: map[string]any{"token": token, "subscription_arn": arn}}); err != nil {
-			snsWriteError(w, snsInternal("Unable to capture unsubscribe confirmation"))
+		commit, cancel, err := s.broker.prepareSNSConfirmation("Unsubscribe", snsRequestID(w), "UnsubscribeConfirmation", snapshot, token, topicPolicy)
+		if err != nil {
+			snsWriteError(w, err)
 			return
 		}
+		defer cancel()
+		submitConfirmation = commit
 	}
 	topic.mu.Lock()
 	if token != "" {
@@ -509,6 +534,9 @@ func (s *Handler) handleSNSSubscriptionControl(w http.ResponseWriter, r *http.Re
 	}
 	topic.Subscriptions = append(topic.Subscriptions[:position], topic.Subscriptions[position+1:]...)
 	topic.mu.Unlock()
+	if submitConfirmation != nil {
+		submitConfirmation()
+	}
 	snsResponse(w, action, "")
 }
 

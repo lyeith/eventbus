@@ -6,8 +6,6 @@ import (
 	"math/big"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Planning has no delivery side effects. A durable intent is recorded before
@@ -21,6 +19,7 @@ type snsPlannedDelivery struct {
 	lambdaEvent  []byte
 	attributes   map[string]MessageAttribute
 	failure      error
+	webhook      *snsWebhookDelivery
 }
 
 func snsDeliveryAttributes(source map[string]MessageAttribute) map[string]MessageAttribute {
@@ -39,7 +38,7 @@ func snsDeliveryAttributes(source map[string]MessageAttribute) map[string]Messag
 	return attributes
 }
 
-func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResult, subscriptions []*Subscription, publishedAt time.Time, replayed bool) ([]snsPlannedDelivery, []SNSCaptureDelivery) {
+func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResult, subscriptions []*Subscription, topicAttributes map[string]string, publishedAt time.Time, replayed bool) ([]snsPlannedDelivery, []SNSCaptureDelivery) {
 	var protocolMessages map[string]string
 	if input.MessageStructure == "json" {
 		protocolMessages, _ = snsProtocolMessages(input.Message)
@@ -134,6 +133,12 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 				}
 			}
 			plans = append(plans, plan)
+		case "http", "https":
+			plan.webhook = b.planSNSWebhook(input, result, subscription, body, topicAttributes)
+			if plan.webhook != nil {
+				delivery.Status = "scheduled"
+				plans = append(plans, plan)
+			}
 		case "sms":
 			_, plan.failure = smsDeliveryMessage(message, "")
 			if plan.failure == nil {
@@ -165,64 +170,150 @@ func (b *Broker) snsPlanDeliveries(input SNSPublishInput, result SNSPublishResul
 	return plans, deliveries
 }
 
-func (b *Broker) snsSendDeliveries(input SNSPublishInput, result SNSPublishResult, plans []snsPlannedDelivery, dedupID string, replayed bool) error {
-	// A single publication has one bounded admission budget across destination
-	// subscriptions; expensive queries cannot extend it once per subscriber.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+// Only immutable delivery inputs and identifiers survive after Publish returns.
+func snsDeliveryTasks(input SNSPublishInput, result SNSPublishResult, plans []snsPlannedDelivery, dedupID string) []*snsDeliveryTask {
+	ownedInput := SNSPublishInput{TopicARN: input.TopicARN, RequestID: input.RequestID, MessageGroupID: input.MessageGroupID}
+	tasks := make([]*snsDeliveryTask, 0, len(plans))
 	for _, plan := range plans {
-		err := plan.failure
-		queueDedup := ""
-		if plan.queue != nil && strings.HasSuffix(plan.queue.Name, ".fifo") {
-			queueDedup = dedupID
-			if replayed {
-				queueDedup = "replay-" + uuid.NewString()
+		tasks = append(tasks, snsDeliveryTaskForPlan(ownedInput, result, plan, dedupID))
+	}
+	return tasks
+}
+
+func snsDeliveryTaskForPlan(input SNSPublishInput, result SNSPublishResult, plan snsPlannedDelivery, dedupID string) *snsDeliveryTask {
+	// Keep the immutable dispatch fields, rather than retaining the compiled
+	// filter and mutable subscription settings for the lifetime of a retry.
+	sub := plan.subscription
+	redrive := sub.Attributes["RedrivePolicy"]
+	plan.subscription = &Subscription{ARN: sub.ARN, Protocol: sub.Protocol, Endpoint: sub.Endpoint}
+	if redrive != "" {
+		plan.subscription.Attributes = map[string]string{"RedrivePolicy": redrive}
+	}
+	size := len(plan.body) + len(plan.lambdaEvent) + len(plan.subscription.Endpoint) + len(plan.subscription.ARN) + len(redrive)
+	for name, value := range plan.attributes {
+		size += len(name) + len(value.DataType) + len(value.BinaryValue) + len(value.StringValue)
+	}
+	if plan.webhook != nil {
+		size += plan.webhook.payloadSize()
+	}
+	task := &snsDeliveryTask{input: input, result: result, plan: plan, dedupID: dedupID, size: size}
+	if strings.HasSuffix(input.TopicARN, ".fifo") && input.MessageGroupID != "" {
+		task.key = snsRetryKey{subscription: plan.subscription.ARN, group: input.MessageGroupID}
+	}
+	return task
+}
+
+func (b *Broker) prepareSNSWebhook(input SNSPublishInput, result SNSPublishResult, sub *Subscription, body string, delivery *snsWebhookDelivery) (commit, cancel func(), err error) {
+	if delivery == nil {
+		return func() {}, func() {}, nil
+	}
+	owner := b.snsRetryOwner()
+	tasks := snsDeliveryTasks(input, result, []snsPlannedDelivery{{subscription: sub, body: body, webhook: delivery}}, "")
+	if err = owner.reserve(tasks); err != nil {
+		return nil, nil, err
+	}
+	var committed bool
+	return func() {
+			committed = true
+			_ = owner.submit(owner.ctx, tasks[0])
+		}, func() {
+			if !committed {
+				owner.abandon(tasks)
 			}
-		}
-		if err == nil && plan.lambda != nil {
-			var requestID string
-			requestID, err = plan.lambda.AdmitSNSLambda(ctx, plan.subscription.Endpoint, plan.lambdaEvent)
-			if err == nil {
-				if captureErr := b.captureSNSLambdaAdmission(input, result, plan.subscription, requestID); captureErr != nil {
-					return snsInternal("Publication accepted, but Lambda admission outcome capture failed")
-				}
-			}
-		} else if err == nil && plan.firehose != nil {
-			_, err = plan.firehose.PutFirehoseRecord(ctx, plan.subscription.Endpoint, []byte(plan.body))
-		} else if err == nil {
-			_, err = b.SendQueueMessage(plan.queue, QueueMessageInput{Body: plan.body, Attributes: plan.attributes, MessageGroupID: input.MessageGroupID, MessageDeduplicationID: queueDedup, SenderID: b.accountID})
-		}
-		if err == nil {
-			continue
-		}
-		failure := SNSCaptureRecord{Operation: "DeliveryFailure", RequestID: input.RequestID, MessageID: result.MessageID, TargetARN: input.TopicARN, Deliveries: []SNSCaptureDelivery{{Protocol: plan.subscription.Protocol, Endpoint: plan.subscription.Endpoint, SubscriptionARN: plan.subscription.ARN, MessageID: result.MessageID, Status: "dropped", Error: err.Error()}}}
-		if redrive := plan.subscription.Attributes["RedrivePolicy"]; redrive != "" {
-			var policy struct {
-				DeadLetterTargetARN string `json:"deadLetterTargetArn"`
-			}
-			_ = json.Unmarshal([]byte(redrive), &policy)
-			queue := b.GetQueueByARN(policy.DeadLetterTargetARN)
-			if queue != nil {
-				dlqDedup := ""
-				if strings.HasSuffix(queue.Name, ".fifo") {
-					dlqDedup = dedupID
-					if dlqDedup == "" || replayed {
-						dlqDedup = uuid.NewString()
-					}
-				}
-				_, redriveErr := b.SendQueueMessage(queue, QueueMessageInput{Body: plan.body, Attributes: plan.attributes, MessageGroupID: input.MessageGroupID, MessageDeduplicationID: dlqDedup, SenderID: b.accountID})
-				if redriveErr == nil {
-					failure.Deliveries[0].Status = "dead_lettered"
-				} else {
-					failure.Deliveries[0].Error += "; redrive: " + redriveErr.Error()
-				}
-			} else {
-				failure.Deliveries[0].Error += "; redrive: queue does not exist"
-			}
-		}
-		if captureErr := b.CaptureSNS(failure); captureErr != nil {
-			return snsInternal("Publication accepted, but delivery outcome capture failed")
+		}, nil
+}
+
+func (o *snsRetryOwner) send(tasks []*snsDeliveryTask) error {
+	// One publication shares an inline admission budget across destinations.
+	ctx, cancel := context.WithTimeout(o.ctx, snsAttemptTimeout)
+	defer cancel()
+	var evidenceErr error
+	for _, task := range tasks {
+		if err := o.submit(ctx, task); err != nil && evidenceErr == nil {
+			evidenceErr = err
 		}
 	}
-	return nil
+	return evidenceErr
+}
+
+func (b *Broker) snsAttempt(ctx context.Context, t *snsDeliveryTask) (failure, evidenceErr error) {
+	plan := t.plan
+	if plan.failure != nil {
+		return plan.failure, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err, nil
+	}
+	if plan.lambda != nil {
+		requestID, err := plan.lambda.AdmitSNSLambda(ctx, plan.subscription.Endpoint, plan.lambdaEvent)
+		if err != nil {
+			return err, nil
+		}
+		// Admission is final, even when the outcome capture itself fails.
+		return nil, b.captureSNSLambdaAdmission(t.input, t.result, plan.subscription, requestID)
+	}
+	if plan.firehose != nil {
+		_, err := plan.firehose.PutFirehoseRecord(ctx, plan.subscription.Endpoint, []byte(plan.body))
+		return err, nil
+	}
+	if plan.webhook != nil {
+		if err := plan.webhook.attempt(ctx); err != nil {
+			return err, nil
+		}
+	} else {
+		_, err := b.SendQueueMessage(plan.queue, t.queueInput(plan.queue))
+		if err != nil {
+			return err, nil
+		}
+	}
+	if plan.webhook != nil || t.attempts > 1 {
+		return nil, b.snsCaptureTaskOutcome(t, "DeliverySuccess", "delivered", "")
+	}
+	return nil, nil
+}
+
+func (t *snsDeliveryTask) queueInput(queue *Queue) QueueMessageInput {
+	var dedupID string
+	if queue != nil && strings.HasSuffix(queue.Name, ".fifo") {
+		dedupID = t.dedupID
+		if dedupID == "" {
+			dedupID = t.result.MessageID
+		}
+	}
+	body := t.plan.body
+	if t.plan.webhook != nil {
+		body = t.plan.webhook.body
+	}
+	return QueueMessageInput{Body: body, Attributes: t.plan.attributes,
+		MessageGroupID: t.input.MessageGroupID, MessageDeduplicationID: dedupID}
+}
+
+func (b *Broker) snsFailDelivery(t *snsDeliveryTask, cause error) error {
+	status, message := "dropped", cause.Error()
+	if redrive := t.plan.subscription.Attributes["RedrivePolicy"]; redrive != "" {
+		var policy struct {
+			DeadLetterTargetARN string `json:"deadLetterTargetArn"`
+		}
+		_ = json.Unmarshal([]byte(redrive), &policy)
+		if queue := b.GetQueueByARN(policy.DeadLetterTargetARN); queue != nil {
+			if _, err := b.SendQueueMessage(queue, t.queueInput(queue)); err == nil {
+				status = "dead_lettered"
+			} else {
+				message += "; redrive: " + err.Error()
+			}
+		} else {
+			message += "; redrive: queue does not exist"
+		}
+	}
+	return b.snsCaptureTaskOutcome(t, "DeliveryFailure", status, message)
+}
+
+func (b *Broker) snsCaptureTaskOutcome(t *snsDeliveryTask, operation, status, message string) error {
+	sub := t.plan.subscription
+	return b.CaptureSNS(SNSCaptureRecord{
+		Operation: operation, RequestID: t.input.RequestID, MessageID: t.result.MessageID, TargetARN: t.input.TopicARN,
+		Deliveries: []SNSCaptureDelivery{{Protocol: sub.Protocol, Endpoint: sub.Endpoint, SubscriptionARN: sub.ARN,
+			MessageID: t.result.MessageID, Status: status, Error: message}},
+		Details: map[string]any{"attempts": t.attempts},
+	})
 }
