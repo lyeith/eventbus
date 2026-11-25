@@ -25,6 +25,7 @@ var ownerClasses = map[string]string{
 	"cognitotrigger": "runner", "devquiescence": "coordinator",
 	"awsprotocol": "shared", "devcapture": "shared", "devactivity": "shared",
 	"localexec": "shared", "sqsevent": "shared", "testperf": "shared",
+	"s3delivery": "transport",
 }
 
 func allowedInternalImport(owner, dependency string) bool {
@@ -35,6 +36,11 @@ func allowedInternalImport(owner, dependency string) bool {
 	}
 	if owner == dependency || class == "composition" {
 		return true
+	}
+	// Signed object delivery is shared by Firehose and the app-composed Lambda
+	// destination. Other services still consume their own ports.
+	if dependency == "s3delivery" {
+		return owner == "firehose"
 	}
 	switch class {
 	case "dispatcher":
@@ -135,6 +141,8 @@ func TestOwnershipRules(t *testing.T) {
 		{"devcapture", "lambda", false}, {"devquiescence", "devactivity", true},
 		{"newservice", "awsprotocol", false}, {"app", "newservice", false},
 		{"messaging", "messaging", true},
+		{"firehose", "s3delivery", true}, {"app", "s3delivery", true},
+		{"lambda", "s3delivery", false}, {"server", "s3delivery", false},
 	} {
 		t.Run(test.owner+"/"+test.dependency, func(t *testing.T) {
 			if got := allowedInternalImport(test.owner, test.dependency); got != test.allowed {
