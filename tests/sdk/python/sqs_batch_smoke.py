@@ -28,7 +28,7 @@ def append_row(stage, event, context):
 
 def handler(event, context):
     records = event["Records"]
-    assert 1 <= len(records) <= 10, event
+    assert 1 <= len(records) <= 10_000, event
     bodies = [json.loads(record["body"]) for record in records]
     append_row("started", event, context)
     if any(body["mode"] == "timeout" for body in bodies):
@@ -112,10 +112,12 @@ def run():
         return url, arn
 
     def mapping(arn, owner="A", batch=5, concurrency=2, enabled=True, function="batch-handler:live",
-                report_batch_item_failures=False, tags=None):
-        kwargs = dict(EventSourceArn=arn, FunctionName=function, Enabled=enabled, MaximumBatchingWindowInSeconds=0)
+                report_batch_item_failures=False, tags=None, window=0, provisioned=None):
+        kwargs = dict(EventSourceArn=arn, FunctionName=function, Enabled=enabled, MaximumBatchingWindowInSeconds=window)
         if tags is not None:
             kwargs["Tags"] = tags
+        if provisioned is not None:
+            kwargs["ProvisionedPollerConfig"] = provisioned
         if batch is not None:
             kwargs["BatchSize"] = batch
         if concurrency is not None:
@@ -129,13 +131,18 @@ def run():
         expected_batch = 10 if batch is None else batch
         assert result["ResponseMetadata"]["HTTPStatusCode"] == 202
         assert result["EventSourceArn"] == arn and result["FunctionArn"].endswith(":function:" + function)
-        assert result["BatchSize"] == expected_batch and result["MaximumBatchingWindowInSeconds"] == 0
+        assert result["BatchSize"] == expected_batch and result["MaximumBatchingWindowInSeconds"] == window
         assert result["State"] == ("Enabled" if enabled else "Disabled")
         if concurrency is not None:
             assert result["ScalingConfig"] == {"MaximumConcurrency": concurrency}, result
             result["ScalingConfig"]["MaximumConcurrency"] = 99
         got = clients[owner][1].get_event_source_mapping(UUID=result["UUID"])
         assert got["BatchSize"] == expected_batch and got["State"] == result["State"]
+        assert got["MaximumBatchingWindowInSeconds"] == window
+        if provisioned is not None:
+            expected_pollers = {"MinimumPollers": 2, "MaximumPollers": 200, **provisioned}
+            assert result["ProvisionedPollerConfig"] == expected_pollers
+            assert got["ProvisionedPollerConfig"] == expected_pollers
         assert got.get("FunctionResponseTypes", []) == response_types, got
         if concurrency is not None:
             assert got["ScalingConfig"] == {"MaximumConcurrency": concurrency}, got
@@ -206,13 +213,42 @@ def run():
             delete_mapping(ident)
         ident = mapping(settings_arn, batch=10, concurrency=1000, enabled=False)
         delete_mapping(ident)
-        for extra in ({"BatchSize": 11}, {"BatchSize": 1, "MaximumBatchingWindowInSeconds": 1}):
+        for extra in ({"BatchSize": 11}, {"BatchSize": 1, "MaximumBatchingWindowInSeconds": 301},
+                      {"ProvisionedPollerConfig": {"MinimumPollers": 3, "MaximumPollers": 2}},
+                      {"ProvisionedPollerConfig": {"MinimumPollers": 2}, "ScalingConfig": {"MaximumConcurrency": 2}}):
             error("InvalidParameterValueException", functions.create_event_source_mapping,
                   EventSourceArn=settings_arn, FunctionName="batch-handler:live", **extra)
         error("ResourceNotFoundException", functions.create_event_source_mapping,
               EventSourceArn=settings_arn, FunctionName="batch-handler:unknown", BatchSize=5)
         error("ResourceNotFoundException", functions.get_event_source_mapping, UUID=str(uuid.uuid4()))
         print("native batch sizes 1..10 and scaling 2/1000 create/readback/delete verified")
+
+        url, arn = queue("window", visibility=15)
+        sent = send_backlog(url, "window", 16)
+        ident = mapping(arn, batch=14, concurrency=None, window=1)
+        wait_empty(url)
+        batches = [native_records(row, arn) for row in rows("window", "completed")]
+        assert [len(records) for records in batches] == [14, 2], batches
+        assert {record["messageId"] for records in batches for record in records} == {item["MessageId"] for item in sent}
+        delete_mapping(ident)
+        print("standard 14-record batch and window-expired 2-record batch verified")
+
+        url, arn = queue("provisioned", fifo=True, visibility=15)
+        sent = send_backlog(url, "provisioned", 12, group="A")
+        sent += send_backlog(url, "provisioned", 9, group="B", start=12)
+        ident = mapping(arn, batch=19, concurrency=None, window=1, provisioned={"MinimumPollers": 2})
+        wait_empty(url)
+        batches = sorted([native_records(row, arn) for row in rows("provisioned", "completed")], key=len, reverse=True)
+        assert [len(records) for records in batches] == [19, 2], batches
+        assert sum(record["attributes"]["MessageGroupId"] == "A" for record in batches[0]) == 10
+        assert {record["messageId"] for records in batches for record in records} == {item["MessageId"] for item in sent}
+        error("InvalidParameterValueException", functions.update_event_source_mapping,
+              UUID=ident, ProvisionedPollerConfig={})
+        updated = functions.update_event_source_mapping(
+            UUID=ident, ProvisionedPollerConfig={}, BatchSize=10, MaximumBatchingWindowInSeconds=0)
+        assert "ProvisionedPollerConfig" not in updated, updated
+        delete_mapping(ident)
+        print("provisioned FIFO batch of 19 with 10-per-group limit and atomic mode reset verified")
 
         # Omitted native BatchSize defaults to ten. Omitted ScalingConfig is the
         # documented local serial policy, proved while the first batch is held.

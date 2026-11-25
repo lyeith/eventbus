@@ -25,6 +25,15 @@ type QueueInfo struct {
 // Queue adapters enforce it while selecting records, before leasing messages.
 const MaxBatchPayloadBytes = 6 << 20
 
+// BatchReceiveOptions belongs to one mapping generation. Match is a pure
+// predicate over prospective records and may run within the queue lock.
+type BatchReceiveOptions struct {
+	MaxRecords        int
+	Window            time.Duration
+	InvocationTimeout time.Duration
+	Match             func(Record) bool
+}
+
 // Queue retains the broker's native visibility, FIFO and redrive behavior.
 // Receive is cancellation-aware and transfers a Batch of at most max leased
 // records plus the immutable native wire JSON used for byte admission. The
@@ -39,7 +48,7 @@ const MaxBatchPayloadBytes = 6 << 20
 // retain transient waits locally.
 type Queue interface {
 	Info() (QueueInfo, error)
-	Receive(context.Context, int) (Batch, error)
+	Receive(context.Context, BatchReceiveOptions) (Batch, error)
 	Delete(context.Context, string) (bool, error)
 }
 

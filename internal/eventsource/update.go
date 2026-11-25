@@ -6,12 +6,14 @@ import (
 )
 
 type UpdateInput struct {
-	FunctionName                   *string        `json:"FunctionName,omitempty"`
-	BatchSize                      *int           `json:"BatchSize,omitempty"`
-	Enabled                        *bool          `json:"Enabled,omitempty"`
-	MaximumBatchingWindowInSeconds *int           `json:"MaximumBatchingWindowInSeconds,omitempty"`
-	FunctionResponseTypes          *[]string      `json:"FunctionResponseTypes,omitempty"`
-	ScalingConfig                  *ScalingConfig `json:"ScalingConfig,omitempty"`
+	FilterCriteria                 *FilterCriteria          `json:"FilterCriteria,omitempty"`
+	ProvisionedPollerConfig        *ProvisionedPollerConfig `json:"ProvisionedPollerConfig,omitempty"`
+	FunctionName                   *string                  `json:"FunctionName,omitempty"`
+	BatchSize                      *int                     `json:"BatchSize,omitempty"`
+	Enabled                        *bool                    `json:"Enabled,omitempty"`
+	MaximumBatchingWindowInSeconds *int                     `json:"MaximumBatchingWindowInSeconds,omitempty"`
+	FunctionResponseTypes          *[]string                `json:"FunctionResponseTypes,omitempty"`
+	ScalingConfig                  *ScalingConfig           `json:"ScalingConfig,omitempty"`
 }
 
 // Update stops intake and joins accepted invocations and receipt settlement
@@ -35,7 +37,8 @@ func (s *Service) Update(ctx context.Context, id string, input UpdateInput) (Map
 	defer cancel()
 	stop := context.AfterFunc(s.ctx, cancel)
 	defer stop()
-	if err := s.validateBinding(validateCtx, item.queue, next.EventSourceARN, next.FunctionARN); err != nil {
+	timeout, err := s.validateBinding(validateCtx, item.queue, next.EventSourceARN, next.FunctionARN)
+	if err != nil {
 		return Mapping{}, err
 	}
 
@@ -57,7 +60,7 @@ func (s *Service) Update(ctx context.Context, id string, input UpdateInput) (Map
 			next.State = "Enabled"
 		}
 	}
-	replacement, err := s.prepareEntry(next, item.queue, item.tags)
+	replacement, err := s.prepareEntry(next, item.queue, item.tags, timeout)
 	if err != nil {
 		s.mu.Unlock()
 		return Mapping{}, err
@@ -107,6 +110,7 @@ func (s *Service) reserveUpdate(id string, input UpdateInput) (*entry, Mapping, 
 	next := cloneMapping(item.mapping)
 	proposed := CreateInput{
 		EventSourceARN: next.EventSourceARN, FunctionName: next.FunctionARN,
+		FilterCriteria: next.FilterCriteria, ProvisionedPollerConfig: next.ProvisionedPollerConfig,
 		BatchSize: &next.BatchSize, ScalingConfig: next.ScalingConfig,
 		FunctionResponseTypes:          next.FunctionResponseTypes,
 		MaximumBatchingWindowInSeconds: &next.MaximumBatchingWindowInSeconds,
@@ -126,6 +130,15 @@ func (s *Service) reserveUpdate(id string, input UpdateInput) (*entry, Mapping, 
 	if input.ScalingConfig != nil {
 		proposed.ScalingConfig = input.ScalingConfig
 	}
+	if input.FilterCriteria != nil {
+		proposed.FilterCriteria = input.FilterCriteria
+	}
+	if input.ProvisionedPollerConfig != nil {
+		proposed.ProvisionedPollerConfig = input.ProvisionedPollerConfig
+		if input.ProvisionedPollerConfig.MinimumPollers == nil && input.ProvisionedPollerConfig.MaximumPollers == nil {
+			proposed.ProvisionedPollerConfig = nil
+		}
+	}
 	arn, err := s.validate(proposed)
 	if err != nil {
 		return nil, Mapping{}, err
@@ -138,6 +151,8 @@ func (s *Service) reserveUpdate(id string, input UpdateInput) (*entry, Mapping, 
 	next.MaximumBatchingWindowInSeconds = *proposed.MaximumBatchingWindowInSeconds
 	next.FunctionResponseTypes = append([]string{}, proposed.FunctionResponseTypes...)
 	next.ScalingConfig = cloneScalingConfig(proposed.ScalingConfig)
+	next.ProvisionedPollerConfig = cloneProvisionedPollerConfig(proposed.ProvisionedPollerConfig)
+	next.FilterCriteria = cloneFilterCriteria(proposed.FilterCriteria)
 	item.updateTarget = arn
 	s.wg.Add(1)
 	return item, next, nil

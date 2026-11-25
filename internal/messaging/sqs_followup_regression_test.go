@@ -258,7 +258,10 @@ func TestSQSProjectedReceiveCountsLeasesWithoutNativeSnapshots(t *testing.T) {
 	first := queuePerformanceRegressionSend(t, broker, queue, "accepted", "group", 0)
 	tail := queuePerformanceRegressionSend(t, broker, queue, "tail", "group", 0)
 	var projected []string
-	selected, failure := broker.receiveSQSWithOwnership(context.Background(), queue, 1, 0, nil, "", func(candidate *Message) bool { projected = append(projected, candidate.ID); return true }, sqsReceiveOptions{})
+	selected, failure := broker.receiveSQSWithOwnership(context.Background(), queue, 1, 0, nil, "", func(candidate *Message) sqsReceiveDisposition {
+		projected = append(projected, candidate.ID)
+		return sqsReceiveLease
+	}, sqsReceiveOptions{})
 	require.Nil(t, failure)
 	require.Equal(t, 1, selected.count)
 	require.Empty(t, selected.messages)

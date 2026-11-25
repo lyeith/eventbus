@@ -385,7 +385,7 @@ func TestMessagingQueueAdapterRetainsOriginalIdentity(t *testing.T) {
 	require.NotSame(t, original, replacement)
 	sent, err := broker.SendQueueMessage(replacement, messaging.QueueMessageInput{Body: "replacement remains owned"})
 	require.NoError(t, err)
-	_, err = bound.Receive(t.Context(), 1)
+	_, err = bound.Receive(t.Context(), eventsource.BatchReceiveOptions{MaxRecords: 1})
 	require.ErrorIs(t, err, messaging.ErrQueueUnavailable)
 	deleted, err := bound.Delete(t.Context(), "old-receipt")
 	require.False(t, deleted)

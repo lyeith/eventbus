@@ -41,7 +41,8 @@ func newFakeQueue() *fakeQueue {
 	return &fakeQueue{info: QueueInfo{ARN: sourceARN, VisibilityTimeout: time.Second}, messages: make(chan *Record, 10), batches: make(chan []Record, 8), receiveErr: make(chan error, 1), deleted: make(chan string, 10), entered: make(chan struct{}, 10)}
 }
 func (q *fakeQueue) Info() (QueueInfo, error) { return q.info, nil }
-func (q *fakeQueue) Receive(ctx context.Context, max int) (Batch, error) {
+func (q *fakeQueue) Receive(ctx context.Context, options BatchReceiveOptions) (Batch, error) {
+	max := options.MaxRecords
 	select {
 	case q.entered <- struct{}{}:
 	default:

@@ -119,8 +119,8 @@ func (queue *retainedStackQueue) RegisterRetained() (func(), error) {
 func (queue *retainedStackQueue) PendingRetained() (bool, <-chan struct{}, error) {
 	return queue.broker.SQSLambdaCustodyState(queue.queue)
 }
-func (queue *retainedStackQueue) ReceiveRetained(ctx context.Context, max int) (eventsource.Batch, error) {
-	return queue.broker.ReceiveOwnedSQSLambdaBatchContext(ctx, queue.queue, max, time.Second, eventsource.MaxBatchPayloadBytes)
+func (queue *retainedStackQueue) ReceiveRetained(ctx context.Context, options eventsource.BatchReceiveOptions) (eventsource.Batch, error) {
+	return queue.receive(ctx, options, true)
 }
 
 type retainedStackRow struct {

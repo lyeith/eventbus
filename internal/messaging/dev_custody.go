@@ -141,7 +141,7 @@ func (b *Broker) ReceiveOwnedSQSLambdaEventContext(ctx context.Context, q *Queue
 // ReceiveOwnedSQSLambdaBatchContext carries the same admitted wire payload for
 // retained continuations. Custody changes neither native selection nor leases.
 func (b *Broker) ReceiveOwnedSQSLambdaBatchContext(ctx context.Context, q *Queue, max int, wait time.Duration, budget int) (sqsevent.Batch, error) {
-	return b.receiveSQSLambdaBatchContext(ctx, q, max, wait, budget, true)
+	return b.ReceiveSQSLambdaMappingBatchContext(ctx, q, SQSLambdaBatchOptions{MaxRecords: max, Wait: wait, MaxPayloadBytes: budget, OwnedOnly: true})
 }
 
 func beginDevSQSMessage(owner *devQueueCustody, id string) (func(error), error) {

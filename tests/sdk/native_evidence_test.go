@@ -62,8 +62,8 @@ func (queue *nativeEvidenceQueue) RegisterRetained() (func(), error) {
 func (queue *nativeEvidenceQueue) PendingRetained() (bool, <-chan struct{}, error) {
 	return queue.broker.SQSLambdaCustodyState(queue.queue)
 }
-func (queue *nativeEvidenceQueue) ReceiveRetained(ctx context.Context, max int) (eventsource.Batch, error) {
-	return queue.broker.ReceiveOwnedSQSLambdaBatchContext(ctx, queue.queue, max, time.Second, eventsource.MaxBatchPayloadBytes)
+func (queue *nativeEvidenceQueue) ReceiveRetained(ctx context.Context, options eventsource.BatchReceiveOptions) (eventsource.Batch, error) {
+	return queue.receive(ctx, options, true)
 }
 
 func TestNativeEvidencePythonSDKSmoke(t *testing.T) {

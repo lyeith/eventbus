@@ -16,7 +16,7 @@ type encodedMappingQueue struct {
 	batch Batch
 }
 
-func (q *encodedMappingQueue) Receive(ctx context.Context, _ int) (Batch, error) {
+func (q *encodedMappingQueue) Receive(ctx context.Context, _ BatchReceiveOptions) (Batch, error) {
 	select {
 	case <-ctx.Done():
 		return Batch{}, ctx.Err()

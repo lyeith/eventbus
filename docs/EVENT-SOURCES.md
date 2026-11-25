@@ -26,8 +26,9 @@ queue_arn = sqs.get_queue_attributes(
 mapping = functions.create_event_source_mapping(
     EventSourceArn=queue_arn,
     FunctionName="verification-handler:live",
-    BatchSize=5,
-    ScalingConfig={"MaximumConcurrency": 2},
+    BatchSize=30,
+    MaximumBatchingWindowInSeconds=1,
+    ProvisionedPollerConfig={"MinimumPollers": 2, "MaximumPollers": 5},
     Enabled=True,
 )
 sqs.send_message(
@@ -64,7 +65,7 @@ deletion. A stale successful HTTP delete no-op is not that proof. See
 Asynchronous Lambda `Event` admission is never used for SQS settlement.
 
 Set `FunctionResponseTypes=["ReportBatchItemFailures"]` on
-`CreateEventSourceMapping` for selective retry. Create, Get and Delete return
+`CreateEventSourceMapping` for selective retry. Mapping responses return
 the configured setting. After the invocation joins successfully, a response
 such as `{"batchItemFailures":[{"itemIdentifier":"<SQS messageId>"}]}` leaves
 the reported records for native visibility retry or redrive. The mapping
@@ -79,12 +80,34 @@ The optional [worker-crash control](LAMBDA.md#one-shot-worker-crash) selects an
 already admitted active Lambda request ID with attempt 1. Redelivery retains
 the message ID and increments its receive count, with a new Lambda request ID.
 
-`BatchSize` accepts 1–10 and defaults to the native SQS value of 10.
-`ScalingConfig.MaximumConcurrency` accepts 2–1000, is preserved in Create/Get,
-and limits concurrent invocations of this mapping. An empty `ScalingConfig`
-selects no ceiling. EventBus runs a fixed owned worker set, bounded by the selected
-ceiling and its separate local worker cap. Without a selected ceiling, the local
-policy uses one worker. This is local execution behavior, not AWS managed scaling.
+Standard queues support `BatchSize` from 1 to 10,000, default 10.
+`MaximumBatchingWindowInSeconds` is 0–300. A batch above ten requires at least
+one second. The window begins with the first selected record and ends at the
+configured delay, count or byte limit. The mapping may dispatch earlier to
+reserve function execution time before the oldest receipt expires.
+
+FIFO queues have a ten-record limit and zero window in ordinary mode.
+`ProvisionedPollerConfig` enables the wider limits for FIFO, while each
+message group still contributes at most ten records to a batch. Minimum and
+maximum pollers default to 2 and 200 and read back through the SDK. The local
+worker count uses the configured minimum and the local cap. The maximum is
+validated, and AWS elastic scaling is outside this contract.
+`ScalingConfig.MaximumConcurrency` accepts 2–1000 and works in ordinary mode.
+It cannot be combined with `ProvisionedPollerConfig`.
+
+For example, pass this option to Create or Update:
+
+```python
+FilterCriteria={"Filters": [{"Pattern": '{"body":{"kind":["ready"]}}'}]}
+```
+
+Up to five patterns are ORed. Lambda-style comparisons
+include literals, `$or`, `anything-but`, `exists`, `numeric`, prefix/suffix,
+and case-insensitive text. Nested patterns apply to JSON bodies. Plain text
+bodies use text comparisons. Record metadata can also be matched. The queue
+removes unmatched records without invoking Lambda or redriving them. Filters
+run before the event byte limit.
+[AWS filter syntax](https://docs.aws.amazon.com/lambda/latest/dg/invocation-eventfiltering.html#filtering-syntax)
 
 SQS owns visibility retries, FIFO group ordering, message retention and redrive
 after `maxReceiveCount`. All messages in a leased FIFO batch preserve their order;
@@ -95,9 +118,11 @@ normalized `FunctionName` filters. Pages contain at most 100 mappings with a
 `NextMarker` for continuation. Create accepts `Tags`. Native Lambda tag
 operations read, update and remove tags by exact mapping ARN.
 
-Update supports function, batch size, enable/disable, maximum concurrency and
-partial batch settings. Omitting a field preserves it. An empty
-`FunctionResponseTypes` or `ScalingConfig` clears that setting. EventBus stops
+Update supports function, batching, enable/disable, concurrency mode, filters
+and partial batch settings. Omitting a field preserves it. An empty options
+object or `FunctionResponseTypes` list clears the corresponding setting.
+When removing provisioned FIFO polling, set the window to zero and batch size
+to ten or less in the same request if needed. EventBus stops
 old workers from receiving new messages, waits for accepted invocations and
 receipt processing, then applies the new settings and returns `202` with the
 same UUID and original queue binding. During the join, Get reports `Updating`.
@@ -115,16 +140,12 @@ published after cleanup joins and returned consistently to every concurrent call
 
 ## Explicit limits
 
-- Only standard/FIFO SQS sources, `BatchSize` 1–10, batching window zero,
-  `ScalingConfig.MaximumConcurrency` and optional partial batch responses are supported.
-  Standard queue batches above ten remain an explicit capability gap.
 - Records excluded by the cumulative 6 MiB payload budget stay visible and
   unleased for a later batch. If no eligible visible record fits that limit, the
   queue adapter returns a source error without leasing any record; the mapping
   disables itself and cancels/joins its peer workers.
-- Nonzero batching windows, filters,
-  provisioned pollers, stream/Kafka/MQ settings, tags and other selected
-  Create options return `InvalidParameterValueException`; they are not ignored.
+- Stream/Kafka/MQ settings, managed scaling and CloudWatch event metrics
+  outside local SQS mapping scope are unsupported.
 - Mappings are in-memory resources and must be provisioned for each owned run.
   Cross-account/region mappings and IAM/KMS policy evaluation are unsupported.
 - Development resource bounds live in `eventsource.DevOptions`: mapping capacity,

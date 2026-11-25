@@ -45,8 +45,14 @@ func (queue sdkMappingQueue) Info() (eventsource.QueueInfo, error) {
 	info, err := queue.broker.QueueInfo(queue.queue)
 	return eventsource.QueueInfo{ARN: info.ARN, VisibilityTimeout: info.VisibilityTimeout}, err
 }
-func (queue sdkMappingQueue) Receive(ctx context.Context, max int) (eventsource.Batch, error) {
-	return queue.broker.ReceiveSQSLambdaBatchContext(ctx, queue.queue, max, time.Second, eventsource.MaxBatchPayloadBytes)
+func (queue sdkMappingQueue) Receive(ctx context.Context, options eventsource.BatchReceiveOptions) (eventsource.Batch, error) {
+	return queue.receive(ctx, options, false)
+}
+func (queue sdkMappingQueue) receive(ctx context.Context, options eventsource.BatchReceiveOptions, ownedOnly bool) (eventsource.Batch, error) {
+	return queue.broker.ReceiveSQSLambdaMappingBatchContext(ctx, queue.queue, messaging.SQSLambdaBatchOptions{
+		MaxRecords: options.MaxRecords, Wait: time.Second, Window: options.Window, InvocationTimeout: options.InvocationTimeout,
+		MaxPayloadBytes: eventsource.MaxBatchPayloadBytes, Match: options.Match, OwnedOnly: ownedOnly,
+	})
 }
 func (queue sdkMappingQueue) Delete(ctx context.Context, receipt string) (bool, error) {
 	if err := ctx.Err(); err != nil {

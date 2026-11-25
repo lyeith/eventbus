@@ -14,12 +14,12 @@ import (
 type DevQueue interface {
 	RegisterRetained() (release func(), err error)
 	PendingRetained() (pending bool, changed <-chan struct{}, err error)
-	ReceiveRetained(context.Context, int) (Batch, error)
+	ReceiveRetained(context.Context, BatchReceiveOptions) (Batch, error)
 }
 
 func (s *Service) receive(ctx context.Context, item *entry) (Batch, func(error), error) {
 	if s.dev.Source == nil {
-		batch, err := item.queue.Receive(ctx, item.mapping.BatchSize)
+		batch, err := item.queue.Receive(ctx, item.receive)
 		return batch, nil, err
 	}
 	for ctx.Err() == nil {
@@ -29,7 +29,7 @@ func (s *Service) receive(ctx context.Context, item *entry) (Batch, func(error),
 				return Batch{}, nil, errors.New("development source admission returned no completion")
 			}
 			batch, err := receiveWithFence(ctx, changed, func(receiveCtx context.Context) (Batch, error) {
-				return item.queue.Receive(receiveCtx, item.mapping.BatchSize)
+				return item.queue.Receive(receiveCtx, item.receive)
 			})
 			return batch, complete, err
 		}
@@ -43,7 +43,7 @@ func (s *Service) receive(ctx context.Context, item *entry) (Batch, func(error),
 				if complete == nil {
 					return Batch{}, nil, errors.New("development continuation returned no completion")
 				}
-				batch, err := item.retained.ReceiveRetained(ctx, item.mapping.BatchSize)
+				batch, err := item.retained.ReceiveRetained(ctx, item.receive)
 				return batch, complete, err
 			}
 		}

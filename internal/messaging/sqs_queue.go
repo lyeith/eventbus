@@ -349,21 +349,35 @@ type sqsReceiveOptions struct {
 	nativeSnapshots bool
 }
 
+type sqsReceiveDisposition uint8
+
+const (
+	sqsReceiveLease sqsReceiveDisposition = iota
+	sqsReceiveSkip
+	sqsReceiveDiscard
+)
+
 type sqsReceiveResult struct {
-	messages []*Message // Detached native snapshots, only when requested.
-	count    int        // Actual leases, independent of their wire projection.
+	custodyEmpty bool
+	discarded    int        // Source-filtered messages removed without a handler lease.
+	messages     []*Message // Detached native snapshots, only when requested.
+	count        int        // Actual leases, independent of their wire projection.
 }
 
 // admission observes a prospective native receive snapshot before its receipt,
 // count or visibility is committed. Lambda batch byte admission uses this same
 // FIFO/fairness owner; ordinary SQS receives pass nil and keep their wire flow.
-func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration, now time.Time, admission func(*Message) bool, snapshots bool) sqsReceiveResult {
+func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration, now time.Time, admission func(*Message) sqsReceiveDisposition, snapshots bool) sqsReceiveResult {
 	fifo := q.fifoLocked()
 	blocked := make(map[string]bool)
 	if fifo {
 		for _, message := range q.inFlight {
 			blocked[message.GroupID] = true
 		}
+	}
+	var groupCount map[string]int
+	if fifo && max > maxSQSReceiveCount {
+		groupCount = make(map[string]int)
 	}
 	var result sqsReceiveResult
 	// Queue.mu exclusively owns this slice. In-place stable compaction only
@@ -377,11 +391,11 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 		})
 	}
 	for index, message := range candidates {
-		if result.count >= max {
+		if result.count >= max || result.discarded >= maxFilteredSQSPerReceive {
 			remaining = append(remaining, candidates[index:]...)
 			break
 		}
-		if now.Before(message.VisibleAt) || (fifo && blocked[message.GroupID]) {
+		if now.Before(message.VisibleAt) || fifo && (blocked[message.GroupID] || groupCount[message.GroupID] >= maxSQSReceiveCount) {
 			remaining = append(remaining, message)
 			if fifo && now.Before(message.VisibleAt) {
 				blocked[message.GroupID] = true
@@ -396,14 +410,24 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 			prepared.FirstReceivedAt = now
 		}
 		prepared.ReceiveCount++
-		if admission != nil && !admission(&prepared) {
-			remaining = append(remaining, message)
-			if fifo {
-				// A rejected candidate must block its group's tail even when an
-				// earlier member was admitted into this same batch.
-				blocked[message.GroupID] = true
+		if admission != nil {
+			switch admission(&prepared) {
+			case sqsReceiveSkip:
+				remaining = append(remaining, message)
+				if fifo {
+					// A candidate left in the queue still owns its group's head.
+					blocked[message.GroupID] = true
+				}
+				continue
+			case sqsReceiveDiscard:
+				// A source filter consumed this waiting record. It grants no new
+				// receipt, and old expired handles never become settlement proof.
+				invalidateReceiveAttemptsForMessageLocked(q, message.ID)
+				releaseDevSQSMessageLocked(q, message.ID)
+				q.lastFairGroup = message.GroupID
+				result.discarded++
+				continue
 			}
-			continue
 		}
 		invalidateReceiveAttemptsForMessageLocked(q, message.ID)
 		*message = prepared
@@ -411,6 +435,9 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 		issueSQSReceiptLocked(q, message)
 		q.lastFairGroup = message.GroupID
 		result.count++
+		if groupCount != nil {
+			groupCount[message.GroupID]++
+		}
 		if snapshots {
 			result.messages = append(result.messages, cloneMessage(message))
 		}
@@ -419,6 +446,9 @@ func collectVisibleForReceiveLocked(q *Queue, max int, visibility time.Duration,
 	// the waiting slice. In-flight ownership lives in q.inFlight independently.
 	clear(candidates[len(remaining):])
 	q.messages = remaining
+	if result.discarded != 0 {
+		notifyQueueLocked(q)
+	}
 	return result
 }
 func (b *Broker) ReceiveMessages(q *Queue, max int, wait time.Duration) []*Message {
@@ -435,17 +465,16 @@ func (b *Broker) ReceiveMessages(q *Queue, max int, wait time.Duration) []*Messa
 	return messages
 }
 func (b *Broker) receiveSQS(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string) ([]*Message, *sqsError) {
-	return b.receiveSQSWithAdmission(ctx, q, max, wait, visibility, attempt, nil)
-}
-
-func (b *Broker) receiveSQSWithAdmission(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string, admission func(*Message) bool) ([]*Message, *sqsError) {
-	result, failure := b.receiveSQSWithOwnership(ctx, q, max, wait, visibility, attempt, admission, sqsReceiveOptions{nativeSnapshots: true})
+	result, failure := b.receiveSQSWithOwnership(ctx, q, max, wait, visibility, attempt, nil, sqsReceiveOptions{nativeSnapshots: true})
 	return result.messages, failure
 }
 
-func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string, admission func(*Message) bool, options sqsReceiveOptions) (sqsReceiveResult, *sqsError) {
+func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int, wait time.Duration, visibility *time.Duration, attempt string, admission func(*Message) sqsReceiveDisposition, options sqsReceiveOptions) (sqsReceiveResult, *sqsError) {
 	deadline := time.Now().Add(wait)
 	for {
+		if admission != nil && ctx.Err() != nil {
+			return sqsReceiveResult{}, nil
+		}
 		now := time.Now()
 		if options.ownedOnly {
 			q.mu.Lock()
@@ -456,7 +485,7 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 				return sqsReceiveResult{}, newSQSError("QueueDoesNotExist", "Queue does not exist")
 			}
 			if empty {
-				return sqsReceiveResult{}, nil
+				return sqsReceiveResult{custodyEmpty: true}, nil
 			}
 		} else {
 			b.advanceSQSMessageMoveTasks(now)
@@ -470,7 +499,7 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 		pruneQueueLocked(q, now)
 		if options.ownedOnly && !hasDevSQSCustodyLocked(q) {
 			q.mu.Unlock()
-			return sqsReceiveResult{}, nil
+			return sqsReceiveResult{custodyEmpty: true}, nil
 		}
 		timeout := q.VisibilityTimeout
 		if visibility != nil {
@@ -525,12 +554,16 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 		candidateSeen := false
 		choose := admission
 		if admission != nil || options.ownedOnly {
-			choose = func(candidate *Message) bool {
+			choose = func(candidate *Message) sqsReceiveDisposition {
 				if options.ownedOnly && !ownsDevSQSMessageLocked(q, candidate.ID) {
-					return false
+					return sqsReceiveSkip
 				}
-				candidateSeen = true
-				return admission == nil || admission(candidate)
+				if admission == nil {
+					return sqsReceiveLease
+				}
+				disposition := admission(candidate)
+				candidateSeen = candidateSeen || disposition == sqsReceiveSkip
+				return disposition
 			}
 		}
 		result := collectVisibleForReceiveLocked(q, max, timeout, now, choose, options.nativeSnapshots || attempt != "")
@@ -549,9 +582,17 @@ func (b *Broker) receiveSQSWithOwnership(ctx context.Context, q *Queue, max int,
 		}
 		// A consumer byte budget that rejects every eligible candidate is a
 		// completed bounded receive, not an empty queue to repeatedly long poll.
+		if options.ownedOnly && !hasDevSQSCustodyLocked(q) {
+			q.mu.Unlock()
+			return sqsReceiveResult{custodyEmpty: true}, nil
+		}
 		if candidateSeen || wait <= 0 || !now.Before(deadline) {
 			q.mu.Unlock()
 			return sqsReceiveResult{}, nil
+		}
+		if result.discarded >= maxFilteredSQSPerReceive {
+			q.mu.Unlock()
+			continue // Bound filter work per lock acquisition.
 		}
 		wake := q.notify
 		until := deadline.Sub(now)

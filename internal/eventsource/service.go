@@ -24,30 +24,41 @@ type ScalingConfig struct {
 	MaximumConcurrency *int `json:"MaximumConcurrency,omitempty"`
 }
 
+// ProvisionedPollerConfig selects the native SQS limits. Locally, a fixed
+// worker set uses the minimum, subject to the separate dev worker cap.
+type ProvisionedPollerConfig struct {
+	MinimumPollers *int `json:"MinimumPollers,omitempty"`
+	MaximumPollers *int `json:"MaximumPollers,omitempty"`
+}
+
 type CreateInput struct {
-	Tags                           map[string]string `json:"Tags,omitempty"`
-	EventSourceARN                 string            `json:"EventSourceArn"`
-	FunctionName                   string            `json:"FunctionName"`
-	BatchSize                      *int              `json:"BatchSize,omitempty"`
-	Enabled                        *bool             `json:"Enabled,omitempty"`
-	MaximumBatchingWindowInSeconds *int              `json:"MaximumBatchingWindowInSeconds,omitempty"`
-	FunctionResponseTypes          []string          `json:"FunctionResponseTypes,omitempty"`
-	ScalingConfig                  *ScalingConfig    `json:"ScalingConfig,omitempty"`
+	FilterCriteria                 *FilterCriteria          `json:"FilterCriteria,omitempty"`
+	ProvisionedPollerConfig        *ProvisionedPollerConfig `json:"ProvisionedPollerConfig,omitempty"`
+	Tags                           map[string]string        `json:"Tags,omitempty"`
+	EventSourceARN                 string                   `json:"EventSourceArn"`
+	FunctionName                   string                   `json:"FunctionName"`
+	BatchSize                      *int                     `json:"BatchSize,omitempty"`
+	Enabled                        *bool                    `json:"Enabled,omitempty"`
+	MaximumBatchingWindowInSeconds *int                     `json:"MaximumBatchingWindowInSeconds,omitempty"`
+	FunctionResponseTypes          []string                 `json:"FunctionResponseTypes,omitempty"`
+	ScalingConfig                  *ScalingConfig           `json:"ScalingConfig,omitempty"`
 }
 
 type Mapping struct {
-	UUID                           string         `json:"UUID"`
-	EventSourceMappingARN          string         `json:"EventSourceMappingArn"`
-	EventSourceARN                 string         `json:"EventSourceArn"`
-	FunctionARN                    string         `json:"FunctionArn"`
-	BatchSize                      int            `json:"BatchSize"`
-	MaximumBatchingWindowInSeconds int            `json:"MaximumBatchingWindowInSeconds"`
-	FunctionResponseTypes          []string       `json:"FunctionResponseTypes"`
-	ScalingConfig                  *ScalingConfig `json:"ScalingConfig,omitempty"`
-	State                          string         `json:"State"`
-	StateTransitionReason          string         `json:"StateTransitionReason"`
-	LastModified                   float64        `json:"LastModified"`
-	LastProcessingResult           string         `json:"LastProcessingResult"`
+	FilterCriteria                 *FilterCriteria          `json:"FilterCriteria,omitempty"`
+	ProvisionedPollerConfig        *ProvisionedPollerConfig `json:"ProvisionedPollerConfig,omitempty"`
+	UUID                           string                   `json:"UUID"`
+	EventSourceMappingARN          string                   `json:"EventSourceMappingArn"`
+	EventSourceARN                 string                   `json:"EventSourceArn"`
+	FunctionARN                    string                   `json:"FunctionArn"`
+	BatchSize                      int                      `json:"BatchSize"`
+	MaximumBatchingWindowInSeconds int                      `json:"MaximumBatchingWindowInSeconds"`
+	FunctionResponseTypes          []string                 `json:"FunctionResponseTypes"`
+	ScalingConfig                  *ScalingConfig           `json:"ScalingConfig,omitempty"`
+	State                          string                   `json:"State"`
+	StateTransitionReason          string                   `json:"StateTransitionReason"`
+	LastModified                   float64                  `json:"LastModified"`
+	LastProcessingResult           string                   `json:"LastProcessingResult"`
 }
 
 type APIError struct {
@@ -67,6 +78,7 @@ func unavailable() error {
 }
 
 type entry struct {
+	receive             BatchReceiveOptions
 	tags                map[string]string
 	updateTarget        string // Nonempty while Update owns this entry.
 	stopIntake          context.CancelFunc
@@ -179,17 +191,14 @@ func (s *Service) validate(input CreateInput) (string, error) {
 	if err := validateMappingTags(input.Tags); err != nil {
 		return "", err
 	}
-	if input.BatchSize != nil && (*input.BatchSize < 1 || *input.BatchSize > 10) {
-		return "", invalid("Only BatchSize values from 1 through 10 are supported")
+	if err := validateBatchConfig(input); err != nil {
+		return "", err
 	}
 	if input.ScalingConfig != nil && input.ScalingConfig.MaximumConcurrency != nil {
 		maximum := *input.ScalingConfig.MaximumConcurrency
 		if maximum < 2 || maximum > 1000 {
 			return "", invalid("ScalingConfig.MaximumConcurrency must be 2 through 1000")
 		}
-	}
-	if input.MaximumBatchingWindowInSeconds != nil && *input.MaximumBatchingWindowInSeconds != 0 {
-		return "", invalid("Only MaximumBatchingWindowInSeconds=0 is supported")
 	}
 	if len(input.FunctionResponseTypes) > 1 || len(input.FunctionResponseTypes) == 1 && input.FunctionResponseTypes[0] != reportBatchItemFailures {
 		return "", invalid("FunctionResponseTypes must be empty or contain only ReportBatchItemFailures")
@@ -221,7 +230,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 		}
 		return Mapping{}, missing("Source queue is not owned by this emulator")
 	}
-	if err := s.validateBinding(ctx, queue, input.EventSourceARN, arn); err != nil {
+	timeout, err := s.validateBinding(ctx, queue, input.EventSourceARN, arn)
+	if err != nil {
 		return Mapping{}, err
 	}
 	s.mu.Lock()
@@ -249,7 +259,10 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	}
 	scaling := cloneScalingConfig(input.ScalingConfig)
 	mapping := Mapping{UUID: id, EventSourceMappingARN: "arn:aws:lambda:" + s.region + ":" + s.account + ":event-source-mapping:" + id, EventSourceARN: input.EventSourceARN, FunctionARN: arn, BatchSize: batchSize, ScalingConfig: scaling, FunctionResponseTypes: append([]string{}, input.FunctionResponseTypes...), State: state, StateTransitionReason: "USER_INITIATED", LastModified: float64(s.dev.Clock().UnixMilli()) / 1000, LastProcessingResult: "No records processed"}
-	item, err := s.prepareEntry(mapping, queue, maps.Clone(input.Tags))
+	mapping.MaximumBatchingWindowInSeconds = batchWindowSeconds(input.MaximumBatchingWindowInSeconds)
+	mapping.ProvisionedPollerConfig = cloneProvisionedPollerConfig(input.ProvisionedPollerConfig)
+	mapping.FilterCriteria = cloneFilterCriteria(input.FilterCriteria)
+	item, err := s.prepareEntry(mapping, queue, maps.Clone(input.Tags), timeout)
 	if err != nil {
 		return Mapping{}, err
 	}
@@ -258,22 +271,22 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Mapping, error
 	return cloneMapping(mapping), nil
 }
 
-func (s *Service) validateBinding(ctx context.Context, queue Queue, source, function string) error {
+func (s *Service) validateBinding(ctx context.Context, queue Queue, source, function string) (time.Duration, error) {
 	info, err := queue.Info()
 	if err != nil || info.ARN != source {
-		return missing("Original source queue is unavailable")
+		return 0, missing("Original source queue is unavailable")
 	}
 	timeout, err := s.functions.ValidateTarget(ctx, function)
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return 0, ctx.Err()
 	}
 	if err != nil {
-		return missing("Target is not a registered local Lambda function or alias")
+		return 0, missing("Target is not a registered local Lambda function or alias")
 	}
 	if timeout <= 0 || timeout > info.VisibilityTimeout {
-		return invalid("Function timeout must be positive and no greater than the queue visibility timeout")
+		return 0, invalid("Function timeout must be positive and no greater than the queue visibility timeout")
 	}
-	return nil
+	return timeout, nil
 }
 
 func (s *Service) hasMappingConflict(except *entry, source, function string) bool {
@@ -290,8 +303,14 @@ func mappingConflict(message string) error {
 	return &APIError{Code: "ResourceConflictException", Status: http.StatusConflict, Message: message}
 }
 
-func (s *Service) prepareEntry(mapping Mapping, queue Queue, tags map[string]string) (*entry, error) {
-	item := &entry{mapping: mapping, queue: queue, tags: tags, done: make(chan struct{})}
+func (s *Service) prepareEntry(mapping Mapping, queue Queue, tags map[string]string, timeout time.Duration) (*entry, error) {
+	match, err := compileFilterCriteria(mapping.FilterCriteria)
+	if err != nil {
+		return nil, err
+	}
+	item := &entry{mapping: mapping, queue: queue, tags: tags, done: make(chan struct{}),
+		receive: BatchReceiveOptions{MaxRecords: mapping.BatchSize,
+			Window: time.Duration(mapping.MaximumBatchingWindowInSeconds) * time.Second, InvocationTimeout: timeout, Match: match}}
 	if mapping.State == "Disabled" {
 		return item, nil
 	}
@@ -329,8 +348,11 @@ func (s *Service) startEntry(item *entry) {
 	}
 	workers := 1
 	if scaling := item.mapping.ScalingConfig; scaling != nil {
-		workers = min(*scaling.MaximumConcurrency, s.dev.MaxWorkersPerMapping)
+		workers = *scaling.MaximumConcurrency
+	} else if provisioned := item.mapping.ProvisionedPollerConfig; provisioned != nil {
+		workers = *provisioned.MinimumPollers
 	}
+	workers = min(workers, s.dev.MaxWorkersPerMapping)
 	s.wg.Add(1)
 	go s.run(execCtx, intakeCtx, item, workers)
 }
@@ -346,6 +368,8 @@ func cloneScalingConfig(scaling *ScalingConfig) *ScalingConfig {
 func cloneMapping(mapping Mapping) Mapping {
 	mapping.FunctionResponseTypes = append([]string{}, mapping.FunctionResponseTypes...)
 	mapping.ScalingConfig = cloneScalingConfig(mapping.ScalingConfig)
+	mapping.ProvisionedPollerConfig = cloneProvisionedPollerConfig(mapping.ProvisionedPollerConfig)
+	mapping.FilterCriteria = cloneFilterCriteria(mapping.FilterCriteria)
 	return mapping
 }
 
